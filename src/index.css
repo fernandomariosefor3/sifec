@@ -1,0 +1,13 @@
+@import "tailwindcss";
+
+@theme {
+  --color-brand-turquoise: #26b2b7;
+  --color-brand-orange: #ff9111;
+  --color-brand-coral: #e04022;
+  --color-brand-green: #008249;
+  
+  --color-brand-turquoise-dark: #1b8d91;
+  --color-brand-orange-dark: #d47405;
+  --color-brand-coral-dark: #b82e14;
+  --color-brand-green-dark: #006034;
+}

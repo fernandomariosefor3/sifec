@@ -1,0 +1,80 @@
+{
+  "entities": {
+    "School": {
+      "title": "School",
+      "description": "Regional schools registered under CREDE 03 Ceará",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "codInep": { "type": "string" },
+        "cidade": { "type": "string" },
+        "matriculas": { "type": "number" },
+        "idebMedio": { "type": "number" },
+        "metaIdeb": { "type": "number" },
+        "status": { "type": "string" }
+      },
+      "required": ["nome", "codInep", "cidade", "matriculas", "idebMedio", "metaIdeb", "status"]
+    },
+    "Turma": {
+      "title": "Turma",
+      "description": "Active classes inside schools, tracking bimester grade launch status and average grade performance",
+      "type": "object",
+      "properties": {
+        "escolaId": { "type": "string" },
+        "escolaNome": { "type": "string" },
+        "nome": { "type": "string" },
+        "ano": { "type": "string" },
+        "periodo": { "type": "string" },
+        "lancamentosBimestre": { "type": "object" },
+        "mediaBimestre": { "type": "object" },
+        "alunosSinalizados": { "type": "number" }
+      },
+      "required": ["escolaId", "escolaNome", "nome", "ano", "periodo", "lancamentosBimestre", "mediaBimestre", "alunosSinalizados"]
+    },
+    "StudentGrade": {
+      "title": "StudentGrade",
+      "description": "Detailed multi-disciplinary grade sheet for students",
+      "type": "object",
+      "properties": {
+        "nome": { "type": "string" },
+        "turma": { "type": "string" },
+        "portugues": { "type": "number" },
+        "matematica": { "type": "number" },
+        "ciencias": { "type": "number" },
+        "bimestre": { "type": "string" }
+      },
+      "required": ["nome", "turma", "portugues", "matematica", "ciencias", "bimestre"]
+    },
+    "Visita": {
+      "title": "Visita",
+      "description": "Technical on-site visits scheduled by CREDE pedagogical coordinators",
+      "type": "object",
+      "properties": {
+        "escola": { "type": "string" },
+        "tecnico": { "type": "string" },
+        "data": { "type": "string" },
+        "foco": { "type": "string" },
+        "status": { "type": "string" }
+      },
+      "required": ["escola", "tecnico", "data", "foco", "status"]
+    }
+  },
+  "firestore": {
+    "/schools/{schoolId}": {
+      "schema": "School",
+      "description": "Active regional schools database"
+    },
+    "/turmas/{turmaId}": {
+      "schema": "Turma",
+      "description": "Classes tracking launch status and performance indexes"
+    },
+    "/grades/{gradeId}": {
+      "schema": "StudentGrade",
+      "description": "Grades tracking per student and bimester"
+    },
+    "/visitas/{visitaId}": {
+      "schema": "Visita",
+      "description": "Technical team calendar planning and records"
+    }
+  }
+}

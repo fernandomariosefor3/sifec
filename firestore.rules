@@ -1,0 +1,79 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Global safety net catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 1. Schools rules
+    match /schools/{schoolId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(schoolId) &&
+        incoming().nome is string && incoming().nome.size() <= 150 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().cidade is string && incoming().cidade.size() <= 100 &&
+        incoming().matriculas is number &&
+        incoming().idebMedio is number &&
+        incoming().metaIdeb is number &&
+        incoming().status is string;
+      allow delete: if isSignedIn() && isValidId(schoolId);
+    }
+
+    // 2. Turmas rules
+    match /turmas/{turmaId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(turmaId) &&
+        incoming().escolaId is string && incoming().escolaId.size() <= 128 &&
+        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
+        incoming().nome is string && incoming().nome.size() <= 100 &&
+        incoming().ano is string && incoming().ano.size() <= 20 &&
+        incoming().periodo is string && incoming().periodo.size() <= 50 &&
+        incoming().alunosSinalizados is number;
+      allow delete: if isSignedIn() && isValidId(turmaId);
+    }
+
+    // 3. Student Grades rules
+    match /grades/{gradeId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(gradeId) &&
+        incoming().nome is string && incoming().nome.size() <= 150 &&
+        incoming().turma is string && incoming().turma.size() <= 100 &&
+        incoming().portugues is number &&
+        incoming().matematica is number &&
+        incoming().ciencias is number &&
+        incoming().bimestre is string;
+      allow delete: if isSignedIn() && isValidId(gradeId);
+    }
+
+    // 4. Visitas rules
+    match /visitas/{visitaId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn() && isValidId(visitaId) &&
+        incoming().escola is string && incoming().escola.size() <= 150 &&
+        incoming().tecnico is string && incoming().tecnico.size() <= 150 &&
+        incoming().data is string && incoming().data.size() <= 30 &&
+        incoming().foco is string && incoming().foco.size() <= 200 &&
+        incoming().status is string;
+      allow delete: if isSignedIn() && isValidId(visitaId);
+    }
+  }
+}

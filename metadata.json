@@ -1,0 +1,6 @@
+{
+  "name": "SIFEC — Sefor / Crede 03",
+  "description": "Sistema de gestão e monitoramento de indicadores escolares, fluxo de alunos, notas pedagógicas, e ciclos de governança para as escolas da Crede 03 (Sefor 3), Ceará.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
