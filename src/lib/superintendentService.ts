@@ -1,12 +1,18 @@
-import { auth } from './firebase';
+import {
+  collection, doc, getDocs, setDoc, deleteDoc, getDoc
+} from 'firebase/firestore';
+import { db, auth } from './firebase';
 
 export interface Superintendent {
-  id: string;
+  id: string;        // slug for UI state (e.g. 'fernando-mario')
   nome: string;
   cargo: string;
-  email: string; // Associated email address for authorization
-  escolas: string[]; // List of school names of SEFOR 3 assigned to them
+  email: string;     // Google account email — used as Firestore document key
+  escolas: string[]; // school names assigned to this superintendent
 }
+
+// The single admin email — must match the value in firestore.rules
+export const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
 
 const DEFAULT_SUPERINTENDENTS: Superintendent[] = [
   {
@@ -23,21 +29,10 @@ const DEFAULT_SUPERINTENDENTS: Superintendent[] = [
       'EEMTI Estado do Amazonas',
       'EEMTI Senador Osires Pontes'
     ]
-  },
-  {
-    id: 'ana-lucia',
-    nome: 'Profa. Ana Lúcia - Superintendência B',
-    cargo: 'Superintendente de Acompanhamento Escolar',
-    email: 'ana.lucia@seduc.ce.gov.br',
-    escolas: [
-      'EEEP JOAQUIM MOREIRA DE SOUSA',
-      'EEEP JUAREZ TÁVORA',
-      'EEEP PAULO VI',
-      'EEM GOVERNADOR ADAUTO BEZERRA',
-      'EEFM JOAQUIM ALVES'
-    ]
   }
 ];
+
+// ---- Local cache (localStorage) ----
 
 export function getSuperintendents(): Superintendent[] {
   const data = localStorage.getItem('sefor3_superintendents');
@@ -46,22 +41,8 @@ export function getSuperintendents(): Superintendent[] {
     return DEFAULT_SUPERINTENDENTS;
   }
   try {
-    const parsed = JSON.parse(data) as Superintendent[];
-    // Auto-migrate by injecting emails for the default ones if missing
-    let changed = false;
-    const migrated = parsed.map(s => {
-      const def = DEFAULT_SUPERINTENDENTS.find(d => d.id === s.id);
-      if (def && (!s.email || s.email !== def.email)) {
-        changed = true;
-        return { ...s, email: s.email || def.email };
-      }
-      return s;
-    });
-    if (changed) {
-      localStorage.setItem('sefor3_superintendents', JSON.stringify(migrated));
-    }
-    return migrated;
-  } catch (e) {
+    return JSON.parse(data) as Superintendent[];
+  } catch {
     return DEFAULT_SUPERINTENDENTS;
   }
 }
@@ -71,64 +52,149 @@ export function saveSuperintendents(list: Superintendent[]): void {
   window.dispatchEvent(new Event('sefor3_superintendents_change'));
 }
 
+// ---- Firestore operations ----
+
+// Load all superintendent records (admin only — non-admins use getCurrentUserSuperRecord)
+export async function loadSuperintendentsFromFirestore(): Promise<Superintendent[]> {
+  try {
+    const snap = await getDocs(collection(db, 'superintendentes'));
+    return snap.docs.map(d => {
+      const data = d.data();
+      return {
+        id: (data.id as string) || d.id,
+        nome: (data.nome as string) || '',
+        cargo: (data.cargo as string) || 'Superintendente Regional',
+        email: (data.email as string) || d.id,
+        escolas: Array.isArray(data.escolas) ? (data.escolas as string[]) : []
+      };
+    });
+  } catch {
+    return [];
+  }
+}
+
+// Get only the currently logged-in user's record from Firestore
+export async function getCurrentUserSuperRecord(): Promise<Superintendent | null> {
+  const user = auth.currentUser;
+  if (!user?.email) return null;
+  try {
+    const snap = await getDoc(doc(db, 'superintendentes', user.email.toLowerCase()));
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    return {
+      id: (data.id as string) || user.email.toLowerCase(),
+      nome: (data.nome as string) || user.displayName || 'Superintendente',
+      cargo: (data.cargo as string) || 'Superintendente Regional',
+      email: (data.email as string) || user.email,
+      escolas: Array.isArray(data.escolas) ? (data.escolas as string[]) : []
+    };
+  } catch {
+    return null;
+  }
+}
+
+// Sync from Firestore into localStorage cache. Admins load all records; others load only their own.
+export async function syncSuperintendentsFromFirestore(): Promise<void> {
+  const user = auth.currentUser;
+  if (!user?.email) return;
+
+  const isAdmin = user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+  if (isAdmin) {
+    const list = await loadSuperintendentsFromFirestore();
+    if (list.length > 0) {
+      saveSuperintendents(list);
+    }
+  } else {
+    const myRecord = await getCurrentUserSuperRecord();
+    if (myRecord) {
+      const existing = getSuperintendents();
+      const idx = existing.findIndex(s => s.email?.toLowerCase() === user.email!.toLowerCase());
+      const updated = idx >= 0
+        ? existing.map((s, i) => i === idx ? myRecord : s)
+        : [...existing, myRecord];
+      saveSuperintendents(updated);
+    }
+  }
+}
+
+// Save a single superintendent to Firestore (admin only action)
+export async function saveSuperintendentToFirestore(s: Superintendent): Promise<void> {
+  const docId = s.email.toLowerCase().trim();
+  await setDoc(doc(db, 'superintendentes', docId), {
+    id: s.id,
+    nome: s.nome,
+    cargo: s.cargo,
+    email: s.email.toLowerCase().trim(),
+    escolas: s.escolas
+  });
+}
+
+// Delete a superintendent from Firestore by email (admin only action)
+export async function deleteSuperintendentFromFirestore(email: string): Promise<void> {
+  await deleteDoc(doc(db, 'superintendentes', email.toLowerCase().trim()));
+}
+
+// ---- Active workspace ----
+
 export function getActiveSuperintendentId(): string {
   const superintendents = getSuperintendents();
   const stored = localStorage.getItem('sefor3_active_superintendent_id');
-  if (stored && stored !== 'all') {
-    return stored;
-  }
+  if (stored && stored !== 'all') return stored;
   return superintendents.length > 0 ? superintendents[0].id : '';
 }
 
 export function setActiveSuperintendentId(id: string): void {
-  const toSave = id === 'all' ? (getSuperintendents().length > 0 ? getSuperintendents()[0].id : '') : id;
+  const toSave = id === 'all'
+    ? (getSuperintendents().length > 0 ? getSuperintendents()[0].id : '')
+    : id;
   localStorage.setItem('sefor3_active_superintendent_id', toSave);
   window.dispatchEvent(new Event('sefor3_active_superintendent_change'));
-  // Trigger general filter change to force lists to refresh
   window.dispatchEvent(new Event('sefor3_filter_change'));
 }
 
-// Check if a school is filtered by the active superintendent
+// ---- Access control helpers ----
+
+export function isCurrentUserAdmin(): boolean {
+  return auth.currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+}
+
 export function isSchoolVisible(schoolName: string): boolean {
   const activeId = getActiveSuperintendentId();
   const superintendents = getSuperintendents();
   const active = superintendents.find(s => s.id === activeId);
   if (!active) return false;
-  
   return active.escolas.includes(schoolName);
 }
 
-// Get filtered list of schools based on the active superintendent
 export function filterSchoolsByActiveSuperintendent<T extends { nome: string }>(schools: T[]): T[] {
   const activeId = getActiveSuperintendentId();
   const superintendents = getSuperintendents();
   const active = superintendents.find(s => s.id === activeId);
   if (!active) return [];
-  
   return schools.filter(s => active.escolas.includes(s.nome));
 }
 
-// Check if current user has permission to edit/interact with a school
+// Returns true if the currently signed-in user can write to this school.
 export function hasSchoolWriteAccess(schoolName: string): boolean {
-  // Configured to be fully editable in all sections until the end of the year as requested by user
-  return true;
+  const user = auth.currentUser;
+  if (!user?.email) return false;
+  if (user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
+  const list = getSuperintendents();
+  const myRecord = list.find(s => s.email?.toLowerCase() === user.email!.toLowerCase());
+  return myRecord ? myRecord.escolas.includes(schoolName) : false;
 }
 
-// Append new school to the logged-in superintendent's jurisdiction
 export function addSchoolToLoggedInSuperintendent(schoolName: string): boolean {
   const user = auth.currentUser;
-  if (!user || !user.email) return false;
-
+  if (!user?.email) return false;
   const list = getSuperintendents();
-  const superIndex = list.findIndex(s => s.email?.toLowerCase() === user.email?.toLowerCase());
-  if (superIndex === -1) return false;
-
-  if (!list[superIndex].escolas.includes(schoolName)) {
-    const updatedEscolas = [...list[superIndex].escolas, schoolName];
-    // Create new list
-    const newList = list.map((s, idx) => idx === superIndex ? { ...s, escolas: updatedEscolas } : s);
-    saveSuperintendents(newList);
-    return true;
-  }
-  return false;
+  const idx = list.findIndex(s => s.email?.toLowerCase() === user.email!.toLowerCase());
+  if (idx === -1) return false;
+  if (list[idx].escolas.includes(schoolName)) return false;
+  const newList = list.map((s, i) =>
+    i === idx ? { ...s, escolas: [...s.escolas, schoolName] } : s
+  );
+  saveSuperintendents(newList);
+  return true;
 }

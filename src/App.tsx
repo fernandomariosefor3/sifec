@@ -32,10 +32,12 @@ import { BuscaAtivaView, PpdtView, RecomposicaoView } from './components/ExtraVi
 import SuperintendentesView from './components/SuperintendentesView';
 import DevPanel from './components/DevPanel';
 
-import { 
-  getSuperintendents, 
-  getActiveSuperintendentId, 
-  setActiveSuperintendentId 
+import {
+  getSuperintendents,
+  getActiveSuperintendentId,
+  setActiveSuperintendentId,
+  syncSuperintendentsFromFirestore,
+  ADMIN_EMAIL
 } from './lib/superintendentService';
 import { SEED_SCHOOLS } from './lib/firebaseService';
 
@@ -50,8 +52,11 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<any>(null);
 
   React.useEffect(() => {
-    const unsubAuth = auth.onAuthStateChanged((user) => {
+    const unsubAuth = auth.onAuthStateChanged(async (user) => {
       setCurrentUser(user);
+      if (user) {
+        await syncSuperintendentsFromFirestore();
+      }
     });
     return () => unsubAuth();
   }, []);
@@ -79,6 +84,8 @@ export default function App() {
   const loggedInSuper = currentUser?.email
     ? superintendents.find(s => s.email?.toLowerCase() === currentUser.email?.toLowerCase())
     : null;
+
+  const isUserAdmin = currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
 
   // Set active superintendent to logged in user if match exists
   React.useEffect(() => {
@@ -288,17 +295,31 @@ export default function App() {
                 Espaço de Trabalho
               </label>
               
-              <select
-                value={activeSuperId}
-                onChange={(e) => setActiveSuperintendentId(e.target.value)}
-                className="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 focus:outline-none focus:border-brand-green focus:bg-white rounded-lg font-bold text-slate-800 text-[11px] cursor-pointer transition-colors"
-              >
-                {superintendents.map(s => (
-                  <option key={s.id} value={s.id}>
-                    {s.nome.split(' - ')[0]} ({s.escolas.length} Esc.)
-                  </option>
-                ))}
-              </select>
+              {isUserAdmin ? (
+                <select
+                  value={activeSuperId}
+                  onChange={(e) => setActiveSuperintendentId(e.target.value)}
+                  className="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 focus:outline-none focus:border-brand-green focus:bg-white rounded-lg font-bold text-slate-800 text-[11px] cursor-pointer transition-colors"
+                >
+                  {superintendents.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.nome.split(' - ')[0]} ({s.escolas.length} Esc.)
+                    </option>
+                  ))}
+                </select>
+              ) : loggedInSuper ? (
+                <div className="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-slate-800 text-[11px]">
+                  {loggedInSuper.nome.split(' - ')[0]} ({loggedInSuper.escolas.length} Esc.)
+                </div>
+              ) : currentUser ? (
+                <div className="w-full py-1.5 px-2 text-[11px] text-rose-500 font-bold">
+                  Não autorizado — contate o administrador
+                </div>
+              ) : (
+                <div className="w-full py-1.5 px-2 text-[11px] text-slate-400">
+                  Faça login para continuar
+                </div>
+              )}
 
               {loggedInSuper && (
                 <div className="mt-2 flex items-center gap-1.5 py-1 px-2 bg-brand-green/10 border border-brand-green/20 rounded-lg">

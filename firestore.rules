@@ -1,15 +1,19 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Global safety net catch-all
+
+    // Global deny-all catch-all
     match /{document=**} {
       allow read, write: if false;
     }
 
-    // Helper functions
     function isSignedIn() {
       return request.auth != null;
+    }
+
+    // Admin is identified by their Google account email
+    function isAdmin() {
+      return isSignedIn() && request.auth.token.email == 'fernandomariodasmartins@gmail.com';
     }
 
     function isValidId(id) {
@@ -20,14 +24,33 @@ service cloud.firestore {
       return request.resource.data;
     }
 
-    function existing() {
-      return resource.data;
+    // Returns the list of school names assigned to the currently signed-in superintendent.
+    // The superintendentes collection is keyed by email address.
+    function myEscolas() {
+      let email = request.auth.token.email;
+      return email != null &&
+        exists(/databases/$(database)/documents/superintendentes/$(email))
+        ? get(/databases/$(database)/documents/superintendentes/$(email)).data.get('escolas', [])
+        : [];
     }
 
-    // 1. Schools rules
+    // True if the admin, OR if the school name is in the user's assigned list
+    function canWriteEscola(escolaNome) {
+      return isAdmin() || (isSignedIn() && escolaNome in myEscolas());
+    }
+
+    // --- Superintendentes ---
+    // Admin can list/get/write all. Non-admins can only get their own record.
+    match /superintendentes/{emailKey} {
+      allow get: if isSignedIn() && (isAdmin() || request.auth.token.email == emailKey);
+      allow list: if isAdmin();
+      allow write: if isAdmin();
+    }
+
+    // --- Schools ---
     match /schools/{schoolId} {
       allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidId(schoolId) &&
+      allow create: if isAdmin() && isValidId(schoolId) &&
         incoming().nome is string && incoming().nome.size() <= 150 &&
         incoming().codInep is string && incoming().codInep.size() <= 50 &&
         incoming().cidade is string && incoming().cidade.size() <= 100 &&
@@ -35,23 +58,34 @@ service cloud.firestore {
         incoming().idebMedio is number &&
         incoming().metaIdeb is number &&
         incoming().status is string;
-      allow delete: if isSignedIn() && isValidId(schoolId);
+      allow update: if isSignedIn() && isValidId(schoolId) &&
+        canWriteEscola(resource.data.nome) &&
+        incoming().nome is string && incoming().nome.size() <= 150 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().cidade is string && incoming().cidade.size() <= 100 &&
+        incoming().matriculas is number &&
+        incoming().idebMedio is number &&
+        incoming().metaIdeb is number &&
+        incoming().status is string;
+      allow delete: if isAdmin() && isValidId(schoolId);
     }
 
-    // 2. Turmas rules
+    // --- Turmas ---
     match /turmas/{turmaId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && isValidId(turmaId) &&
+        canWriteEscola(incoming().escolaNome) &&
         incoming().escolaId is string && incoming().escolaId.size() <= 128 &&
         incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
         incoming().nome is string && incoming().nome.size() <= 100 &&
         incoming().ano is string && incoming().ano.size() <= 20 &&
         incoming().periodo is string && incoming().periodo.size() <= 50 &&
         incoming().alunosSinalizados is number;
-      allow delete: if isSignedIn() && isValidId(turmaId);
+      allow delete: if isSignedIn() && isValidId(turmaId) &&
+        canWriteEscola(resource.data.escolaNome);
     }
 
-    // 3. Student Grades rules
+    // --- Grades (no school reference in schema — allow any signed-in user) ---
     match /grades/{gradeId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && isValidId(gradeId) &&
@@ -64,16 +98,18 @@ service cloud.firestore {
       allow delete: if isSignedIn() && isValidId(gradeId);
     }
 
-    // 4. Visitas rules
+    // --- Visitas ---
     match /visitas/{visitaId} {
       allow read: if isSignedIn();
       allow create, update: if isSignedIn() && isValidId(visitaId) &&
+        canWriteEscola(incoming().escola) &&
         incoming().escola is string && incoming().escola.size() <= 150 &&
         incoming().tecnico is string && incoming().tecnico.size() <= 150 &&
         incoming().data is string && incoming().data.size() <= 30 &&
         incoming().foco is string && incoming().foco.size() <= 200 &&
         incoming().status is string;
-      allow delete: if isSignedIn() && isValidId(visitaId);
+      allow delete: if isSignedIn() && isValidId(visitaId) &&
+        canWriteEscola(resource.data.escola);
     }
   }
 }
