@@ -278,7 +278,7 @@ export default function EscolasView() {
                 <th className="py-3.5 px-6">Nome da Unidade Escolar</th>
                 <th className="py-3.5 px-6">Sede / Cidade</th>
                 <th className="py-3.5 px-6 text-right">Alunos Regulados</th>
-                <th className="py-3.5 px-6 text-center">IDEB Médio</th>
+                <th className="py-3.5 px-6 text-center">Meta SPAECE 2026</th>
                 <th className="py-3.5 px-6 text-center">Meta IDEB</th>
                 <th className="py-3.5 px-6 text-center">Status</th>
                 <th className="py-3.5 px-6 text-right">Ações</th>
@@ -306,6 +306,7 @@ export default function EscolasView() {
                     <td className="py-4 px-6 text-center">
                       <span className="font-extrabold text-brand-turquoise font-mono text-xs">{school.idebMedio.toFixed(1)}</span>
                     </td>
+
                     <td className="py-4 px-6 text-center font-mono font-bold text-slate-500">{school.metaIdeb.toFixed(1)}</td>
                     <td className="py-4 px-6 text-center">
                       <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
@@ -419,7 +420,7 @@ export default function EscolasView() {
                 </div>
 
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-700 block">IDEB Atual *</label>
+                  <label className="text-[10px] font-black uppercase text-slate-700 block">Meta SPAECE 2026 *</label>
                   <input
                     type="number"
                     required

@@ -147,7 +147,7 @@ export default function App() {
       detailClass: "text-white/95 font-medium"
     },
     { 
-      label: "IDEB Médio Sifec", 
+      label: "Meta SPAECE 2026",
       value: avgIdeb, 
       detail: `Meta Pactuada: ${avgMeta}`, 
       icon: <Award size={20} />, 
