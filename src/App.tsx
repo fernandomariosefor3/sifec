@@ -22,7 +22,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 import { auth, loginWithGoogle, logout } from './lib/firebase';
-
+import ErrorBoundary from './components/ErrorBoundary';
 // Subcomponents
 import EscolasView from './components/EscolasView';
 import FluxoView from './components/FluxoView';
@@ -429,14 +429,14 @@ export default function App() {
 
           {/* Right Area: Display Tab Contents with smooth state changes */}
           <div className={`lg:col-span-9 bg-white border border-slate-205 border-t-[6px] ${getTabAccentClass(activeTab)} rounded-3xl p-6 min-h-[450px] shadow-sm transition-all duration-300`}>
-            {activeTab === 'escolas' && <EscolasView />}
-            {activeTab === 'fluxo' && <FluxoView />}
-            {activeTab === 'notas' && <NotasView />}
-            {activeTab === 'cdg' && <CdgView />}
-            {activeTab === 'busca' && <BuscaAtivaView />}
-            {activeTab === 'recomposicao' && <RecomposicaoView />}
-            {activeTab === 'ppdt' && <PpdtView />}
-            {activeTab === 'superintendentes' && <SuperintendentesView />}
+            {activeTab === 'escolas' && <ErrorBoundary><EscolasView /></ErrorBoundary>}
+            {activeTab === 'fluxo' && <ErrorBoundary><FluxoView /></ErrorBoundary>}
+            {activeTab === 'notas' && <ErrorBoundary><NotasView /></ErrorBoundary>}
+            {activeTab === 'cdg' && <ErrorBoundary><CdgView /></ErrorBoundary>}
+            {activeTab === 'busca' && <ErrorBoundary><BuscaAtivaView /></ErrorBoundary>}
+            {activeTab === 'recomposicao' && <ErrorBoundary><RecomposicaoView /></ErrorBoundary>}
+            {activeTab === 'ppdt' && <ErrorBoundary><PpdtView /></ErrorBoundary>}
+            {activeTab === 'superintendentes' && <ErrorBoundary><SuperintendentesView /></ErrorBoundary>}
           </div>
         </section>
       </div>

@@ -1,0 +1,10 @@
+{
+  "name": "SIFEC - Sistema de Frequência e Indicadores Escolares",
+  "short_name": "SIFEC SEFOR 3",
+  "description": "Controle gerencial da SEDUC Ceará - Regional SEFOR 3 CREDE-03.",
+  "start_url": "/sifec/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1ea2a7",
+  "lang": "pt-BR"
+}
