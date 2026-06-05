@@ -1,10 +1,10 @@
 {
-  "projectId": "emdiafinanceiro-13483",
-  "appId": "1:36020370725:web:fccd6e04bc24b33ad1eecc",
-  "apiKey": "AIzaSyCjFOi9uQOgymbpeaNkSB8PT3maaW11tIU",
-  "authDomain": "emdiafinanceiro-13483.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-c0666c46-99d1-4e78-893f-97d901c8586d",
-  "storageBucket": "emdiafinanceiro-13483.firebasestorage.app",
-  "messagingSenderId": "36020370725",
+  "projectId": "sifec-sefor3",
+  "appId": "1:713621121329:web:f16fb2a4902fdb00b8a810",
+  "apiKey": "AIzaSyBE5CjHL1cqOGD-M6KUFYrMw8nntkzYfEs",
+  "authDomain": "sifec-sefor3.firebaseapp.com",
+  "firestoreDatabaseId": "(default)",
+  "storageBucket": "sifec-sefor3.firebasestorage.app",
+  "messagingSenderId": "713621121329",
   "measurementId": ""
 }
