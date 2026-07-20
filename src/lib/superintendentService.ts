@@ -2,18 +2,28 @@ import {
   collection, doc, getDocs, setDoc, deleteDoc, getDoc
 } from 'firebase/firestore';
 import { db, auth } from './firebase';
+import {
+  Superintendent,
+  SuperintendentRole,
+  ADMIN_EMAIL,
+  normalizeEmail,
+  normalizeLegacyRecord,
+  isRootAdminEmail,
+} from './superintendentRules';
 
-export interface Superintendent {
-  id: string;        // slug for UI state (e.g. 'fernando-mario')
-  nome: string;
-  cargo: string;
-  email: string;     // Google account email — used as Firestore document key
-  escolas: string[]; // school names assigned to this superintendent
-}
+// Re-export the pure, Firebase-free layer (types, normalization,
+// validation, permission helpers) so existing imports keep working —
+// see superintendentRules.ts for the implementations and their unit tests.
+export * from './superintendentRules';
 
-// The single admin email — must match the value in firestore.rules
-export const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
-
+// Local-only demonstration data for the logged-out / not-yet-synced state.
+// Never written to Firestore automatically (no call site below passes this
+// array to saveSuperintendentToFirestore) and never treated as an
+// authorization source: real access always requires a genuine Firestore
+// document with ativo: true, enforced by firestore.rules.proposed. Once the
+// admin's real Firestore record syncs in, syncSuperintendentsFromFirestore()
+// replaces this local cache wholesale, so it never persists alongside the
+// real record.
 const DEFAULT_SUPERINTENDENTS: Superintendent[] = [
   {
     id: 'fernando-mario',
@@ -28,7 +38,9 @@ const DEFAULT_SUPERINTENDENTS: Superintendent[] = [
       'EEMTI Anísio Teixeira',
       'EEMTI Estado do Amazonas',
       'EEMTI Senador Osires Pontes'
-    ]
+    ],
+    ativo: true,
+    role: 'admin'
   }
 ];
 
@@ -41,7 +53,8 @@ export function getSuperintendents(): Superintendent[] {
     return DEFAULT_SUPERINTENDENTS;
   }
   try {
-    return JSON.parse(data) as Superintendent[];
+    const parsed = JSON.parse(data) as Array<Partial<Superintendent> & { id: string; nome: string; email: string }>;
+    return parsed.map(normalizeLegacyRecord);
   } catch {
     return DEFAULT_SUPERINTENDENTS;
   }
@@ -54,20 +67,23 @@ export function saveSuperintendents(list: Superintendent[]): void {
 
 // ---- Firestore operations ----
 
+function docToSuperintendent(id: string, data: Record<string, unknown>): Superintendent {
+  return normalizeLegacyRecord({
+    id: (data.id as string) || id,
+    nome: (data.nome as string) || '',
+    cargo: (data.cargo as string) || 'Superintendente Regional',
+    email: (data.email as string) || id,
+    escolas: Array.isArray(data.escolas) ? (data.escolas as string[]) : [],
+    ativo: data.ativo as boolean | undefined,
+    role: data.role as SuperintendentRole | undefined,
+  });
+}
+
 // Load all superintendent records (admin only — non-admins use getCurrentUserSuperRecord)
 export async function loadSuperintendentsFromFirestore(): Promise<Superintendent[]> {
   try {
     const snap = await getDocs(collection(db, 'superintendentes'));
-    return snap.docs.map(d => {
-      const data = d.data();
-      return {
-        id: (data.id as string) || d.id,
-        nome: (data.nome as string) || '',
-        cargo: (data.cargo as string) || 'Superintendente Regional',
-        email: (data.email as string) || d.id,
-        escolas: Array.isArray(data.escolas) ? (data.escolas as string[]) : []
-      };
-    });
+    return snap.docs.map(d => docToSuperintendent(d.id, d.data()));
   } catch {
     return [];
   }
@@ -80,59 +96,61 @@ export async function getCurrentUserSuperRecord(): Promise<Superintendent | null
   try {
     const snap = await getDoc(doc(db, 'superintendentes', user.email.toLowerCase()));
     if (!snap.exists()) return null;
-    const data = snap.data();
-    return {
-      id: (data.id as string) || user.email.toLowerCase(),
-      nome: (data.nome as string) || user.displayName || 'Superintendente',
-      cargo: (data.cargo as string) || 'Superintendente Regional',
-      email: (data.email as string) || user.email,
-      escolas: Array.isArray(data.escolas) ? (data.escolas as string[]) : []
-    };
+    return docToSuperintendent(snap.id, snap.data());
   } catch {
     return null;
   }
 }
 
-// Sync from Firestore into localStorage cache. Admins load all records; others load only their own.
+// Sync from Firestore into localStorage cache. Admins (root or role: admin)
+// load the full authoritative list — this REPLACES the local cache, so a
+// real Firestore admin record always prevails over DEFAULT_SUPERINTENDENTS
+// and never ends up duplicated alongside it. Non-admins only have
+// Firestore read access to their own document (see firestore.rules.proposed),
+// so their sync merges just that one record into the local cache.
 export async function syncSuperintendentsFromFirestore(): Promise<void> {
   const user = auth.currentUser;
   if (!user?.email) return;
 
-  const isAdmin = user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const myRecord = await getCurrentUserSuperRecord();
+  const isAdmin = user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase() || myRecord?.role === 'admin';
 
   if (isAdmin) {
     const list = await loadSuperintendentsFromFirestore();
     if (list.length > 0) {
       saveSuperintendents(list);
     }
-  } else {
-    const myRecord = await getCurrentUserSuperRecord();
-    if (myRecord) {
-      const existing = getSuperintendents();
-      const idx = existing.findIndex(s => s.email?.toLowerCase() === user.email!.toLowerCase());
-      const updated = idx >= 0
-        ? existing.map((s, i) => i === idx ? myRecord : s)
-        : [...existing, myRecord];
-      saveSuperintendents(updated);
-    }
+  } else if (myRecord) {
+    const existing = getSuperintendents();
+    const idx = existing.findIndex(s => s.email?.toLowerCase() === user.email!.toLowerCase());
+    const updated = idx >= 0
+      ? existing.map((s, i) => (i === idx ? myRecord : s))
+      : [...existing, myRecord];
+    saveSuperintendents(updated);
   }
 }
 
-// Save a single superintendent to Firestore (admin only action)
+// Save a single superintendent to Firestore (admin only action, enforced by
+// firestore.rules.proposed — this call throws on permission-denied instead
+// of falling back to a local-only save; callers must not swallow the error).
 export async function saveSuperintendentToFirestore(s: Superintendent): Promise<void> {
-  const docId = s.email.toLowerCase().trim();
+  const docId = normalizeEmail(s.email);
   await setDoc(doc(db, 'superintendentes', docId), {
     id: s.id,
     nome: s.nome,
     cargo: s.cargo,
-    email: s.email.toLowerCase().trim(),
-    escolas: s.escolas
+    email: docId,
+    escolas: s.escolas,
+    ativo: s.ativo,
+    role: s.role,
   });
 }
 
-// Delete a superintendent from Firestore by email (admin only action)
+// Delete a superintendent from Firestore by email (root admin only action,
+// enforced by firestore.rules.proposed — the root's own record is rejected
+// server-side even if this is called with the root's email).
 export async function deleteSuperintendentFromFirestore(email: string): Promise<void> {
-  await deleteDoc(doc(db, 'superintendentes', email.toLowerCase().trim()));
+  await deleteDoc(doc(db, 'superintendentes', normalizeEmail(email)));
 }
 
 // ---- Active workspace ----
@@ -153,10 +171,23 @@ export function setActiveSuperintendentId(id: string): void {
   window.dispatchEvent(new Event('sefor3_filter_change'));
 }
 
-// ---- Access control helpers ----
+// ---- Access control helpers (client-side convenience only — the real
+// authorization boundary is firestore.rules.proposed; these mirror it so
+// the UI can hide/disable controls, never to be relied on for security). ----
 
+// True only for the fixed bootstrap/recovery identity (isPlatformAdmin() in rules).
+export function isRootAdmin(): boolean {
+  return isRootAdminEmail(auth.currentUser?.email);
+}
+
+// True for the root admin OR any active, registered superintendent whose
+// own record has role: admin.
 export function isCurrentUserAdmin(): boolean {
-  return auth.currentUser?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+  const user = auth.currentUser;
+  if (!user?.email) return false;
+  if (isRootAdmin()) return true;
+  const mine = getSuperintendents().find(s => s.email?.toLowerCase() === user.email!.toLowerCase());
+  return !!mine && mine.ativo === true && mine.role === 'admin';
 }
 
 export function isSchoolVisible(schoolName: string): boolean {
@@ -179,10 +210,11 @@ export function filterSchoolsByActiveSuperintendent<T extends { nome: string }>(
 export function hasSchoolWriteAccess(schoolName: string): boolean {
   const user = auth.currentUser;
   if (!user?.email) return false;
-  if (user.email.toLowerCase() === ADMIN_EMAIL.toLowerCase()) return true;
-  const list = getSuperintendents();
-  const myRecord = list.find(s => s.email?.toLowerCase() === user.email!.toLowerCase());
-  return myRecord ? myRecord.escolas.includes(schoolName) : false;
+  if (isRootAdmin()) return true;
+  const myRecord = getSuperintendents().find(s => s.email?.toLowerCase() === user.email!.toLowerCase());
+  if (!myRecord || myRecord.ativo === false) return false;
+  if (myRecord.role === 'admin') return true;
+  return myRecord.escolas.includes(schoolName);
 }
 
 export function addSchoolToLoggedInSuperintendent(schoolName: string): boolean {
