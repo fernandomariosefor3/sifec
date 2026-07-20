@@ -1,0 +1,161 @@
+// Lógica pura de normalização, validação e permissão do cadastro de
+// superintendentes — sem nenhum import do Firebase, para poder ser testada
+// isoladamente (unit tests não precisam inicializar o app/Firestore).
+// A fonte real de verdade de segurança é firestore.rules.proposed; o que
+// está aqui é só a camada de conveniência da UI (esconder/desabilitar
+// controles antes mesmo de tentar a chamada ao Firestore).
+
+export type SuperintendentRole = 'admin' | 'superintendent';
+
+export interface Superintendent {
+  id: string;        // slug for UI state (e.g. 'fernando-mario')
+  nome: string;
+  cargo: string;
+  email: string;     // Google account email — used as Firestore document key
+  escolas: string[]; // school names assigned to this superintendent
+  ativo: boolean;
+  role: SuperintendentRole;
+}
+
+// Root/bootstrap admin — identity kept fixed so there's always a recovery
+// path into the platform, mirrored in firestore.rules.proposed's
+// isPlatformAdmin(). Other admins are ordinary Firestore records with
+// role: 'admin', granted only by an existing admin.
+export const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
+
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+export function isValidEmailFormat(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+}
+
+// True only for the fixed bootstrap/recovery identity — mirrors
+// isPlatformAdmin() in firestore.rules.proposed.
+export function isRootAdminEmail(email: string | null | undefined): boolean {
+  return !!email && normalizeEmail(email) === ADMIN_EMAIL.toLowerCase();
+}
+
+// Legacy records cached before ativo/role existed: normalize in memory
+// only (never rewritten to Firestore from here). The bootstrap admin is
+// always recognized as role: admin regardless of what was cached.
+export function normalizeLegacyRecord(s: Partial<Superintendent> & { id: string; nome: string; email: string }): Superintendent {
+  const isBootstrapAdmin = normalizeEmail(s.email) === ADMIN_EMAIL.toLowerCase();
+  return {
+    id: s.id,
+    nome: s.nome,
+    cargo: s.cargo || 'Superintendente Regional',
+    email: s.email,
+    escolas: Array.isArray(s.escolas) ? s.escolas : [],
+    ativo: typeof s.ativo === 'boolean' ? s.ativo : true,
+    role: isBootstrapAdmin ? 'admin' : (s.role === 'admin' ? 'admin' : 'superintendent'),
+  };
+}
+
+export interface SuperintendentFormInput {
+  nome: string;
+  cargo: string;
+  email: string;
+  escolas: string[];
+  ativo: boolean;
+  role: SuperintendentRole;
+}
+
+export function defaultSuperintendentFormInput(): SuperintendentFormInput {
+  return { nome: '', cargo: '', email: '', escolas: [], ativo: true, role: 'superintendent' };
+}
+
+export interface SuperintendentValidationError {
+  field: 'nome' | 'email' | 'escolas' | 'duplicate';
+  message: string;
+}
+
+// editingEmail: when editing an existing record, its own (unchanged) email
+// is excluded from the duplicate check.
+export function validateSuperintendentInput(
+  input: SuperintendentFormInput,
+  existing: Superintendent[],
+  editingEmail?: string
+): SuperintendentValidationError | null {
+  if (!input.nome.trim()) {
+    return { field: 'nome', message: 'Informe o nome do superintendente.' };
+  }
+  const email = normalizeEmail(input.email);
+  if (!isValidEmailFormat(email)) {
+    return { field: 'email', message: 'Informe um e-mail Google válido.' };
+  }
+  const editingNormalized = editingEmail ? normalizeEmail(editingEmail) : undefined;
+  const duplicate = existing.some(s => normalizeEmail(s.email) === email && normalizeEmail(s.email) !== editingNormalized);
+  if (duplicate) {
+    return { field: 'duplicate', message: 'Já existe um cadastro com este e-mail.' };
+  }
+  if (input.role === 'superintendent' && input.escolas.length === 0) {
+    return { field: 'escolas', message: 'Um superintendente precisa de pelo menos uma escola vinculada.' };
+  }
+  return null;
+}
+
+function slugify(nome: string): string {
+  return nome
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+// Builds the exact Firestore payload, applying the documented defaults
+// (ativo: true, role: 'superintendent') for anything not explicitly set.
+export function buildSuperintendentPayload(
+  input: SuperintendentFormInput,
+  existingId?: string
+): Superintendent {
+  const email = normalizeEmail(input.email);
+  return {
+    id: existingId || slugify(input.nome) || email,
+    nome: input.nome.trim(),
+    cargo: input.cargo.trim() || 'Superintendente Regional',
+    email,
+    escolas: input.escolas,
+    ativo: input.ativo,
+    role: input.role,
+  };
+}
+
+// Would this write leave the root admin's own record deactivated, demoted,
+// or otherwise tampered with? Mirrors the root-protection branch of
+// firestore.rules.proposed so the UI can disable the controls before the
+// request ever reaches Firestore.
+export function isRootProtectedEdit(targetEmail: string, incoming: { ativo: boolean; role: SuperintendentRole }): boolean {
+  return normalizeEmail(targetEmail) === ADMIN_EMAIL.toLowerCase() &&
+    (incoming.ativo !== true || incoming.role !== 'admin');
+}
+
+// Which roles the acting user is allowed to assign to a NEW or edited record.
+export function assignableRoles(actingUserIsRoot: boolean): SuperintendentRole[] {
+  return actingUserIsRoot ? ['admin', 'superintendent'] : ['superintendent'];
+}
+
+export function canGrantAdminRole(actingUserIsRoot: boolean): boolean {
+  return actingUserIsRoot;
+}
+
+// Can the acting user open/save an edit on this target record?
+export function canEditTarget(
+  actingUserIsRoot: boolean,
+  targetRole: SuperintendentRole,
+  targetEmail: string,
+  actingUserEmail: string
+): boolean {
+  if (normalizeEmail(targetEmail) === normalizeEmail(actingUserEmail)) {
+    return actingUserIsRoot;
+  }
+  if (actingUserIsRoot) return true;
+  return targetRole === 'superintendent';
+}
+
+export function canDeleteTarget(actingUserIsRoot: boolean, targetEmail: string): boolean {
+  if (!actingUserIsRoot) return false;
+  return normalizeEmail(targetEmail) !== ADMIN_EMAIL.toLowerCase();
+}

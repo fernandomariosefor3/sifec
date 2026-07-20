@@ -11,22 +11,25 @@ rules_version = '2';
 // ESCRITA já eram corretamente restritas a superintendentes cadastrados
 // (via myEscolas()/canWriteEscola()) — só a leitura estava aberta demais.
 //
-// Mudança de schema proposta:
-//   - superintendentes/{email} ganha um campo OBRIGATÓRIO `ativo: boolean` e
-//     um campo opcional `role: 'admin' | 'superintendente'` (default
-//     'superintendente' quando ausente — só `ativo` é fail-closed).
+// Mudança de schema (Fase 0 + Fase 1C):
+//   - superintendentes/{email} ganha os campos OBRIGATÓRIOS `ativo: boolean`
+//     e `role: 'admin' | 'superintendent'` (sem default — create/update
+//     exigem os dois explicitamente).
 //   - FAIL-CLOSED: um documento SEM `ativo`, ou com `ativo: false`, é tratado
-//     como NÃO autorizado. Isso é uma mudança de comportamento em relação à
-//     primeira versão desta proposta (que tratava `ativo` ausente como
-//     `true`) — o admin raiz (isPlatformAdmin(), checado só por e-mail, sem
-//     depender do documento) continua com acesso mesmo assim, mas qualquer
-//     OUTRO superintendente cadastrado hoje (sem o campo `ativo`) FICARÁ
-//     BLOQUEADO até rodar o script de migração (scripts/migrate-ativo-field.mjs)
-//     que preenche `ativo: true` nos registros existentes. Publicar estas
-//     regras sem rodar a migração antes derruba o acesso de todo mundo que
-//     não seja o admin raiz — ver relatório, item "riscos restantes".
-//   Nenhuma tela foi alterada para gerenciar esses campos nesta fase — é
-//   trabalho de UI futuro (fora do escopo desta Fase 0).
+//     como NÃO autorizado. O admin raiz (isPlatformAdmin(), checado só por
+//     e-mail, sem depender do documento) continua com acesso mesmo assim,
+//     mas qualquer OUTRO superintendente cadastrado sem o campo `ativo`
+//     FICARÁ BLOQUEADO até rodar scripts/migrate-ativo-field.mjs.
+//   - HIERARQUIA (Fase 1C): admin raiz > admin cadastrado (role: 'admin',
+//     não-raiz) > superintendente comum (role: 'superintendent'). Admin
+//     cadastrado só cria/edita superintendentes comuns — não pode criar
+//     outro admin, promover ninguém, editar outro admin, nem excluir
+//     ninguém. Só o admin raiz concede/retira role: 'admin' e exclui
+//     usuários; o próprio documento do admin raiz nunca pode ser
+//     desativado, rebaixado ou excluído, nem por ele mesmo.
+//   `src/components/SuperintendentesView.tsx` e `src/lib/superintendentService.ts`
+//   já foram atualizados na Fase 1C para enviar `ativo`/`role` e respeitar
+//   essa hierarquia — ver relatório da Fase 1C para o estado exato.
 //
 // LIMITAÇÃO CONHECIDA (ver auditoria, item "riscos restantes"):
 //   A coleção `grades` não tem campo escolaNome/escolaId no schema atual
@@ -89,9 +92,26 @@ service cloud.firestore {
     // `superintendentes` (ver match abaixo), ninguém consegue setar esse
     // campo em si mesmo — a única forma de virar admin é um admin existente
     // conceder isso explicitamente.
+    // Meu próprio role — só tem sentido quando isRegisteredSuperintendent().
+    function myRole() {
+      return isActiveSuperintendent() ? superintendentDoc().data.get('role', 'superintendent') : null;
+    }
+
+    // "Admin" cobre TANTO o admin raiz (bootstrap/recuperação, identidade
+    // fixa) QUANTO qualquer superintendente ativo cadastrado com
+    // role: 'admin'. Para ações fora da coleção `superintendentes` (schools,
+    // turmas, grades, visitas), os dois têm o mesmo poder. Dentro de
+    // `superintendentes`, o admin cadastrado (não-raiz) tem poderes mais
+    // restritos — ver o match dessa coleção abaixo.
     function isAdmin() {
-      return isPlatformAdmin() ||
-        (isActiveSuperintendent() && superintendentDoc().data.get('role', '') == 'admin');
+      return isPlatformAdmin() || (isActiveSuperintendent() && myRole() == 'admin');
+    }
+
+    // Verdadeiro só para o e-mail fixo do admin raiz — usado para as
+    // restrições que nem um admin cadastrado pode fazer (excluir usuários,
+    // conceder/retirar role: admin, editar outro admin).
+    function isRootEmailKey(emailKey) {
+      return emailKey == 'fernandomariodasmartins@gmail.com';
     }
 
     // "Autorizado" = qualquer superintendente cadastrado e ativo, ou admin.
@@ -123,25 +143,61 @@ service cloud.firestore {
     }
 
     // --- Superintendentes ---
-    // Get: o próprio usuário lê seu registro, ou admin lê qualquer um.
-    // List: só admin (evita enumerar todos os e-mails cadastrados).
-    // Create/update: só admin — é isso que impede autopromoção a admin/ativo.
-    // Delete: só o admin raiz (dado de staffing é histórico — deixar de ser
-    // superintendente deveria ser "ativo: false", não exclusão; exclusão
-    // física fica restrita ao admin raiz para casos de limpeza real).
-    match /superintendentes/{emailKey} {
-      allow get: if isSignedIn() && (isAdmin() || myEmail() == emailKey);
-      allow list: if isAdmin();
-      // `ativo` é obrigatório (não tem default) — força quem cria/edita a
-      // decidir explicitamente o estado, em vez de confiar num default.
-      allow create, update: if isAdmin() && isValidEmailId(emailKey) &&
-        incoming().nome is string && incoming().nome.size() <= 150 &&
+    // Hierarquia: admin raiz > admin cadastrado > superintendente comum.
+    // Get: o próprio usuário lê seu registro, ou qualquer admin lê qualquer um.
+    // List: qualquer admin (evita enumerar e-mails para não-admins).
+    //
+    // Payload válido, exigido em create/update, para todos os perfis:
+    //  - só os campos id/nome/cargo/email/escolas/ativo/role (rejeita campo
+    //    inesperado);
+    //  - email (minúsculo) == ID do documento (não pode divergir);
+    //  - ativo e role são obrigatórios (sem default) — força quem cria/edita
+    //    a decidir explicitamente, e é o que barra documento incompleto;
+    //  - role só pode ser 'admin' ou 'superintendent';
+    //  - superintendent precisa de pelo menos 1 escola; admin pode ter
+    //    escolas: [] porque tem acesso global (canWriteEscola/isAdmin).
+    function isValidSuperintendentPayload(emailKey) {
+      return incoming().keys().hasOnly(['id', 'nome', 'cargo', 'email', 'escolas', 'ativo', 'role']) &&
+        incoming().id is string &&
+        incoming().nome is string && incoming().nome.size() > 0 && incoming().nome.size() <= 150 &&
         incoming().cargo is string && incoming().cargo.size() <= 150 &&
         incoming().email is string && incoming().email.lower() == emailKey &&
         incoming().escolas is list &&
         incoming().ativo is bool &&
-        incoming().get('role', 'superintendente') in ['admin', 'superintendente'];
-      allow delete: if isPlatformAdmin() && isValidEmailId(emailKey);
+        incoming().role in ['admin', 'superintendent'] &&
+        (incoming().role == 'admin' || incoming().escolas.size() >= 1);
+    }
+
+    match /superintendentes/{emailKey} {
+      allow get: if isSignedIn() && (isAdmin() || myEmail() == emailKey);
+      allow list: if isAdmin();
+
+      // Create: qualquer admin cria, mas só o admin raiz pode criar outro
+      // admin — admin cadastrado só cria role: 'superintendent'.
+      allow create: if isAdmin() && isValidEmailId(emailKey) && isValidSuperintendentPayload(emailKey) &&
+        (isPlatformAdmin() || incoming().role == 'superintendent');
+
+      // Update:
+      //  - admin raiz pode editar qualquer documento, inclusive outros
+      //    admins e conceder/retirar role: admin — EXCETO o próprio
+      //    documento, que nunca pode ser desativado/rebaixado por essa via
+      //    (proteção contra autoexclusão de acesso, mesmo acidental);
+      //  - admin cadastrado (não-raiz) só edita documentos que já são
+      //    role: 'superintendent' E continuam role: 'superintendent' depois
+      //    — não enxerga/edita outro admin, não promove ninguém, e como o
+      //    próprio documento do admin cadastrado é role: 'admin', ele nunca
+      //    bate nessa condição (não pode editar a si mesmo).
+      allow update: if isAdmin() && isValidEmailId(emailKey) && isValidSuperintendentPayload(emailKey) &&
+        (
+          (isPlatformAdmin() &&
+            (!isRootEmailKey(emailKey) || (incoming().ativo == true && incoming().role == 'admin'))) ||
+          (isAdmin() && !isPlatformAdmin() &&
+            resource.data.role == 'superintendent' && incoming().role == 'superintendent')
+        );
+
+      // Delete: só o admin raiz, e nunca o próprio documento do admin raiz —
+      // admin cadastrado e superintendente comum não excluem ninguém.
+      allow delete: if isPlatformAdmin() && isValidEmailId(emailKey) && !isRootEmailKey(emailKey);
     }
 
     // --- Schools ---

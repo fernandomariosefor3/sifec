@@ -19,7 +19,8 @@ import {
   updateDoc,
 } from 'firebase/firestore';
 
-const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
+const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com'; // admin raiz (isPlatformAdmin)
+const CADASTRO_ADMIN_EMAIL = 'admin.cadastrado@example.com'; // admin não-raiz, cadastrado
 const ACTIVE_EMAIL = 'super.ativo@example.com';
 const INACTIVE_EMAIL = 'super.inativo@example.com';
 const NO_ATIVO_FIELD_EMAIL = 'super.sem-campo-ativo@example.com';
@@ -51,36 +52,36 @@ beforeEach(async () => {
   await testEnv.withSecurityRulesDisabled(async (context) => {
     const db = context.firestore();
 
+    // Documento do admin raiz — precisa existir para testar as proteções
+    // (root não pode ser rebaixado/desativado/excluído) contra dado real,
+    // em vez de falhar só por "documento inexistente".
+    await setDoc(doc(db, 'superintendentes', ADMIN_EMAIL), {
+      id: 'root', nome: 'Admin Raiz (Teste)', cargo: 'Superintendente de Regulação Seduc',
+      email: ADMIN_EMAIL, escolas: [], ativo: true, role: 'admin',
+    });
+    await setDoc(doc(db, 'superintendentes', CADASTRO_ADMIN_EMAIL), {
+      id: 'admin-cadastrado', nome: 'Admin Cadastrado (Teste)', cargo: 'Superintendente Regional',
+      email: CADASTRO_ADMIN_EMAIL, escolas: [], ativo: true, role: 'admin',
+    });
     await setDoc(doc(db, 'superintendentes', ACTIVE_EMAIL), {
-      nome: 'Superintendente Ativo (Teste)',
-      cargo: 'Superintendente Regional',
-      email: ACTIVE_EMAIL,
-      escolas: [ESCOLA_A],
-      ativo: true,
+      id: 'super-ativo', nome: 'Superintendente Ativo (Teste)', cargo: 'Superintendente Regional',
+      email: ACTIVE_EMAIL, escolas: [ESCOLA_A], ativo: true, role: 'superintendent',
     });
     await setDoc(doc(db, 'superintendentes', INACTIVE_EMAIL), {
-      nome: 'Superintendente Inativo (Teste)',
-      cargo: 'Superintendente Regional',
-      email: INACTIVE_EMAIL,
-      escolas: [ESCOLA_B],
-      ativo: false,
+      id: 'super-inativo', nome: 'Superintendente Inativo (Teste)', cargo: 'Superintendente Regional',
+      email: INACTIVE_EMAIL, escolas: [ESCOLA_B], ativo: false, role: 'superintendent',
     });
-    // Documento antigo, anterior à existência do campo `ativo` — simula um
-    // registro real de produção que ainda não passou pela migração.
+    // Documento antigo, anterior à existência dos campos ativo/role — simula
+    // um registro real de produção que ainda não passou pela migração.
     await setDoc(doc(db, 'superintendentes', NO_ATIVO_FIELD_EMAIL), {
-      nome: 'Superintendente Legado Sem Campo Ativo (Teste)',
-      cargo: 'Superintendente Regional',
-      email: NO_ATIVO_FIELD_EMAIL,
-      escolas: [ESCOLA_B],
+      id: 'super-legado', nome: 'Superintendente Legado (Teste)', cargo: 'Superintendente Regional',
+      email: NO_ATIVO_FIELD_EMAIL, escolas: [ESCOLA_B],
     });
     // Ativo, mas sem nenhuma escola atribuída — não deve conseguir escrever
     // em escola nenhuma (myEscolas() vazio).
     await setDoc(doc(db, 'superintendentes', EMPTY_ESCOLAS_EMAIL), {
-      nome: 'Superintendente Sem Escolas (Teste)',
-      cargo: 'Superintendente Regional',
-      email: EMPTY_ESCOLAS_EMAIL,
-      escolas: [],
-      ativo: true,
+      id: 'super-sem-escolas', nome: 'Superintendente Sem Escolas (Teste)', cargo: 'Superintendente Regional',
+      email: EMPTY_ESCOLAS_EMAIL, escolas: [], ativo: true, role: 'superintendent',
     });
 
     await setDoc(doc(db, 'schools', 'escola-a-teste'), {
@@ -123,6 +124,20 @@ function ctxFor(email: string | null) {
     : testEnv.unauthenticatedContext();
 }
 
+// Payload mínimo válido de superintendentes, com overrides pontuais por teste.
+function superPayload(email: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'novo-teste',
+    nome: 'Novo Superintendente (Teste)',
+    cargo: 'Superintendente Regional',
+    email,
+    escolas: [ESCOLA_A],
+    ativo: true,
+    role: 'superintendent',
+    ...overrides,
+  };
+}
+
 describe('Firestore Rules propostas — SIFEC', () => {
   it('usuário não autenticado não consegue ler schools', async () => {
     await assertFails(getDocs(collection(ctxFor(null).firestore(), 'schools')));
@@ -161,24 +176,18 @@ describe('Firestore Rules propostas — SIFEC', () => {
 
   it('usuário comum não consegue se promover a administrador', async () => {
     const db = ctxFor(ACTIVE_EMAIL).firestore();
-    await assertFails(updateDoc(doc(db, 'superintendentes', ACTIVE_EMAIL), {
-      nome: 'Superintendente Ativo (Teste)', cargo: 'Superintendente Regional',
-      email: ACTIVE_EMAIL, escolas: [ESCOLA_A], ativo: true, role: 'admin',
-    }));
+    await assertFails(updateDoc(doc(db, 'superintendentes', ACTIVE_EMAIL),
+      superPayload(ACTIVE_EMAIL, { id: 'super-ativo', role: 'admin' })));
   });
 
   it('somente administrador autorizado gerencia a coleção superintendentes', async () => {
     await assertFails(getDocs(collection(ctxFor(STRANGER_EMAIL).firestore(), 'superintendentes')));
 
-    await assertFails(setDoc(doc(ctxFor(ACTIVE_EMAIL).firestore(), 'superintendentes', 'novo@example.com'), {
-      nome: 'Novo Superintendente (Teste)', cargo: 'Superintendente Regional',
-      email: 'novo@example.com', escolas: [], ativo: true,
-    }));
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_EMAIL).firestore(), 'superintendentes', 'novo@example.com'),
+      superPayload('novo@example.com')));
 
-    await assertSucceeds(setDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'superintendentes', 'novo@example.com'), {
-      nome: 'Novo Superintendente (Teste)', cargo: 'Superintendente Regional',
-      email: 'novo@example.com', escolas: [], ativo: true,
-    }));
+    await assertSucceeds(setDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'superintendentes', 'novo@example.com'),
+      superPayload('novo@example.com')));
   });
 
   describe('campo ativo — fail-closed', () => {
@@ -204,10 +213,9 @@ describe('Firestore Rules propostas — SIFEC', () => {
     });
 
     it('admin não consegue criar superintendente sem declarar ativo explicitamente', async () => {
-      await assertFails(setDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'superintendentes', 'sem-ativo@example.com'), {
-        nome: 'Sem Ativo (Teste)', cargo: 'Superintendente Regional',
-        email: 'sem-ativo@example.com', escolas: [],
-      }));
+      const payload = superPayload('sem-ativo@example.com');
+      delete (payload as any).ativo;
+      await assertFails(setDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'superintendentes', 'sem-ativo@example.com'), payload));
     });
   });
 
@@ -376,6 +384,120 @@ describe('Firestore Rules propostas — SIFEC', () => {
         nome: 'Aluno Fictício Sem Ativo', turma: 'Turma Teste',
         portugues: 5, matematica: 5, ciencias: 5, bimestre: '1º Bimestre',
       }));
+    });
+  });
+
+  describe('SUPERINTENDENTES — hierarquia raiz / admin cadastrado / superintendent (Fase 1C)', () => {
+    it('root cria superintendent', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertSucceeds(setDoc(doc(db, 'superintendentes', 'novo-super@example.com'),
+        superPayload('novo-super@example.com', { role: 'superintendent' })));
+    });
+
+    it('root cria admin', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertSucceeds(setDoc(doc(db, 'superintendentes', 'novo-admin@example.com'),
+        superPayload('novo-admin@example.com', { role: 'admin', escolas: [] })));
+    });
+
+    it('admin cadastrado cria superintendent', async () => {
+      const db = ctxFor(CADASTRO_ADMIN_EMAIL).firestore();
+      await assertSucceeds(setDoc(doc(db, 'superintendentes', 'novo-super2@example.com'),
+        superPayload('novo-super2@example.com', { role: 'superintendent' })));
+    });
+
+    it('admin cadastrado não cria admin', async () => {
+      const db = ctxFor(CADASTRO_ADMIN_EMAIL).firestore();
+      await assertFails(setDoc(doc(db, 'superintendentes', 'novo-admin2@example.com'),
+        superPayload('novo-admin2@example.com', { role: 'admin', escolas: [] })));
+    });
+
+    it('admin cadastrado não promove usuário', async () => {
+      const db = ctxFor(CADASTRO_ADMIN_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'superintendentes', ACTIVE_EMAIL),
+        superPayload(ACTIVE_EMAIL, { id: 'super-ativo', role: 'admin', escolas: [] })));
+    });
+
+    it('admin cadastrado não rebaixa admin', async () => {
+      const db = ctxFor(CADASTRO_ADMIN_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'superintendentes', ADMIN_EMAIL),
+        superPayload(ADMIN_EMAIL, { id: 'root', role: 'superintendent' })));
+    });
+
+    it('admin cadastrado não edita outro admin', async () => {
+      const db = ctxFor(CADASTRO_ADMIN_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'superintendentes', ADMIN_EMAIL),
+        superPayload(ADMIN_EMAIL, { id: 'root', role: 'admin', escolas: [] })));
+    });
+
+    it('admin cadastrado não exclui usuário', async () => {
+      const db = ctxFor(CADASTRO_ADMIN_EMAIL).firestore();
+      await assertFails(deleteDoc(doc(db, 'superintendentes', ACTIVE_EMAIL)));
+    });
+
+    it('superintendent não cria usuário', async () => {
+      const db = ctxFor(ACTIVE_EMAIL).firestore();
+      await assertFails(setDoc(doc(db, 'superintendentes', 'outro@example.com'),
+        superPayload('outro@example.com')));
+    });
+
+    it('superintendent não edita a si próprio', async () => {
+      const db = ctxFor(ACTIVE_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'superintendentes', ACTIVE_EMAIL),
+        superPayload(ACTIVE_EMAIL, { id: 'super-ativo', escolas: [ESCOLA_A, ESCOLA_B] })));
+    });
+
+    it('usuário inativo não acessa', async () => {
+      await assertFails(getDocs(collection(ctxFor(INACTIVE_EMAIL).firestore(), 'schools')));
+    });
+
+    it('documento com role inválida é rejeitado', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertFails(setDoc(doc(db, 'superintendentes', 'role-invalida@example.com'),
+        superPayload('role-invalida@example.com', { role: 'super-admin' })));
+    });
+
+    it('documento sem ativo é rejeitado', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      const payload = superPayload('sem-ativo2@example.com');
+      delete (payload as any).ativo;
+      await assertFails(setDoc(doc(db, 'superintendentes', 'sem-ativo2@example.com'), payload));
+    });
+
+    it('documento sem role é rejeitado', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      const payload = superPayload('sem-role@example.com');
+      delete (payload as any).role;
+      await assertFails(setDoc(doc(db, 'superintendentes', 'sem-role@example.com'), payload));
+    });
+
+    it('documento com e-mail diferente do ID é rejeitado', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertFails(setDoc(doc(db, 'superintendentes', 'id-correto@example.com'),
+        superPayload('email-diferente@example.com')));
+    });
+
+    it('superintendent sem escola é rejeitado', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertFails(setDoc(doc(db, 'superintendentes', 'sem-escola@example.com'),
+        superPayload('sem-escola@example.com', { role: 'superintendent', escolas: [] })));
+    });
+
+    it('admin com escolas vazias é permitido', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertSucceeds(setDoc(doc(db, 'superintendentes', 'admin-global@example.com'),
+        superPayload('admin-global@example.com', { role: 'admin', escolas: [] })));
+    });
+
+    it('root não pode ser desativado', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'superintendentes', ADMIN_EMAIL),
+        superPayload(ADMIN_EMAIL, { id: 'root', role: 'admin', escolas: [], ativo: false })));
+    });
+
+    it('root não pode ser excluído', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertFails(deleteDoc(doc(db, 'superintendentes', ADMIN_EMAIL)));
     });
   });
 });
