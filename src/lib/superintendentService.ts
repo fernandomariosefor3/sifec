@@ -20,7 +20,7 @@ export * from './superintendentRules';
 // Never written to Firestore automatically (no call site below passes this
 // array to saveSuperintendentToFirestore) and never treated as an
 // authorization source: real access always requires a genuine Firestore
-// document with ativo: true, enforced by firestore.rules.proposed. Once the
+// document with ativo: true, enforced by firestore.rules. Once the
 // admin's real Firestore record syncs in, syncSuperintendentsFromFirestore()
 // replaces this local cache wholesale, so it never persists alongside the
 // real record.
@@ -106,7 +106,7 @@ export async function getCurrentUserSuperRecord(): Promise<Superintendent | null
 // load the full authoritative list — this REPLACES the local cache, so a
 // real Firestore admin record always prevails over DEFAULT_SUPERINTENDENTS
 // and never ends up duplicated alongside it. Non-admins only have
-// Firestore read access to their own document (see firestore.rules.proposed),
+// Firestore read access to their own document (see firestore.rules),
 // so their sync merges just that one record into the local cache.
 export async function syncSuperintendentsFromFirestore(): Promise<void> {
   const user = auth.currentUser;
@@ -131,7 +131,7 @@ export async function syncSuperintendentsFromFirestore(): Promise<void> {
 }
 
 // Save a single superintendent to Firestore (admin only action, enforced by
-// firestore.rules.proposed — this call throws on permission-denied instead
+// firestore.rules — this call throws on permission-denied instead
 // of falling back to a local-only save; callers must not swallow the error).
 export async function saveSuperintendentToFirestore(s: Superintendent): Promise<void> {
   const docId = normalizeEmail(s.email);
@@ -147,7 +147,7 @@ export async function saveSuperintendentToFirestore(s: Superintendent): Promise<
 }
 
 // Delete a superintendent from Firestore by email (root admin only action,
-// enforced by firestore.rules.proposed — the root's own record is rejected
+// enforced by firestore.rules — the root's own record is rejected
 // server-side even if this is called with the root's email).
 export async function deleteSuperintendentFromFirestore(email: string): Promise<void> {
   await deleteDoc(doc(db, 'superintendentes', normalizeEmail(email)));
@@ -172,7 +172,7 @@ export function setActiveSuperintendentId(id: string): void {
 }
 
 // ---- Access control helpers (client-side convenience only — the real
-// authorization boundary is firestore.rules.proposed; these mirror it so
+// authorization boundary is firestore.rules; these mirror it so
 // the UI can hide/disable controls, never to be relied on for security). ----
 
 // True only for the fixed bootstrap/recovery identity (isPlatformAdmin() in rules).

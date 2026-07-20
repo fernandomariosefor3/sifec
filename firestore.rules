@@ -1,8 +1,56 @@
 rules_version = '2';
+
+// ============================================================================
+// REGRAS OFICIAIS DE PRODUÇÃO — publicadas na Fase 1F (promovidas a partir
+// de firestore.rules.proposed, revisado e aprovado nas Fases 0/1C/1D/1E).
+// firestore.rules.proposed foi removido do repositório após a publicação —
+// esta é a única fonte de verdade de regras de segurança do projeto.
+//
+// Problema que estas regras corrigem (versão anterior a Fase 1F): a leitura
+// de schools/turmas/grades/visitas exigia apenas isSignedIn() — qualquer
+// conta Google autenticada, mesmo nunca cadastrada como superintendente,
+// conseguia ler nomes e notas de alunos. As regras de ESCRITA já eram
+// corretamente restritas a superintendentes cadastrados (via
+// myEscolas()/canWriteEscola()) — só a leitura estava aberta demais.
+//
+// Mudança de schema (Fase 0 + Fase 1C):
+//   - superintendentes/{email} ganha os campos OBRIGATÓRIOS `ativo: boolean`
+//     e `role: 'admin' | 'superintendent'` (sem default — create/update
+//     exigem os dois explicitamente).
+//   - FAIL-CLOSED: um documento SEM `ativo`, ou com `ativo: false`, é tratado
+//     como NÃO autorizado. O admin raiz (isPlatformAdmin(), checado só por
+//     e-mail, sem depender do documento) continua com acesso mesmo assim,
+//     mas qualquer OUTRO superintendente cadastrado sem o campo `ativo`
+//     FICARÁ BLOQUEADO até rodar scripts/migrate-ativo-field.mjs.
+//   - HIERARQUIA (Fase 1C): admin raiz > admin cadastrado (role: 'admin',
+//     não-raiz) > superintendente comum (role: 'superintendent'). Admin
+//     cadastrado só cria/edita superintendentes comuns — não pode criar
+//     outro admin, promover ninguém, editar outro admin, nem excluir
+//     ninguém. Só o admin raiz concede/retira role: 'admin' e exclui
+//     usuários; o próprio documento do admin raiz nunca pode ser
+//     desativado, rebaixado ou excluído, nem por ele mesmo.
+//   `src/components/SuperintendentesView.tsx` e `src/lib/superintendentService.ts`
+//   já foram atualizados na Fase 1C para enviar `ativo`/`role` e respeitar
+//   essa hierarquia — ver relatório da Fase 1C para o estado exato.
+//
+// LIMITAÇÃO CONHECIDA (ver auditoria, item "riscos restantes"):
+//   A coleção `grades` não tem campo escolaNome/escolaId no schema atual
+//   (o campo `turma` é um nome de exibição como "3º Ano A - Matutino", que
+//   SE REPETE entre escolas diferentes nos dados de exemplo — não é uma
+//   chave confiável para localizar a escola dona da nota via lookup em
+//   `turmas`). Por isso não é possível aplicar aqui o princípio de menor
+//   privilégio por escola em `grades` sem alterar o formato de dados
+//   (fora do escopo pedido) ou mexer em NotasView.tsx (também fora do
+//   escopo pedido). Como mitigação parcial, `grades` fica restrito a
+//   superintendentes cadastrados e ativos (fecha o buraco de "qualquer
+//   conta Google"), mas não é isolado por escola. Ver recomendação no
+//   relatório para uma fase futura.
+// ============================================================================
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Global deny-all catch-all
+    // Barreira global: nega tudo que não casar com uma regra específica abaixo.
     match /{document=**} {
       allow read, write: if false;
     }
@@ -11,45 +59,152 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Admin is identified by their Google account email
+    function myEmail() {
+      return isSignedIn() && request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : null;
+    }
+
+    // Admin "raiz"/break-glass: identidade explícita, não é checagem de
+    // domínio de e-mail (@seduc.ce.gov.br não é usado como autorização).
+    function isPlatformAdmin() {
+      return isSignedIn() && myEmail() == 'fernandomariodasmartins@gmail.com';
+    }
+
+    function superintendentDoc() {
+      return get(/databases/$(database)/documents/superintendentes/$(myEmail()));
+    }
+
+    function isRegisteredSuperintendent() {
+      return isSignedIn() && myEmail() != null &&
+        exists(/databases/$(database)/documents/superintendentes/$(myEmail()));
+    }
+
+    // FAIL-CLOSED: `ativo` ausente ou false == não autorizado. Só um
+    // documento com `ativo == true` explícito passa. Isso exige rodar a
+    // migração (scripts/migrate-ativo-field.mjs) antes de publicar estas
+    // regras, senão superintendentes existentes ficam bloqueados.
+    function isActiveSuperintendent() {
+      return isRegisteredSuperintendent() &&
+        superintendentDoc().data.get('ativo', false) == true;
+    }
+
+    // Admin = admin raiz OU um superintendente ativo cujo próprio documento
+    // tem role == 'admin'. Como só admins podem escrever na coleção
+    // `superintendentes` (ver match abaixo), ninguém consegue setar esse
+    // campo em si mesmo — a única forma de virar admin é um admin existente
+    // conceder isso explicitamente.
+    // Meu próprio role — só tem sentido quando isRegisteredSuperintendent().
+    function myRole() {
+      return isActiveSuperintendent() ? superintendentDoc().data.get('role', 'superintendent') : null;
+    }
+
+    // "Admin" cobre TANTO o admin raiz (bootstrap/recuperação, identidade
+    // fixa) QUANTO qualquer superintendente ativo cadastrado com
+    // role: 'admin'. Para ações fora da coleção `superintendentes` (schools,
+    // turmas, grades, visitas), os dois têm o mesmo poder. Dentro de
+    // `superintendentes`, o admin cadastrado (não-raiz) tem poderes mais
+    // restritos — ver o match dessa coleção abaixo.
     function isAdmin() {
-      return isSignedIn() && request.auth.token.email == 'fernandomariodasmartins@gmail.com';
+      return isPlatformAdmin() || (isActiveSuperintendent() && myRole() == 'admin');
+    }
+
+    // Verdadeiro só para o e-mail fixo do admin raiz — usado para as
+    // restrições que nem um admin cadastrado pode fazer (excluir usuários,
+    // conceder/retirar role: admin, editar outro admin).
+    function isRootEmailKey(emailKey) {
+      return emailKey == 'fernandomariodasmartins@gmail.com';
+    }
+
+    // "Autorizado" = qualquer superintendente cadastrado e ativo, ou admin.
+    function isAuthorized() {
+      return isActiveSuperintendent() || isAdmin();
+    }
+
+    function myEscolas() {
+      return isActiveSuperintendent() ? superintendentDoc().data.get('escolas', []) : [];
+    }
+
+    function canWriteEscola(escolaNome) {
+      return isAdmin() || (isActiveSuperintendent() && escolaNome in myEscolas());
     }
 
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Documentos de `superintendentes` são identificados por e-mail (contém
+    // "@" e "."), então precisam de um formato de ID diferente de isValidId().
+    function isValidEmailId(id) {
+      return id is string && id.size() <= 150 &&
+        id.matches('^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$');
+    }
+
     function incoming() {
       return request.resource.data;
     }
 
-    // Returns the list of school names assigned to the currently signed-in superintendent.
-    // The superintendentes collection is keyed by email address.
-    function myEscolas() {
-      let email = request.auth.token.email;
-      return email != null &&
-        exists(/databases/$(database)/documents/superintendentes/$(email))
-        ? get(/databases/$(database)/documents/superintendentes/$(email)).data.get('escolas', [])
-        : [];
-    }
-
-    // True if the admin, OR if the school name is in the user's assigned list
-    function canWriteEscola(escolaNome) {
-      return isAdmin() || (isSignedIn() && escolaNome in myEscolas());
-    }
-
     // --- Superintendentes ---
-    // Admin can list/get/write all. Non-admins can only get their own record.
+    // Hierarquia: admin raiz > admin cadastrado > superintendente comum.
+    // Get: o próprio usuário lê seu registro, ou qualquer admin lê qualquer um.
+    // List: qualquer admin (evita enumerar e-mails para não-admins).
+    //
+    // Payload válido, exigido em create/update, para todos os perfis:
+    //  - só os campos id/nome/cargo/email/escolas/ativo/role (rejeita campo
+    //    inesperado);
+    //  - email (minúsculo) == ID do documento (não pode divergir);
+    //  - ativo e role são obrigatórios (sem default) — força quem cria/edita
+    //    a decidir explicitamente, e é o que barra documento incompleto;
+    //  - role só pode ser 'admin' ou 'superintendent';
+    //  - superintendent precisa de pelo menos 1 escola; admin pode ter
+    //    escolas: [] porque tem acesso global (canWriteEscola/isAdmin).
+    function isValidSuperintendentPayload(emailKey) {
+      return incoming().keys().hasOnly(['id', 'nome', 'cargo', 'email', 'escolas', 'ativo', 'role']) &&
+        incoming().id is string &&
+        incoming().nome is string && incoming().nome.size() > 0 && incoming().nome.size() <= 150 &&
+        incoming().cargo is string && incoming().cargo.size() <= 150 &&
+        incoming().email is string && incoming().email.lower() == emailKey &&
+        incoming().escolas is list &&
+        incoming().ativo is bool &&
+        incoming().role in ['admin', 'superintendent'] &&
+        (incoming().role == 'admin' || incoming().escolas.size() >= 1);
+    }
+
     match /superintendentes/{emailKey} {
-      allow get: if isSignedIn() && (isAdmin() || request.auth.token.email == emailKey);
+      allow get: if isSignedIn() && (isAdmin() || myEmail() == emailKey);
       allow list: if isAdmin();
-      allow write: if isAdmin();
+
+      // Create: qualquer admin cria, mas só o admin raiz pode criar outro
+      // admin — admin cadastrado só cria role: 'superintendent'.
+      allow create: if isAdmin() && isValidEmailId(emailKey) && isValidSuperintendentPayload(emailKey) &&
+        (isPlatformAdmin() || incoming().role == 'superintendent');
+
+      // Update:
+      //  - admin raiz pode editar qualquer documento, inclusive outros
+      //    admins e conceder/retirar role: admin — EXCETO o próprio
+      //    documento, que nunca pode ser desativado/rebaixado por essa via
+      //    (proteção contra autoexclusão de acesso, mesmo acidental);
+      //  - admin cadastrado (não-raiz) só edita documentos que já são
+      //    role: 'superintendent' E continuam role: 'superintendent' depois
+      //    — não enxerga/edita outro admin, não promove ninguém, e como o
+      //    próprio documento do admin cadastrado é role: 'admin', ele nunca
+      //    bate nessa condição (não pode editar a si mesmo).
+      allow update: if isAdmin() && isValidEmailId(emailKey) && isValidSuperintendentPayload(emailKey) &&
+        (
+          (isPlatformAdmin() &&
+            (!isRootEmailKey(emailKey) || (incoming().ativo == true && incoming().role == 'admin'))) ||
+          (isAdmin() && !isPlatformAdmin() &&
+            resource.data.role == 'superintendent' && incoming().role == 'superintendent')
+        );
+
+      // Delete: só o admin raiz, e nunca o próprio documento do admin raiz —
+      // admin cadastrado e superintendente comum não excluem ninguém.
+      allow delete: if isPlatformAdmin() && isValidEmailId(emailKey) && !isRootEmailKey(emailKey);
     }
 
     // --- Schools ---
     match /schools/{schoolId} {
-      allow read: if isSignedIn();
+      allow read: if isAuthorized();
       allow create: if isAdmin() && isValidId(schoolId) &&
         incoming().nome is string && incoming().nome.size() <= 150 &&
         incoming().codInep is string && incoming().codInep.size() <= 50 &&
@@ -58,7 +213,7 @@ service cloud.firestore {
         incoming().idebMedio is number &&
         incoming().metaIdeb is number &&
         incoming().status is string;
-      allow update: if isSignedIn() && isValidId(schoolId) &&
+      allow update: if isAuthorized() && isValidId(schoolId) &&
         canWriteEscola(resource.data.nome) &&
         incoming().nome is string && incoming().nome.size() <= 150 &&
         incoming().codInep is string && incoming().codInep.size() <= 50 &&
@@ -67,13 +222,14 @@ service cloud.firestore {
         incoming().idebMedio is number &&
         incoming().metaIdeb is number &&
         incoming().status is string;
-      allow delete: if isAdmin() && isValidId(schoolId);
+      // Dado histórico/cadastral — sem exclusão livre, só admin raiz.
+      allow delete: if isPlatformAdmin() && isValidId(schoolId);
     }
 
     // --- Turmas ---
     match /turmas/{turmaId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidId(turmaId) &&
+      allow read: if isAuthorized();
+      allow create, update: if isAuthorized() && isValidId(turmaId) &&
         canWriteEscola(incoming().escolaNome) &&
         incoming().escolaId is string && incoming().escolaId.size() <= 128 &&
         incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
@@ -81,34 +237,38 @@ service cloud.firestore {
         incoming().ano is string && incoming().ano.size() <= 20 &&
         incoming().periodo is string && incoming().periodo.size() <= 50 &&
         incoming().alunosSinalizados is number;
-      allow delete: if isSignedIn() && isValidId(turmaId) &&
+      allow delete: if isAuthorized() && isValidId(turmaId) &&
         canWriteEscola(resource.data.escolaNome);
     }
 
-    // --- Grades (no school reference in schema — allow any signed-in user) ---
+    // --- Grades (Opção C — mitigação temporária, ver Fase 0) ---
+    // grades ainda não tem schoolId; isolamento por escola fica para uma
+    // migração posterior (docs/plano-migracao-grades-schoolId.md). Até lá,
+    // isAuthorized() (superintendente ativo ou admin) é a mitigação — evita
+    // leitura/escrita por conta não cadastrada, mas não isola por escola.
     match /grades/{gradeId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidId(gradeId) &&
+      allow read: if isAuthorized();
+      allow create, update: if isAuthorized() && isValidId(gradeId) &&
         incoming().nome is string && incoming().nome.size() <= 150 &&
         incoming().turma is string && incoming().turma.size() <= 100 &&
         incoming().portugues is number &&
         incoming().matematica is number &&
         incoming().ciencias is number &&
         incoming().bimestre is string;
-      allow delete: if isSignedIn() && isValidId(gradeId);
+      allow delete: if isAdmin() && isValidId(gradeId);
     }
 
     // --- Visitas ---
     match /visitas/{visitaId} {
-      allow read: if isSignedIn();
-      allow create, update: if isSignedIn() && isValidId(visitaId) &&
+      allow read: if isAuthorized();
+      allow create, update: if isAuthorized() && isValidId(visitaId) &&
         canWriteEscola(incoming().escola) &&
         incoming().escola is string && incoming().escola.size() <= 150 &&
         incoming().tecnico is string && incoming().tecnico.size() <= 150 &&
         incoming().data is string && incoming().data.size() <= 30 &&
         incoming().foco is string && incoming().foco.size() <= 200 &&
         incoming().status is string;
-      allow delete: if isSignedIn() && isValidId(visitaId) &&
+      allow delete: if isAuthorized() && isValidId(visitaId) &&
         canWriteEscola(resource.data.escola);
     }
   }

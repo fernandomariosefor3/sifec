@@ -1,7 +1,7 @@
 // Lógica pura de normalização, validação e permissão do cadastro de
 // superintendentes — sem nenhum import do Firebase, para poder ser testada
 // isoladamente (unit tests não precisam inicializar o app/Firestore).
-// A fonte real de verdade de segurança é firestore.rules.proposed; o que
+// A fonte real de verdade de segurança é firestore.rules; o que
 // está aqui é só a camada de conveniência da UI (esconder/desabilitar
 // controles antes mesmo de tentar a chamada ao Firestore).
 
@@ -18,8 +18,8 @@ export interface Superintendent {
 }
 
 // Root/bootstrap admin — identity kept fixed so there's always a recovery
-// path into the platform, mirrored in firestore.rules.proposed's
-// isPlatformAdmin(). Other admins are ordinary Firestore records with
+// path into the platform, mirrored in isPlatformAdmin() in firestore.rules.
+// Other admins are ordinary Firestore records with
 // role: 'admin', granted only by an existing admin.
 export const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
 
@@ -32,7 +32,7 @@ export function isValidEmailFormat(email: string): boolean {
 }
 
 // True only for the fixed bootstrap/recovery identity — mirrors
-// isPlatformAdmin() in firestore.rules.proposed.
+// isPlatformAdmin() in firestore.rules.
 export function isRootAdminEmail(email: string | null | undefined): boolean {
   return !!email && normalizeEmail(email) === ADMIN_EMAIL.toLowerCase();
 }
@@ -125,7 +125,7 @@ export function buildSuperintendentPayload(
 
 // Would this write leave the root admin's own record deactivated, demoted,
 // or otherwise tampered with? Mirrors the root-protection branch of
-// firestore.rules.proposed so the UI can disable the controls before the
+// firestore.rules so the UI can disable the controls before the
 // request ever reaches Firestore.
 export function isRootProtectedEdit(targetEmail: string, incoming: { ativo: boolean; role: SuperintendentRole }): boolean {
   return normalizeEmail(targetEmail) === ADMIN_EMAIL.toLowerCase() &&

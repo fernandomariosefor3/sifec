@@ -1,7 +1,7 @@
-// Testes das Firestore Security Rules propostas (firestore.rules.proposed)
-// usando o Firebase Emulator. Roda 100% local — nunca toca dados de
-// produção. Nenhum nome ou nota de estudante real é usado; todos os dados
-// abaixo são sintéticos, criados só para este teste.
+// Testes das Firestore Security Rules oficiais (firestore.rules) usando o
+// Firebase Emulator. Roda 100% local — nunca toca dados de produção. Nenhum
+// nome ou nota de estudante real é usado; todos os dados abaixo são
+// sintéticos, criados só para este teste.
 import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
 import {
   assertFails,
@@ -36,7 +36,7 @@ beforeAll(async () => {
   testEnv = await initializeTestEnvironment({
     projectId: 'sifec-rules-test',
     firestore: {
-      rules: readFileSync('firestore.rules.proposed', 'utf8'),
+      rules: readFileSync('firestore.rules', 'utf8'),
       host: '127.0.0.1',
       port: 8090,
     },

@@ -6,10 +6,10 @@
 // além disso. Não cria superintendentes novos, não altera `role`, não
 // altera `escolas`, não toca em nome/cargo/email.
 //
-// Por que isso existe: firestore.rules.proposed passou a tratar `ativo`
-// como fail-closed (ausente ou false == bloqueado). Sem rodar isto antes de
-// publicar aquelas regras, qualquer superintendente que não seja o admin
-// raiz perde acesso.
+// Por que isso existe: firestore.rules (publicado na Fase 1F) trata `ativo`
+// como fail-closed (ausente ou false == bloqueado). Qualquer superintendente
+// cadastrado sem esse campo, que não seja o admin raiz, perde acesso —
+// rode esta migração para corrigir documentos legados que ainda não o têm.
 //
 // Segurança:
 // - Nenhuma credencial no código. Usa Application Default Credentials do
