@@ -159,3 +159,34 @@ export function canDeleteTarget(actingUserIsRoot: boolean, targetEmail: string):
   if (!actingUserIsRoot) return false;
   return normalizeEmail(targetEmail) !== ADMIN_EMAIL.toLowerCase();
 }
+
+// ---- School visibility/write access (hotfix: admin global access) ----
+// Mirrors isAdmin()/canWriteEscola() in firestore.rules: an active admin
+// (role: 'admin', ativo: true) has access to every school regardless of
+// what — if anything — is in their own `escolas` list. `escolas: []` on an
+// admin record means "acesso global", never "nenhuma escola".
+//
+// isAuthenticated must be false for the pre-login/demo state (no real
+// Firebase user signed in) so DEFAULT_SUPERINTENDENTS — a local-only demo
+// record that also happens to carry role: 'admin' — keeps showing only its
+// own seeded school list instead of being treated as a real global admin.
+// A genuinely authenticated admin always passes isAuthenticated: true.
+export function superintendentCanAccessSchool(
+  schoolName: string,
+  record: Pick<Superintendent, 'ativo' | 'role' | 'escolas'> | null | undefined,
+  isAuthenticated: boolean
+): boolean {
+  if (!record || record.ativo !== true) return false;
+  if (isAuthenticated && record.role === 'admin') return true;
+  return record.escolas.includes(schoolName);
+}
+
+export function filterSchoolsForSuperintendent<T extends { nome: string }>(
+  schools: T[],
+  record: Pick<Superintendent, 'ativo' | 'role' | 'escolas'> | null | undefined,
+  isAuthenticated: boolean
+): T[] {
+  if (!record || record.ativo !== true) return [];
+  if (isAuthenticated && record.role === 'admin') return schools;
+  return schools.filter(s => record.escolas.includes(s.nome));
+}

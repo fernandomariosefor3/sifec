@@ -10,11 +10,13 @@ import {
   canEditTarget,
   canGrantAdminRole,
   defaultSuperintendentFormInput,
+  filterSchoolsForSuperintendent,
   isRootAdminEmail,
   isRootProtectedEdit,
   isValidEmailFormat,
   normalizeEmail,
   normalizeLegacyRecord,
+  superintendentCanAccessSchool,
   validateSuperintendentInput,
   type Superintendent,
   type SuperintendentFormInput,
@@ -193,5 +195,70 @@ describe('permissões do administrador raiz', () => {
   it('pode excluir qualquer um, exceto a si mesmo', () => {
     expect(canDeleteTarget(true, 'alguem@example.com')).toBe(true);
     expect(canDeleteTarget(true, ADMIN_EMAIL)).toBe(false);
+  });
+});
+
+describe('superintendentCanAccessSchool / filterSchoolsForSuperintendent (hotfix acesso global do admin)', () => {
+  const ESCOLA_X = 'Escola X (Teste)';
+  const ESCOLA_Y = 'Escola Y (Teste)';
+  const TODAS_ESCOLAS = [{ nome: ESCOLA_X }, { nome: ESCOLA_Y }, { nome: 'Escola Z (Teste)' }];
+
+  it('admin ativo com escolas: [] visualiza qualquer escola', () => {
+    const admin = { ativo: true, role: 'admin' as const, escolas: [] };
+    expect(superintendentCanAccessSchool(ESCOLA_X, admin, true)).toBe(true);
+    expect(superintendentCanAccessSchool('Qualquer Outra Escola', admin, true)).toBe(true);
+  });
+
+  it('admin ativo com uma lista parcial ainda visualiza qualquer escola', () => {
+    const admin = { ativo: true, role: 'admin' as const, escolas: [ESCOLA_X] };
+    expect(superintendentCanAccessSchool(ESCOLA_Y, admin, true)).toBe(true);
+  });
+
+  it('admin inativo não recebe acesso', () => {
+    const admin = { ativo: false, role: 'admin' as const, escolas: [] };
+    expect(superintendentCanAccessSchool(ESCOLA_X, admin, true)).toBe(false);
+  });
+
+  it('superintendent ativo vê escola vinculada', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [ESCOLA_X] };
+    expect(superintendentCanAccessSchool(ESCOLA_X, sup, true)).toBe(true);
+  });
+
+  it('superintendent ativo não vê escola não vinculada', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [ESCOLA_X] };
+    expect(superintendentCanAccessSchool(ESCOLA_Y, sup, true)).toBe(false);
+  });
+
+  it('superintendent com escolas: [] não vê escolas (cadastro inválido)', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [] };
+    expect(superintendentCanAccessSchool(ESCOLA_X, sup, true)).toBe(false);
+  });
+
+  it('registro ausente (null/undefined) não recebe acesso', () => {
+    expect(superintendentCanAccessSchool(ESCOLA_X, null, true)).toBe(false);
+    expect(superintendentCanAccessSchool(ESCOLA_X, undefined, true)).toBe(false);
+  });
+
+  it('filtro para admin autenticado retorna todas as escolas, mesmo com lista parcial', () => {
+    const admin = { ativo: true, role: 'admin' as const, escolas: [ESCOLA_X] };
+    expect(filterSchoolsForSuperintendent(TODAS_ESCOLAS, admin, true)).toEqual(TODAS_ESCOLAS);
+  });
+
+  it('filtro para superintendent retorna somente as vinculadas', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [ESCOLA_X] };
+    expect(filterSchoolsForSuperintendent(TODAS_ESCOLAS, sup, true)).toEqual([{ nome: ESCOLA_X }]);
+  });
+
+  it('modo demonstração (não autenticado) preserva o comportamento existente — admin demo só vê sua própria lista', () => {
+    // Registro de demonstração (DEFAULT_SUPERINTENDENTS) também é role: 'admin',
+    // mas sem autenticação real não deve ganhar acesso global — só o que já
+    // está listado em escolas, exatamente como antes deste hotfix.
+    const adminDemo = { ativo: true, role: 'admin' as const, escolas: [ESCOLA_X, ESCOLA_Y] };
+    expect(superintendentCanAccessSchool(ESCOLA_X, adminDemo, false)).toBe(true);
+    expect(superintendentCanAccessSchool('Escola Z (Teste)', adminDemo, false)).toBe(false);
+    expect(filterSchoolsForSuperintendent(TODAS_ESCOLAS, adminDemo, false)).toEqual([
+      { nome: ESCOLA_X },
+      { nome: ESCOLA_Y },
+    ]);
   });
 });
