@@ -9,6 +9,8 @@ import {
   normalizeEmail,
   normalizeLegacyRecord,
   isRootAdminEmail,
+  superintendentCanAccessSchool,
+  filterSchoolsForSuperintendent,
 } from './superintendentRules';
 
 // Re-export the pure, Firebase-free layer (types, normalization,
@@ -190,20 +192,21 @@ export function isCurrentUserAdmin(): boolean {
   return !!mine && mine.ativo === true && mine.role === 'admin';
 }
 
+// isAuthenticated gates the role: 'admin' global-access shortcut so the
+// pre-login demo record (DEFAULT_SUPERINTENDENTS, also role: 'admin') keeps
+// showing only its own seeded school list — see superintendentRules.ts.
 export function isSchoolVisible(schoolName: string): boolean {
   const activeId = getActiveSuperintendentId();
   const superintendents = getSuperintendents();
   const active = superintendents.find(s => s.id === activeId);
-  if (!active) return false;
-  return active.escolas.includes(schoolName);
+  return superintendentCanAccessSchool(schoolName, active, !!auth.currentUser);
 }
 
 export function filterSchoolsByActiveSuperintendent<T extends { nome: string }>(schools: T[]): T[] {
   const activeId = getActiveSuperintendentId();
   const superintendents = getSuperintendents();
   const active = superintendents.find(s => s.id === activeId);
-  if (!active) return [];
-  return schools.filter(s => active.escolas.includes(s.nome));
+  return filterSchoolsForSuperintendent(schools, active, !!auth.currentUser);
 }
 
 // Returns true if the currently signed-in user can write to this school.
@@ -212,9 +215,7 @@ export function hasSchoolWriteAccess(schoolName: string): boolean {
   if (!user?.email) return false;
   if (isRootAdmin()) return true;
   const myRecord = getSuperintendents().find(s => s.email?.toLowerCase() === user.email!.toLowerCase());
-  if (!myRecord || myRecord.ativo === false) return false;
-  if (myRecord.role === 'admin') return true;
-  return myRecord.escolas.includes(schoolName);
+  return superintendentCanAccessSchool(schoolName, myRecord, true);
 }
 
 export function addSchoolToLoggedInSuperintendent(schoolName: string): boolean {
