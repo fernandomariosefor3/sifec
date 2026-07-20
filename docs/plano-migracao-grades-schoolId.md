@@ -58,9 +58,9 @@ fora deste clone).
       abordagens.
     - `src/lib/firebaseService.ts` — sem mudança de lógica, só o shape do
       `SEED_GRADES`.
-    - `firestore.rules` / `firestore.rules.proposed` — passariam a poder
-      usar `canWriteEscola(incoming().schoolId)` em vez de liberar `grades`
-      pra qualquer superintendente autorizado.
+    - `firestore.rules` — passaria a poder usar
+      `canWriteEscola(incoming().schoolId)` em vez de liberar `grades` pra
+      qualquer superintendente autorizado.
 
 ## 2. Plano de migração proposto (não implementado)
 
@@ -91,7 +91,7 @@ fora deste clone).
    `NotasView.tsx` e `ExtraViews.tsx` passam a comparar `g.schoolId` em vez
    de `matchedClass.escolaNome`/substring hardcoded — elimina a ambiguidade
    e unifica as duas lógicas divergentes.
-6. **Atualização das regras** — `firestore.rules.proposed` troca a seção
+6. **Atualização das regras** — `firestore.rules` troca a seção
    `grades` de "qualquer superintendente autorizado" para
    `canWriteEscola(incoming().schoolId)`, replicando o padrão já usado em
    `schools`/`turmas`/`visitas`.
@@ -119,7 +119,7 @@ explícita para uma fase futura.
 
 - **Opção escolhida:** C — `grades` permanece com leitura e escrita
   liberadas para qualquer superintendente cadastrado e ativo (`isAuthorized()`
-  em `firestore.rules.proposed`), sem isolamento por escola.
+  em `firestore.rules`), sem isolamento por escola.
 - **Motivo:** não interromper o fluxo de lançamento de notas em
   `NotasView.tsx` nesta fase — nenhuma tela foi alterada.
 - **Risco aceito temporariamente:** um superintendente ativo pode ler e
@@ -129,5 +129,7 @@ explícita para uma fase futura.
   (inclusão e migração de `schoolId`, depois trocar `isAuthorized()` por
   `canWriteEscola(incoming().schoolId)` em `grades`).
 - **Prioridade da migração:** alta.
-- **Nenhuma alteração foi feita no schema ou no frontend nesta fase** — só
-  em `firestore.rules.proposed` (ainda não publicado) e neste documento.
+- **Nenhuma alteração foi feita no schema ou no frontend na Fase 0** — só
+  em `firestore.rules.proposed` (na época, ainda não publicado) e neste
+  documento. As regras da Fase 0/1C foram posteriormente promovidas a
+  `firestore.rules` na Fase 1F — a Opção C em si permanece inalterada.
