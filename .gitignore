@@ -6,3 +6,26 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# --- Segredos e chaves locais (nunca commitar) ---
+openai.txt
+*openai*key*
+*openai*secret*
+sk-proj-*
+service-account*.json
+firebase-adminsdk*.json
+credentials*.json
+*.pem
+.mcp.json
+
+# --- Backups e exports do Firestore (podem conter dados de alunos/escolas) ---
+/backups/
+**/backups/
+*.firestore-export/
+*-firestore-export/
+grades.json
+turmas.json
+visitas.json
+visits.json
+schools.json
+_manifest.json

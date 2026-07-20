@@ -43,6 +43,12 @@ import { SEED_SCHOOLS } from './lib/firebaseService';
 
 type TabType = 'escolas' | 'fluxo' | 'notas' | 'cdg' | 'busca' | 'recomposicao' | 'ppdt' | 'superintendentes';
 
+// Painel técnico (DevPanel) só existe em build de desenvolvimento.
+// import.meta.env.DEV é substituído por uma constante em tempo de build pelo
+// Vite (false em produção), então o bundler elimina esse código morto — o
+// DevPanel não é só escondido, ele não vai para o bundle de produção.
+const isDevBuild = import.meta.env.DEV;
+
 export default function App() {
   const [activeTab, setActiveTab] = React.useState<TabType>('escolas');
   const [isDevOpen, setIsDevOpen] = useState(false);
@@ -471,21 +477,23 @@ export default function App() {
           </p>
         </div>
 
-        {/* Floating hidden technical button: keeps advanced developer specs accessible but NOT exposed on main page */}
+        {/* Floating hidden technical button: dev-only, not shipped in production build */}
         <div className="flex flex-col sm:flex-row items-center gap-4">
-          <button
-            onClick={() => setIsDevOpen(true)}
-            className="px-4 py-2 bg-slate-100 border border-slate-200 hover:border-slate-300 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm"
-          >
-            <Settings size={13} /> Painel Técnico de Infraestrutura
-          </button>
+          {isDevBuild && (
+            <button
+              onClick={() => setIsDevOpen(true)}
+              className="px-4 py-2 bg-slate-100 border border-slate-200 hover:border-slate-300 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1.5 shadow-sm"
+            >
+              <Settings size={13} /> Painel Técnico de Infraestrutura
+            </button>
+          )}
           <span className="text-[10px] text-slate-400 font-mono font-bold tracking-wider">SUPPORT CADASTRE: crede-03</span>
         </div>
       </footer>
 
-      {/* Simulated DevPanel Modal Workspace */}
+      {/* Simulated DevPanel Modal Workspace — dev-only, not shipped in production build */}
       <AnimatePresence>
-        {isDevOpen && (
+        {isDevBuild && isDevOpen && (
           <div className="fixed inset-0 z-[9999] bg-slate-950/80 backdrop-blur-md flex justify-end">
             <motion.div
               initial={{ x: '100%' }}

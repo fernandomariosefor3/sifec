@@ -1,4 +1,5 @@
 import { initializeApp } from 'firebase/app';
+import { initializeAppCheck, ReCaptchaV3Provider } from 'firebase/app-check';
 import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/auth';
 import { getFirestore, collection, getDocs, doc, setDoc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
@@ -8,6 +9,26 @@ const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// --- App Check (Fase 0 — etapa 1: monitoramento, sem enforcement) ---------
+// Fica inativo até que VITE_RECAPTCHA_SITE_KEY seja configurado (não
+// inventamos uma chave aqui). Depois de registrar o app em App Check no
+// Firebase Console e definir essa env var, os tokens passam a ser anexados
+// às chamadas do Firestore automaticamente. Isso sozinho NÃO bloqueia
+// nenhum tráfego: o bloqueio (enforcement) é uma configuração separada,
+// feita manualmente no Firebase Console por coleção/serviço, e só deve ser
+// ativada depois de observar as métricas de App Check por um tempo e
+// confirmar que usuários legítimos não estão sendo marcados como inválidos.
+// Em desenvolvimento local, defina self.FIREBASE_APPCHECK_DEBUG_TOKEN antes
+// de chamar initializeAppCheck (ver README/Firebase Console para o token de
+// depuração) para não precisar resolver reCAPTCHA a cada reload.
+const recaptchaSiteKey = import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined;
+if (recaptchaSiteKey) {
+  initializeAppCheck(app, {
+    provider: new ReCaptchaV3Provider(recaptchaSiteKey),
+    isTokenAutoRefreshEnabled: true,
+  });
+}
 
 export enum OperationType {
   CREATE = 'create',
