@@ -11,6 +11,8 @@ import {
   canGrantAdminRole,
   defaultSuperintendentFormInput,
   filterSchoolsForSuperintendent,
+  getAccessibleSchoolCount,
+  getAccessibleSchoolLabel,
   isRootAdminEmail,
   isRootProtectedEdit,
   isValidEmailFormat,
@@ -260,5 +262,52 @@ describe('superintendentCanAccessSchool / filterSchoolsForSuperintendent (hotfix
       { nome: ESCOLA_X },
       { nome: ESCOLA_Y },
     ]);
+  });
+});
+
+describe('getAccessibleSchoolCount / getAccessibleSchoolLabel (hotfix contagem global do admin)', () => {
+  const NOMES_56 = Array.from({ length: 56 }, (_, i) => `Escola ${i + 1} (Teste)`);
+
+  it('admin autenticado com escolas: [] e allSchools com 56 → contador 56', () => {
+    const admin = { ativo: true, role: 'admin' as const, escolas: [] };
+    expect(getAccessibleSchoolCount({ superintendent: admin, allSchoolNames: NOMES_56, isAuthenticated: true })).toBe(56);
+  });
+
+  it('admin autenticado com escolas: [] → rótulo Acesso global', () => {
+    const admin = { ativo: true, role: 'admin' as const, escolas: [] };
+    expect(getAccessibleSchoolLabel({ superintendent: admin, allSchoolNames: NOMES_56, isAuthenticated: true })).toBe('Acesso global');
+  });
+
+  it('admin autenticado com lista parcial também recebe o total (não a lista parcial)', () => {
+    const admin = { ativo: true, role: 'admin' as const, escolas: ['Escola 1 (Teste)'] };
+    expect(getAccessibleSchoolCount({ superintendent: admin, allSchoolNames: NOMES_56, isAuthenticated: true })).toBe(56);
+  });
+
+  it('superintendent com 2 escolas → contador 2', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: ['Escola 1 (Teste)', 'Escola 2 (Teste)'] };
+    expect(getAccessibleSchoolCount({ superintendent: sup, allSchoolNames: NOMES_56, isAuthenticated: true })).toBe(2);
+    expect(getAccessibleSchoolLabel({ superintendent: sup, allSchoolNames: NOMES_56, isAuthenticated: true })).toBe('2 Esc.');
+  });
+
+  it('superintendent não recebe escola não vinculada (nome inválido não conta)', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: ['Escola 1 (Teste)', 'Escola Inexistente'] };
+    expect(getAccessibleSchoolCount({ superintendent: sup, allSchoolNames: NOMES_56, isAuthenticated: true })).toBe(1);
+  });
+
+  it('usuário inativo → contador 0', () => {
+    const inativo = { ativo: false, role: 'admin' as const, escolas: [] };
+    expect(getAccessibleSchoolCount({ superintendent: inativo, allSchoolNames: NOMES_56, isAuthenticated: true })).toBe(0);
+  });
+
+  it('modo demonstração (não autenticado) mantém as 7 escolas do registro demo', () => {
+    const adminDemo = { ativo: true, role: 'admin' as const, escolas: Array.from({ length: 7 }, (_, i) => `Escola ${i + 1} (Teste)`) };
+    expect(getAccessibleSchoolCount({ superintendent: adminDemo, allSchoolNames: NOMES_56, isAuthenticated: false })).toBe(7);
+    expect(getAccessibleSchoolLabel({ superintendent: adminDemo, allSchoolNames: NOMES_56, isAuthenticated: false })).toBe('7 Esc.');
+  });
+
+  it('array allSchools vazio não é confundido com acesso negado — admin ainda recebe 0, não um erro', () => {
+    const admin = { ativo: true, role: 'admin' as const, escolas: [] };
+    expect(getAccessibleSchoolCount({ superintendent: admin, allSchoolNames: [], isAuthenticated: true })).toBe(0);
+    expect(getAccessibleSchoolLabel({ superintendent: admin, allSchoolNames: [], isAuthenticated: true })).toBe('Acesso global');
   });
 });

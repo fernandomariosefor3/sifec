@@ -190,3 +190,36 @@ export function filterSchoolsForSuperintendent<T extends { nome: string }>(
   if (isAuthenticated && record.role === 'admin') return schools;
   return schools.filter(s => record.escolas.includes(s.nome));
 }
+
+export interface AccessibleSchoolCountInput {
+  superintendent: Pick<Superintendent, 'ativo' | 'role' | 'escolas'> | null | undefined;
+  allSchoolNames: string[];
+  isAuthenticated: boolean;
+}
+
+// How many schools does this record effectively have access to? An
+// authenticated, active admin always counts the FULL universe
+// (allSchoolNames.length) — escolas: [] never means zero for an admin, it
+// means "acesso global". A superintendent (or the pre-login demo record,
+// isAuthenticated: false) is counted only by the subset of their own
+// escolas that actually match a real school name — stale/renamed entries
+// don't inflate the count. An empty allSchoolNames simply yields 0 (nothing
+// loaded yet), never mistaken for access being denied.
+export function getAccessibleSchoolCount({
+  superintendent,
+  allSchoolNames,
+  isAuthenticated,
+}: AccessibleSchoolCountInput): number {
+  if (!superintendent || superintendent.ativo !== true) return 0;
+  if (isAuthenticated && superintendent.role === 'admin') return allSchoolNames.length;
+  return superintendent.escolas.filter(nome => allSchoolNames.includes(nome)).length;
+}
+
+// Short display label for the workspace selector / header badges.
+export function getAccessibleSchoolLabel(input: AccessibleSchoolCountInput): string {
+  const { superintendent, isAuthenticated } = input;
+  if (isAuthenticated && superintendent?.ativo === true && superintendent.role === 'admin') {
+    return 'Acesso global';
+  }
+  return `${getAccessibleSchoolCount(input)} Esc.`;
+}
