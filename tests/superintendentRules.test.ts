@@ -13,6 +13,8 @@ import {
   filterSchoolsForSuperintendent,
   getAccessibleSchoolCount,
   getAccessibleSchoolLabel,
+  getWatchedSchoolCount,
+  getWatchedSchools,
   isRootAdminEmail,
   isRootProtectedEdit,
   isValidEmailFormat,
@@ -309,5 +311,89 @@ describe('getAccessibleSchoolCount / getAccessibleSchoolLabel (hotfix contagem g
     const admin = { ativo: true, role: 'admin' as const, escolas: [] };
     expect(getAccessibleSchoolCount({ superintendent: admin, allSchoolNames: [], isAuthenticated: true })).toBe(0);
     expect(getAccessibleSchoolLabel({ superintendent: admin, allSchoolNames: [], isAuthenticated: true })).toBe('Acesso global');
+  });
+});
+
+// Fase 1G — restauração da carteira das sete escolas: o pareamento por
+// nome deixa de exigir igualdade exata (era a causa raiz do incidente:
+// documentos reais de `schools` com caixa/espaço/acento divergentes do que
+// está gravado em `escolas`).
+describe('Fase 1G — pareamento tolerante a caixa/espaço/acento', () => {
+  const ESCOLA_CANONICA = 'EEMTI Anísio Teixeira';
+  const ESCOLA_REAL_DIVERGENTE = 'EEMTI ANISIO TEIXEIRA '; // caixa alta + espaço final + sem acento
+
+  it('superintendente comum acessa a escola mesmo com grafia divergente na lista escolas', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [ESCOLA_CANONICA] };
+    expect(superintendentCanAccessSchool(ESCOLA_REAL_DIVERGENTE, sup, true)).toBe(true);
+  });
+
+  it('filterSchoolsForSuperintendent reconhece a escola real divergente para um superintendente comum', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [ESCOLA_CANONICA] };
+    const todasEscolas = [{ nome: ESCOLA_REAL_DIVERGENTE }, { nome: 'Outra Escola Qualquer' }];
+    expect(filterSchoolsForSuperintendent(todasEscolas, sup, true)).toEqual([{ nome: ESCOLA_REAL_DIVERGENTE }]);
+  });
+
+  it('superintendente comum continua restrito a escolas fora da sua lista, mesmo normalizando', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [ESCOLA_CANONICA] };
+    expect(superintendentCanAccessSchool('EEMTI Estado do Amazonas', sup, true)).toBe(false);
+  });
+
+  it('getAccessibleSchoolCount de um superintendente comum não subconta por causa de divergência de grafia', () => {
+    const sup = { ativo: true, role: 'superintendent' as const, escolas: [ESCOLA_CANONICA] };
+    expect(getAccessibleSchoolCount({ superintendent: sup, allSchoolNames: [ESCOLA_REAL_DIVERGENTE], isAuthenticated: true })).toBe(1);
+  });
+});
+
+// Fase 1G — "carteira acompanhada" (getWatchedSchools/getWatchedSchoolCount):
+// distinta de acesso. O admin mantém acesso global (role) e, em paralelo,
+// tem uma carteira de 7 escolas curadas (escolas[]) — um número nunca
+// substitui o outro.
+describe('Fase 1G — carteira acompanhada do admin (getWatchedSchools/getWatchedSchoolCount)', () => {
+  const SETE_NOMES_CANONICOS = [
+    'EEM Diva Cabral',
+    'EEM Figueiredo Correia',
+    'EEM José Leopoldino da Silva',
+    'EEM São Francisco Canindezinho',
+    'EEMTI Anísio Teixeira',
+    'EEMTI Estado do Amazonas',
+    'EEMTI Senador Osires Pontes',
+  ];
+  // Escolas reais como estão hoje em produção: 6 delas com grafia divergente.
+  const CANDIDATAS_REAIS = [
+    { nome: 'EEM Diva Cabral' },
+    { nome: 'EEM FIGUEIREDO CORREIA ' },
+    { nome: 'EEM JOSÉ LEOPOLDINO DA SILVA ' },
+    { nome: 'EEM SÃO FRANCISCO CANINDEZINHO ' },
+    { nome: 'EEMTI ANISIO TEIXEIRA ' },
+    { nome: 'EEMTI ESTADO DO AMAZONAS ' },
+    { nome: 'EEMTI SENADOR OSIRES PONTES ' },
+    { nome: 'Outra Escola Qualquer, fora da carteira' },
+  ];
+  const ADMIN_COM_CARTEIRA = { ativo: true, role: 'admin' as const, escolas: SETE_NOMES_CANONICOS };
+
+  it('sete códigos INEP resolvem para sete escolas — getWatchedSchools retorna exatamente as 7, não as 8 candidatas', () => {
+    const acompanhadas = getWatchedSchools(CANDIDATAS_REAIS, ADMIN_COM_CARTEIRA);
+    expect(acompanhadas).toHaveLength(7);
+    expect(acompanhadas.map(s => s.nome)).not.toContain('Outra Escola Qualquer, fora da carteira');
+  });
+
+  it('painel mostra 7 acompanhadas e, separadamente, Acesso global — os dois nunca se substituem', () => {
+    const allSchoolNames = CANDIDATAS_REAIS.map(s => s.nome);
+    const acompanhadasCount = getWatchedSchoolCount({ superintendent: ADMIN_COM_CARTEIRA, allSchoolNames, isAuthenticated: true });
+    const acesso = getAccessibleSchoolLabel({ superintendent: ADMIN_COM_CARTEIRA, allSchoolNames, isAuthenticated: true });
+    expect(acompanhadasCount).toBe(7);
+    expect(acesso).toBe('Acesso global');
+  });
+
+  it('administrador mantém acesso global mesmo com a carteira de 7 populada (escolas não é a permissão máxima)', () => {
+    const allSchoolNames = CANDIDATAS_REAIS.map(s => s.nome);
+    expect(getAccessibleSchoolCount({ superintendent: ADMIN_COM_CARTEIRA, allSchoolNames, isAuthenticated: true })).toBe(allSchoolNames.length);
+    expect(filterSchoolsForSuperintendent(CANDIDATAS_REAIS, ADMIN_COM_CARTEIRA, true)).toEqual(CANDIDATAS_REAIS);
+  });
+
+  it('administrador possui carteira de exatamente sete escolas, sem duplicidade', () => {
+    const acompanhadas = getWatchedSchools(CANDIDATAS_REAIS, ADMIN_COM_CARTEIRA);
+    const nomesUnicos = new Set(acompanhadas.map(s => s.nome));
+    expect(nomesUnicos.size).toBe(7);
   });
 });

@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { subscribeToCollection, updateDocument, addDocument, deleteDocument, SEED_SCHOOLS } from '../lib/firebaseService';
-import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, getSuperintendents, setActiveSuperintendentId } from '../lib/superintendentService';
+import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, getSuperintendents, setActiveSuperintendentId, schoolNamesMatch } from '../lib/superintendentService';
 
 interface CdgAction {
   id: string; // `cdg-${escola}-${fase}-${id}`
@@ -373,17 +373,17 @@ export default function CdgView() {
 
   // Return actions filtered by school, phase, and optionally bimestre
   const getCellActions = (schoolName: string, phaseName: CdgAction['fase']) => {
-    return actions.filter(a => 
-      a.escola === schoolName && 
-      a.fase === phaseName && 
+    return actions.filter(a =>
+      schoolNamesMatch(a.escola, schoolName) &&
+      a.fase === phaseName &&
       (filterBimestre === 'Todos' || !a.bimestre || a.bimestre === filterBimestre)
     );
   };
 
   // Calculate completion statistics for rows
   const getSchoolCompletionStats = (schoolName: string) => {
-    const schoolActs = actions.filter(a => 
-      a.escola === schoolName && 
+    const schoolActs = actions.filter(a =>
+      schoolNamesMatch(a.escola, schoolName) &&
       (filterBimestre === 'Todos' || !a.bimestre || a.bimestre === filterBimestre)
     );
     if (schoolActs.length === 0) return { total: 0, completed: 0, percentage: 0 };
@@ -398,8 +398,8 @@ export default function CdgView() {
   };
 
   // Modal actions list
-  const managedStageActions = managingSchool && managingPhase 
-    ? actions.filter(a => a.escola === managingSchool && a.fase === managingPhase)
+  const managedStageActions = managingSchool && managingPhase
+    ? actions.filter(a => schoolNamesMatch(a.escola, managingSchool) && a.fase === managingPhase)
     : [];
 
   const loggedInSuper = currentUser?.email

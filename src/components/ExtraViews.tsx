@@ -35,7 +35,7 @@ import {
   SEED_GRADES 
 } from '../lib/firebaseService';
 import { auth } from '../lib/firebase';
-import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess } from '../lib/superintendentService';
+import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, schoolNamesMatch } from '../lib/superintendentService';
 
 /* ========================================================
    INTERFACE DECLARATIONS
@@ -199,14 +199,14 @@ const getTurmasForSchool = (schoolName: string, customStudents?: any[]): string[
 
   // Add default turmas from SEED_TURMAS matching the schoolName
   SEED_TURMAS.forEach(t => {
-    if (t.escolaNome === schoolName) {
+    if (schoolNamesMatch(t.escolaNome, schoolName)) {
       resultSet.add(t.nome);
     }
   });
 
   // Add from INITIAL_BUSCA_ATIVA matching the schoolName
   INITIAL_BUSCA_ATIVA.forEach(s => {
-    if (s.escola === schoolName) {
+    if (schoolNamesMatch(s.escola, schoolName)) {
       resultSet.add(s.turma);
     }
   });
@@ -214,7 +214,7 @@ const getTurmasForSchool = (schoolName: string, customStudents?: any[]): string[
   // Add any from custom/real-time students matching the schoolName
   if (customStudents && Array.isArray(customStudents)) {
     customStudents.forEach(s => {
-      if (s.escola === schoolName && s.turma) {
+      if (schoolNamesMatch(s.escola, schoolName) && s.turma) {
         resultSet.add(s.turma);
       }
     });
@@ -346,7 +346,7 @@ export function BuscaAtivaView() {
 
   useEffect(() => {
     if (visibleSchools.length > 0) {
-      const isCurrentVisible = visibleSchools.some(s => s.nome === filterEscola);
+      const isCurrentVisible = visibleSchools.some(s => schoolNamesMatch(s.nome, filterEscola));
       if (!isCurrentVisible) {
         setFilterEscola(visibleSchools[0].nome);
       }
@@ -604,7 +604,7 @@ export function BuscaAtivaView() {
 
   // Filtering list based on aligned scope and sorting by "aluno mais infrequente" (highest absences first!)
   const filteredStudents = students.filter(s => {
-    const isEscolaMatch = s.escola === filterEscola;
+    const isEscolaMatch = schoolNamesMatch(s.escola, filterEscola);
     const isTurmaMatch = filterTurma === 'Todos' || s.turma === filterTurma;
     const isBimestreMatch = s.bimestre === filterBimestre;
     return isEscolaMatch && isTurmaMatch && isBimestreMatch;
@@ -613,19 +613,23 @@ export function BuscaAtivaView() {
   // Cross-reference data: Find students from SEED_GRADES that belong to the current filtered view and have failing grades but are NOT in current alignment
   const lowPerformanceStudentsNotFlagged = grades.filter(g => {
     // Determine if grade belongs to this school
-    const isSchoolMatch = (filterEscola === 'EEM Diva Cabral' && g.turma.includes('Diva')) ||
-                         (filterEscola === 'EEM Figueiredo Correia' && g.turma.includes('Figueiredo')) ||
-                         (filterEscola === 'EEM José Leopoldino da Silva' && g.turma.includes('Leopoldino')) ||
-                         (filterEscola === 'EEM São Francisco Canindezinho' && g.turma.includes('Canindezinho')) ||
-                         (filterEscola === 'EEMTI Anísio Teixeira' && g.turma.includes('Anísio')) ||
-                         (filterEscola === 'EEMTI Estado do Amazonas' && g.turma.includes('Amazonas')) ||
-                         (filterEscola === 'EEMTI Senador Osires Pontes' && g.turma.includes('Osires'));
+    // Fase 1G: só a identidade da ESCOLA (lado esquerdo) é normalizada aqui
+    // — o substring hack por TURMA (g.turma.includes(...)) é uma mitigação
+    // diferente e deliberadamente fora de escopo desta fase, ver
+    // docs/plano-migracao-grades-schoolId.md (grades não tem FK de escola).
+    const isSchoolMatch = (schoolNamesMatch(filterEscola, 'EEM Diva Cabral') && g.turma.includes('Diva')) ||
+                         (schoolNamesMatch(filterEscola, 'EEM Figueiredo Correia') && g.turma.includes('Figueiredo')) ||
+                         (schoolNamesMatch(filterEscola, 'EEM José Leopoldino da Silva') && g.turma.includes('Leopoldino')) ||
+                         (schoolNamesMatch(filterEscola, 'EEM São Francisco Canindezinho') && g.turma.includes('Canindezinho')) ||
+                         (schoolNamesMatch(filterEscola, 'EEMTI Anísio Teixeira') && g.turma.includes('Anísio')) ||
+                         (schoolNamesMatch(filterEscola, 'EEMTI Estado do Amazonas') && g.turma.includes('Amazonas')) ||
+                         (schoolNamesMatch(filterEscola, 'EEMTI Senador Osires Pontes') && g.turma.includes('Osires'));
 
     const isTurmaMatch = filterTurma === 'Todos' || g.turma === filterTurma;
     const isBimestreMatch = g.bimestre === filterBimestre;
     const hasLowGrades = g.portugues < 6.0 || g.matematica < 6.0;
 
-    const isAlreadyInBA = students.some(s => s.nome.toLowerCase() === g.nome.toLowerCase() && s.escola === filterEscola);
+    const isAlreadyInBA = students.some(s => s.nome.toLowerCase() === g.nome.toLowerCase() && schoolNamesMatch(s.escola, filterEscola));
 
     return isSchoolMatch && isTurmaMatch && isBimestreMatch && hasLowGrades && !isAlreadyInBA;
   });
@@ -984,6 +988,16 @@ export function BuscaAtivaView() {
   );
 }
 
+// Fase 1G: `coordinators` é um mapa indexado pelo nome de exibição da
+// escola — uma divergência de caixa/espaço/acento entre a chave gravada e
+// `filterEscola` (nome vindo do documento real de `schools`) faz a consulta
+// exata falhar silenciosamente e cair no "Coordenador Não Configurado".
+// Procura por igualdade normalizada em vez de acesso direto por chave.
+function findCoordinatorEntry<T>(map: Record<string, T>, schoolName: string): T | undefined {
+  const key = Object.keys(map).find(k => schoolNamesMatch(k, schoolName));
+  return key !== undefined ? map[key] : undefined;
+}
+
 /* ========================================================
    3. PPDT & COORDENAÇÃO VIEW
    ======================================================== */
@@ -1009,7 +1023,7 @@ export function PpdtView() {
 
   useEffect(() => {
     if (visibleSchools.length > 0) {
-      const isCurrentVisible = visibleSchools.some(s => s.nome === filterEscola);
+      const isCurrentVisible = visibleSchools.some(s => schoolNamesMatch(s.nome, filterEscola));
       if (!isCurrentVisible) {
         setFilterEscola(visibleSchools[0].nome);
       }
@@ -1116,7 +1130,7 @@ export function PpdtView() {
   };
 
   const handleOpenEditCoord = () => {
-    const active = coordinators[filterEscola] || { nome: '', email: '', telefone: '' };
+    const active = findCoordinatorEntry(coordinators, filterEscola) || { nome: '', email: '', telefone: '' };
     setCoordNome(active.nome);
     setCoordEmail(active.email);
     setCoordTel(active.telefone);
@@ -1132,13 +1146,18 @@ export function PpdtView() {
       return;
     }
 
-    const nextCoord = {
-      ...coordinators,
-      [filterEscola]: {
-        nome: coordNome,
-        email: coordEmail,
-        telefone: coordTel
-      }
+    // Remove qualquer chave pré-existente que já representa esta mesma
+    // escola sob outra grafia (Fase 1G), pra não deixar uma entrada órfã
+    // duplicada ao lado da nova gravada com a grafia atual de filterEscola.
+    const nextCoord = { ...coordinators };
+    const staleKey = Object.keys(nextCoord).find(k => schoolNamesMatch(k, filterEscola));
+    if (staleKey !== undefined && staleKey !== filterEscola) {
+      delete nextCoord[staleKey];
+    }
+    nextCoord[filterEscola] = {
+      nome: coordNome,
+      email: coordEmail,
+      telefone: coordTel
     };
     persistCoordinators(nextCoord);
     setShowCoordForm(false);
@@ -1147,7 +1166,7 @@ export function PpdtView() {
   const handleOpenAddAction = () => {
     setEditingAct(null);
     setFormAcao('');
-    setFormResp(coordinators[filterEscola]?.nome || 'Coordenador PDT');
+    setFormResp(findCoordinatorEntry(coordinators, filterEscola)?.nome || 'Coordenador PDT');
     setFormStatus('Planejado');
     setFormProgresso(0);
     setFormError('');
@@ -1212,10 +1231,10 @@ export function PpdtView() {
   };
 
   const getFilteredActions = () => {
-    return actions.filter(a => a.escola === filterEscola && a.bimestre === filterBimestre);
+    return actions.filter(a => schoolNamesMatch(a.escola, filterEscola) && a.bimestre === filterBimestre);
   };
 
-  const activeCoordinator = coordinators[filterEscola] || {
+  const activeCoordinator = findCoordinatorEntry(coordinators, filterEscola) || {
     nome: 'Coordenador Não Configurado',
     email: 'pendente@sefor3.org',
     telefone: '(85) 99999-9999'
@@ -1633,7 +1652,7 @@ export function RecomposicaoView() {
 
   useEffect(() => {
     if (visibleSchools.length > 0) {
-      const isCurrentVisible = visibleSchools.some(s => s.nome === filterEscola);
+      const isCurrentVisible = visibleSchools.some(s => schoolNamesMatch(s.nome, filterEscola));
       if (!isCurrentVisible) {
         setFilterEscola(visibleSchools[0].nome);
       }
@@ -1738,7 +1757,7 @@ export function RecomposicaoView() {
     
     // Find already stored custom plans
     const filtered = recomposicaos.filter(
-      r => r.escola === filterEscola && r.turma === targetTurma && r.bimestre === filterBimestre
+      r => schoolNamesMatch(r.escola, filterEscola) && r.turma === targetTurma && r.bimestre === filterBimestre
     );
 
     if (filtered.length > 0) {
@@ -1825,22 +1844,26 @@ export function RecomposicaoView() {
   // Cohesive feature: Count active Busca Ativa students under selected school + class + bimester
   const targetTurmaForChecks = filterTurma === 'Todos' ? '3º Ano A - Matutino' : filterTurma;
   const activeBaCount = baStudents.filter(
-    s => s.escola === filterEscola && s.turma === targetTurmaForChecks && s.bimestre === filterBimestre
+    s => schoolNamesMatch(s.escola, filterEscola) && s.turma === targetTurmaForChecks && s.bimestre === filterBimestre
   ).length;
 
   const bimesterCriticalRisco = baStudents.some(
-    s => s.escola === filterEscola && s.turma === targetTurmaForChecks && s.bimestre === filterBimestre && (s.risco === 'Crítico' || s.risco === 'Alto')
+    s => schoolNamesMatch(s.escola, filterEscola) && s.turma === targetTurmaForChecks && s.bimestre === filterBimestre && (s.risco === 'Crítico' || s.risco === 'Alto')
   );
 
   // Cohesive feature: Fetch average grades from same selected class/bimester (from SEED_GRADES fallback/grades)
   const activeClassGrades = grades.filter(g => {
-    const isSchoolMatch = (filterEscola === 'EEM Diva Cabral' && g.turma.includes('Diva')) ||
-                         (filterEscola === 'EEM Figueiredo Correia' && g.turma.includes('Figueiredo')) ||
-                         (filterEscola === 'EEM José Leopoldino da Silva' && g.turma.includes('Leopoldino')) ||
-                         (filterEscola === 'EEM São Francisco Canindezinho' && g.turma.includes('Canindezinho')) ||
-                         (filterEscola === 'EEMTI Anísio Teixeira' && g.turma.includes('Anísio')) ||
-                         (filterEscola === 'EEMTI Estado do Amazonas' && g.turma.includes('Amazonas')) ||
-                         (filterEscola === 'EEMTI Senador Osires Pontes' && g.turma.includes('Osires'));
+    // Fase 1G: só a identidade da ESCOLA (lado esquerdo) é normalizada aqui
+    // — o substring hack por TURMA (g.turma.includes(...)) é uma mitigação
+    // diferente e deliberadamente fora de escopo desta fase, ver
+    // docs/plano-migracao-grades-schoolId.md (grades não tem FK de escola).
+    const isSchoolMatch = (schoolNamesMatch(filterEscola, 'EEM Diva Cabral') && g.turma.includes('Diva')) ||
+                         (schoolNamesMatch(filterEscola, 'EEM Figueiredo Correia') && g.turma.includes('Figueiredo')) ||
+                         (schoolNamesMatch(filterEscola, 'EEM José Leopoldino da Silva') && g.turma.includes('Leopoldino')) ||
+                         (schoolNamesMatch(filterEscola, 'EEM São Francisco Canindezinho') && g.turma.includes('Canindezinho')) ||
+                         (schoolNamesMatch(filterEscola, 'EEMTI Anísio Teixeira') && g.turma.includes('Anísio')) ||
+                         (schoolNamesMatch(filterEscola, 'EEMTI Estado do Amazonas') && g.turma.includes('Amazonas')) ||
+                         (schoolNamesMatch(filterEscola, 'EEMTI Senador Osires Pontes') && g.turma.includes('Osires'));
 
     const isTurmaMatch = g.turma === targetTurmaForChecks;
     const isBimestreMatch = g.bimestre === filterBimestre;
