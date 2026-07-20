@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Users, Edit, Trash2, Search, X, CheckSquare, Square, UserCheck, UserPlus, ShieldAlert, Globe } from 'lucide-react';
-import { SEED_SCHOOLS } from '../lib/firebaseService';
+import { SEED_SCHOOLS, subscribeToCollection } from '../lib/firebaseService';
 import { auth } from '../lib/firebase';
 import {
   Superintendent,
@@ -20,6 +20,7 @@ import {
   validateSuperintendentInput,
   buildSuperintendentPayload,
   defaultSuperintendentFormInput,
+  schoolNamesMatch,
   SuperintendentFormInput
 } from '../lib/superintendentService';
 
@@ -40,17 +41,36 @@ export default function SuperintendentesView() {
   const [form, setForm] = useState<SuperintendentFormInput>(defaultSuperintendentFormInput());
   const [schoolSearch, setSchoolSearch] = useState('');
   const [formError, setFormError] = useState('');
+  const [allSchools, setAllSchools] = useState<typeof SEED_SCHOOLS>(SEED_SCHOOLS);
+  const [isFirebaseMode, setIsFirebaseMode] = useState(false);
 
-  const allSchools = SEED_SCHOOLS;
   const currentEmail = auth.currentUser?.email?.toLowerCase() || '';
 
   useEffect(() => {
-    const unsubAuth = auth.onAuthStateChanged(() => {
+    const unsubAuth = auth.onAuthStateChanged((user) => {
       setViewerIsAdmin(isCurrentUserAdmin());
       setViewerIsRoot(isRootAdmin());
+      setIsFirebaseMode(!!user);
     });
     return () => unsubAuth();
   }, []);
+
+  // Fase 1G: o picker de escolas precisa refletir os documentos REAIS de
+  // `schools` (com a grafia que eles realmente têm), não a lista canônica
+  // hardcoded — senão o admin fica escolhendo/marcando contra um nome que
+  // nunca vai casar exatamente com o documento de produção. SEED_SCHOOLS
+  // fica só como fallback antes de autenticar / coleção vazia, mesmo padrão
+  // já usado em EscolasView.tsx/FluxoView.tsx/CdgView.tsx.
+  useEffect(() => {
+    if (!isFirebaseMode) {
+      setAllSchools(SEED_SCHOOLS);
+      return;
+    }
+    const unsub = subscribeToCollection('schools', (loaded) => {
+      setAllSchools(loaded.length > 0 ? (loaded as typeof SEED_SCHOOLS) : SEED_SCHOOLS);
+    });
+    return () => unsub();
+  }, [isFirebaseMode]);
 
   useEffect(() => {
     setSuperintendents(getSuperintendents());
@@ -154,23 +174,25 @@ export default function SuperintendentesView() {
     }
   };
 
+  // Fase 1G: comparação tolerante a caixa/espaço/acento (schoolNamesMatch)
+  // em vez de igualdade exata — senão uma entrada já divergente em
+  // `escolas` não é reconhecida como "já marcada" e acaba duplicada.
   const toggleSchool = (schoolName: string) => {
     setForm(prev => ({
       ...prev,
-      escolas: prev.escolas.includes(schoolName)
-        ? prev.escolas.filter(n => n !== schoolName)
+      escolas: prev.escolas.some(n => schoolNamesMatch(n, schoolName))
+        ? prev.escolas.filter(n => !schoolNamesMatch(n, schoolName))
         : [...prev.escolas, schoolName]
     }));
   };
 
   const toggleAllFiltered = (names: string[]) => {
     setForm(prev => {
-      const allChecked = names.every(n => prev.escolas.includes(n));
+      const allChecked = names.every(n => prev.escolas.some(e => schoolNamesMatch(e, n)));
+      const withoutFiltered = prev.escolas.filter(e => !names.some(n => schoolNamesMatch(e, n)));
       return {
         ...prev,
-        escolas: allChecked
-          ? prev.escolas.filter(n => !names.includes(n))
-          : [...new Set([...prev.escolas, ...names])]
+        escolas: allChecked ? withoutFiltered : [...withoutFiltered, ...names]
       };
     });
   };
@@ -286,10 +308,15 @@ export default function SuperintendentesView() {
                   className={viewerIsAdmin ? 'cursor-pointer' : ''}
                   onClick={() => viewerIsAdmin && handleActivate(superintendent.id)}
                 >
-                  {superintendent.role === 'admin' && superintendent.escolas.length === 0 ? (
-                    <div className="flex items-center gap-1.5 text-brand-turquoise-dark">
-                      <Globe size={14} />
-                      <span className="text-xs font-black">Acesso global</span>
+                  {superintendent.role === 'admin' ? (
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-1.5 text-brand-turquoise-dark">
+                        <Globe size={14} />
+                        <span className="text-xs font-black">Acesso global</span>
+                      </div>
+                      <span className="text-[10px] text-slate-500 font-sans font-normal">
+                        {superintendent.escolas.length} escola{superintendent.escolas.length === 1 ? '' : 's'} acompanhada{superintendent.escolas.length === 1 ? '' : 's'}
+                      </span>
                     </div>
                   ) : (
                     <>
@@ -424,8 +451,8 @@ export default function SuperintendentesView() {
                 <div className="bg-slate-50 px-4 py-3 border-b border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2 shrink-0">
                   <span className="text-xs font-bold text-slate-800">
                     Escolas Vinculadas: <span className="font-extrabold text-brand-turquoise">{form.escolas.length} selecionadas</span> das {allSchools.length}
-                    {form.role === 'admin' && form.escolas.length === 0 && (
-                      <span className="ml-2 text-brand-turquoise-dark font-black">(Acesso global)</span>
+                    {form.role === 'admin' && (
+                      <span className="ml-2 text-brand-turquoise-dark font-black">(Acesso global — a seleção acima é a carteira acompanhada)</span>
                     )}
                   </span>
                   <div className="relative w-full sm:w-64">
@@ -449,7 +476,7 @@ export default function SuperintendentesView() {
                     <div className="col-span-full py-8 text-center text-slate-400 text-xs">Nenhuma escola encontrada.</div>
                   ) : (
                     filteredForSelection.map(school => {
-                      const isChecked = form.escolas.includes(school.nome);
+                      const isChecked = form.escolas.some(n => schoolNamesMatch(n, school.nome));
                       return (
                         <div key={school.id} onClick={() => toggleSchool(school.nome)}
                           className={`flex items-center gap-3 p-2 border rounded-xl cursor-pointer hover:bg-slate-50 hover:border-slate-300 transition ${

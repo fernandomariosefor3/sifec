@@ -5,6 +5,12 @@
 // está aqui é só a camada de conveniência da UI (esconder/desabilitar
 // controles antes mesmo de tentar a chamada ao Firestore).
 
+import { schoolNamesMatch } from './schoolIdentity';
+
+// Re-exportado para quem já importa tudo daqui (e de superintendentService.ts,
+// que re-exporta este arquivo por completo — ver comentário lá).
+export * from './schoolIdentity';
+
 export type SuperintendentRole = 'admin' | 'superintendent';
 
 export interface Superintendent {
@@ -178,7 +184,10 @@ export function superintendentCanAccessSchool(
 ): boolean {
   if (!record || record.ativo !== true) return false;
   if (isAuthenticated && record.role === 'admin') return true;
-  return record.escolas.includes(schoolName);
+  // Tolerante a caixa/espaço/acento (Fase 1G) — a escola pode estar
+  // gravada com grafia levemente diferente entre o documento real de
+  // `schools` e a lista `escolas` do superintendente; ver schoolIdentity.ts.
+  return record.escolas.some(e => schoolNamesMatch(e, schoolName));
 }
 
 export function filterSchoolsForSuperintendent<T extends { nome: string }>(
@@ -188,7 +197,24 @@ export function filterSchoolsForSuperintendent<T extends { nome: string }>(
 ): T[] {
   if (!record || record.ativo !== true) return [];
   if (isAuthenticated && record.role === 'admin') return schools;
-  return schools.filter(s => record.escolas.includes(s.nome));
+  return schools.filter(s => record.escolas.some(e => schoolNamesMatch(e, s.nome)));
+}
+
+// "Carteira acompanhada": as escolas da própria lista `escolas` do
+// registro, resolvidas por nome normalizado — SEMPRE, mesmo para um admin
+// (que tem acesso global via role, mas cuja carteira/acompanhamento é a
+// lista curada de `escolas`, não o universo inteiro). Reaproveita
+// filterSchoolsForSuperintendent forçando isAuthenticated: false, o que
+// pula deliberadamente o atalho "admin autenticado vê tudo" e cai direto no
+// match por `escolas` — é o mesmo comportamento já coberto pelo teste do
+// "modo demonstração" abaixo. Se a lógica de isAuthenticated em
+// filterSchoolsForSuperintendent/getAccessibleSchoolCount ganhar algum dia
+// um segundo significado, revisar este reaproveitamento.
+export function getWatchedSchools<T extends { nome: string }>(
+  schools: T[],
+  record: Pick<Superintendent, 'ativo' | 'role' | 'escolas'> | null | undefined
+): T[] {
+  return filterSchoolsForSuperintendent(schools, record, false);
 }
 
 export interface AccessibleSchoolCountInput {
@@ -212,7 +238,15 @@ export function getAccessibleSchoolCount({
 }: AccessibleSchoolCountInput): number {
   if (!superintendent || superintendent.ativo !== true) return 0;
   if (isAuthenticated && superintendent.role === 'admin') return allSchoolNames.length;
-  return superintendent.escolas.filter(nome => allSchoolNames.includes(nome)).length;
+  // Tolerante a caixa/espaço/acento (Fase 1G) — ver schoolNamesMatch.
+  return superintendent.escolas.filter(nome => allSchoolNames.some(real => schoolNamesMatch(real, nome))).length;
+}
+
+// "Carteira acompanhada" em número — mesma escolha de getWatchedSchools
+// (isAuthenticated: false força o match por `escolas`, ignorando o atalho
+// de acesso global do admin).
+export function getWatchedSchoolCount(input: AccessibleSchoolCountInput): number {
+  return getAccessibleSchoolCount({ ...input, isAuthenticated: false });
 }
 
 // Short display label for the workspace selector / header badges.

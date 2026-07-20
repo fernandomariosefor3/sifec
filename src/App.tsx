@@ -39,7 +39,8 @@ import {
   syncSuperintendentsFromFirestore,
   ADMIN_EMAIL,
   filterSchoolsForSuperintendent,
-  getAccessibleSchoolLabel
+  getAccessibleSchoolLabel,
+  getWatchedSchoolCount
 } from './lib/superintendentService';
 import { SEED_SCHOOLS } from './lib/firebaseService';
 
@@ -339,11 +340,21 @@ export default function App() {
               )}
 
               {loggedInSuper && (
-                <div className="mt-2 flex items-center gap-1.5 py-1 px-2 bg-brand-green/10 border border-brand-green/20 rounded-lg">
-                  <ShieldCheck size={12} className="text-brand-green shrink-0 text-emerald-600" />
-                  <span className="font-extrabold text-[#006034] text-[9px] leading-tight truncate" title={loggedInSuper.nome}>
-                    Gerência: {loggedInSuper.nome.split(' - ')[0]} ({getAccessibleSchoolLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser })})
-                  </span>
+                <div className="mt-2 flex flex-col gap-1">
+                  <div className="flex items-center gap-1.5 py-1 px-2 bg-brand-green/10 border border-brand-green/20 rounded-lg">
+                    <ShieldCheck size={12} className="text-brand-green shrink-0 text-emerald-600" />
+                    <span className="font-extrabold text-[#006034] text-[9px] leading-tight truncate" title={loggedInSuper.nome}>
+                      Gerência: {loggedInSuper.nome.split(' - ')[0]} ({getAccessibleSchoolLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser })})
+                    </span>
+                  </div>
+                  {/* Fase 1G: "acompanhadas" (carteira, escolas[]) é sempre
+                      exibido em separado de "Acesso global" (role) — nunca
+                      um no lugar do outro, mesmo para o admin raiz. */}
+                  <div className="flex items-center gap-1.5 py-1 px-2 bg-slate-50 border border-slate-200 rounded-lg">
+                    <span className="font-bold text-slate-500 text-[9px] leading-tight">
+                      {getWatchedSchoolCount({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser })} escola(s) acompanhada(s)
+                    </span>
+                  </div>
                 </div>
               )}
             </div>

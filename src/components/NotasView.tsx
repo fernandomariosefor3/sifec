@@ -33,7 +33,7 @@ import {
   SEED_TURMAS, 
   SEED_SCHOOLS 
 } from '../lib/firebaseService';
-import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess } from '../lib/superintendentService';
+import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, schoolNamesMatch } from '../lib/superintendentService';
 
 interface StudentGrade {
   id: string;
@@ -271,7 +271,7 @@ export default function NotasView() {
 
   const handleOpenEditLancamento = (sch: any) => {
     setEditingSchoolLancamento(sch);
-    const related = turmas.filter(t => t.escolaId === sch.id || t.escolaNome === sch.nome);
+    const related = turmas.filter(t => t.escolaId === sch.id || schoolNamesMatch(t.escolaNome, sch.nome));
     setSchoolLancamentoTurmas(JSON.parse(JSON.stringify(related))); // deep copy to edit locally first
   };
 
@@ -401,15 +401,15 @@ export default function NotasView() {
   // Filter schools based on active superintendent
   const visibleSchools = schools.filter(s => isSchoolVisible(s.nome));
 
-  const visibleTurmas = turmas.filter(t => 
-    visibleSchools.some(sch => sch.id === t.escolaId || sch.nome === t.escolaNome)
+  const visibleTurmas = turmas.filter(t =>
+    visibleSchools.some(sch => sch.id === t.escolaId || schoolNamesMatch(sch.nome, t.escolaNome))
   );
 
   // Derived computations for Schools and Bimesters
   // Grouping classes and detecting if bimester launch is missing
   const schoolsMatrixData: SchoolBimesterStatus[] = visibleSchools.map(sch => {
     // Collect classes in this school
-    const schoolClasses = visibleTurmas.filter(t => t.escolaId === sch.id || t.escolaNome === sch.nome);
+    const schoolClasses = visibleTurmas.filter(t => t.escolaId === sch.id || schoolNamesMatch(t.escolaNome, sch.nome));
     
     // Check launch status (if any class is Pending, the school has a partial/pending status)
     const b1Status = schoolClasses.every(t => t.lancamentosBimestre?.b1 === 'Lançado') ? 'Lançado' : 'Pendente';
@@ -893,7 +893,7 @@ export default function NotasView() {
 
                       if (selectedSchoolFilter !== 'Todas') {
                         const matchedClass = visibleTurmas.find(t => t.nome === g.turma);
-                        if (!matchedClass || matchedClass.escolaNome !== selectedSchoolFilter) return false;
+                        if (!matchedClass || !schoolNamesMatch(matchedClass.escolaNome, selectedSchoolFilter)) return false;
                       }
 
                       const matchesSearch = g.nome.toLowerCase().includes(searchQuery.toLowerCase());
