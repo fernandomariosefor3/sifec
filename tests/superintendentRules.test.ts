@@ -6,20 +6,27 @@ import {
   ADMIN_EMAIL,
   assignableRoles,
   buildSuperintendentPayload,
+  canAccessSchoolInScope,
   canDeleteTarget,
   canEditTarget,
   canGrantAdminRole,
+  DEFAULT_ADMIN_SCHOOL_SCOPE,
   defaultSuperintendentFormInput,
   filterSchoolsForSuperintendent,
   getAccessibleSchoolCount,
   getAccessibleSchoolLabel,
+  getSchoolCountForCurrentScope,
+  getSchoolScopeLabel,
+  getSchoolsForCurrentScope,
   getWatchedSchoolCount,
   getWatchedSchools,
   isRootAdminEmail,
   isRootProtectedEdit,
+  isScopedAdmin,
   isValidEmailFormat,
   normalizeEmail,
   normalizeLegacyRecord,
+  parseAdminSchoolScope,
   superintendentCanAccessSchool,
   validateSuperintendentInput,
   type Superintendent,
@@ -395,5 +402,167 @@ describe('Fase 1G — carteira acompanhada do admin (getWatchedSchools/getWatche
     const acompanhadas = getWatchedSchools(CANDIDATAS_REAIS, ADMIN_COM_CARTEIRA);
     const nomesUnicos = new Set(acompanhadas.map(s => s.nome));
     expect(nomesUnicos.size).toBe(7);
+  });
+});
+
+// Hotfix admin-portfolio-default-view: separa explicitamente "minha
+// carteira" (7 escolas) de "acesso global" (56 escolas) para o admin
+// autenticado, com portfolio como padrão sempre que a preferência de
+// interface estiver ausente ou inválida.
+describe('Hotfix — escopo portfolio/global do administrador', () => {
+  const SETE_CANONICOS = [
+    'EEM Diva Cabral',
+    'EEM Figueiredo Correia',
+    'EEM José Leopoldino da Silva',
+    'EEM São Francisco Canindezinho',
+    'EEMTI Anísio Teixeira',
+    'EEMTI Estado do Amazonas',
+    'EEMTI Senador Osires Pontes',
+  ];
+  // Grafia real divergente para as 7 (mesmo padrão de CANDIDATAS_REAIS acima)
+  // + 49 escolas de preenchimento, totalizando o universo de 56.
+  const SETE_REAIS_DIVERGENTES = [
+    { nome: 'EEM Diva Cabral' },
+    { nome: 'EEM FIGUEIREDO CORREIA ' },
+    { nome: 'EEM JOSÉ LEOPOLDINO DA SILVA ' },
+    { nome: 'EEM SÃO FRANCISCO CANINDEZINHO ' },
+    { nome: 'EEMTI ANISIO TEIXEIRA ' },
+    { nome: 'EEMTI ESTADO DO AMAZONAS ' },
+    { nome: 'EEMTI SENADOR OSIRES PONTES ' },
+  ];
+  const OUTRAS_49 = Array.from({ length: 49 }, (_, i) => ({ nome: `Escola Extra ${i + 1} (Teste)` }));
+  const UNIVERSO_56 = [...SETE_REAIS_DIVERGENTES, ...OUTRAS_49];
+  const NOMES_56 = UNIVERSO_56.map(s => s.nome);
+
+  const ADMIN = { ativo: true, role: 'admin' as const, escolas: SETE_CANONICOS };
+  const SUPERINTENDENTE = { ativo: true, role: 'superintendent' as const, escolas: [SETE_CANONICOS[0]] };
+  const ADMIN_DEMO = { ativo: true, role: 'admin' as const, escolas: SETE_CANONICOS };
+
+  it('admin entra e recebe portfolio por padrão (chave ausente)', () => {
+    expect(parseAdminSchoolScope(undefined)).toBe('portfolio');
+    expect(parseAdminSchoolScope(null)).toBe('portfolio');
+    expect(DEFAULT_ADMIN_SCHOOL_SCOPE).toBe('portfolio');
+  });
+
+  it('escolha inválida em localStorage volta para portfolio', () => {
+    expect(parseAdminSchoolScope('')).toBe('portfolio');
+    expect(parseAdminSchoolScope('bogus')).toBe('portfolio');
+    expect(parseAdminSchoolScope('Global')).toBe('portfolio'); // case-sensitive: só 'global' exato ativa o global
+  });
+
+  it('portfolio retorna exatamente as 7 escolas da carteira, mesmo com grafia divergente', () => {
+    const resultado = getSchoolsForCurrentScope({
+      superintendent: ADMIN,
+      allSchools: UNIVERSO_56,
+      isAuthenticated: true,
+      adminScope: 'portfolio',
+    });
+    expect(resultado).toHaveLength(7);
+  });
+
+  it('global retorna as 56 escolas do universo', () => {
+    const resultado = getSchoolsForCurrentScope({
+      superintendent: ADMIN,
+      allSchools: UNIVERSO_56,
+      isAuthenticated: true,
+      adminScope: 'global',
+    });
+    expect(resultado).toHaveLength(56);
+  });
+
+  it('alternância portfolio → global muda de 7 para 56', () => {
+    const input = { superintendent: ADMIN, allSchools: UNIVERSO_56, isAuthenticated: true };
+    expect(getSchoolsForCurrentScope({ ...input, adminScope: 'portfolio' as const })).toHaveLength(7);
+    expect(getSchoolsForCurrentScope({ ...input, adminScope: 'global' as const })).toHaveLength(56);
+  });
+
+  it('alternância global → portfolio muda de 56 para 7', () => {
+    const input = { superintendent: ADMIN, allSchools: UNIVERSO_56, isAuthenticated: true };
+    expect(getSchoolsForCurrentScope({ ...input, adminScope: 'global' as const })).toHaveLength(56);
+    expect(getSchoolsForCurrentScope({ ...input, adminScope: 'portfolio' as const })).toHaveLength(7);
+  });
+
+  it('superintendente comum não possui opção global — adminScope: global é ignorado', () => {
+    const resultado = getSchoolsForCurrentScope({
+      superintendent: SUPERINTENDENTE,
+      allSchools: UNIVERSO_56,
+      isAuthenticated: true,
+      adminScope: 'global',
+    });
+    expect(resultado.map(s => s.nome)).toEqual([SETE_REAIS_DIVERGENTES[0].nome]);
+  });
+
+  it('modo demonstração (não autenticado) continua com as 7 escolas, mesmo pedindo global', () => {
+    const resultado = getSchoolsForCurrentScope({
+      superintendent: ADMIN_DEMO,
+      allSchools: UNIVERSO_56,
+      isAuthenticated: false,
+      adminScope: 'global',
+    });
+    expect(resultado).toHaveLength(7);
+  });
+
+  it('contadores superiores (getSchoolCountForCurrentScope) usam o escopo atual — portfolio', () => {
+    expect(getSchoolCountForCurrentScope({
+      superintendent: ADMIN, allSchoolNames: NOMES_56, isAuthenticated: true, adminScope: 'portfolio',
+    })).toBe(7);
+  });
+
+  it('contadores superiores (getSchoolCountForCurrentScope) usam o escopo atual — global', () => {
+    expect(getSchoolCountForCurrentScope({
+      superintendent: ADMIN, allSchoolNames: NOMES_56, isAuthenticated: true, adminScope: 'global',
+    })).toBe(56);
+  });
+
+  it('dados relacionados (canAccessSchoolInScope) seguem o mesmo escopo da lista', () => {
+    const escolaDaCarteira = SETE_REAIS_DIVERGENTES[0].nome; // 'EEM Diva Cabral'
+    const escolaForaDaCarteira = 'Escola Extra 1 (Teste)';
+
+    // Em portfolio: só a escola da carteira é acessível.
+    expect(canAccessSchoolInScope(escolaDaCarteira, ADMIN, true, 'portfolio')).toBe(true);
+    expect(canAccessSchoolInScope(escolaForaDaCarteira, ADMIN, true, 'portfolio')).toBe(false);
+
+    // Em global: qualquer escola do universo é acessível.
+    expect(canAccessSchoolInScope(escolaDaCarteira, ADMIN, true, 'global')).toBe(true);
+    expect(canAccessSchoolInScope(escolaForaDaCarteira, ADMIN, true, 'global')).toBe(true);
+  });
+
+  it('normalização de nomes continua funcionando dentro do escopo portfolio', () => {
+    // 'EEMTI ANISIO TEIXEIRA ' (caixa alta, espaço final, sem acento) deve
+    // continuar casando com o nome canônico 'EEMTI Anísio Teixeira' da
+    // carteira, mesmo dentro do novo helper de escopo.
+    const divergente = 'EEMTI ANISIO TEIXEIRA ';
+    expect(canAccessSchoolInScope(divergente, ADMIN, true, 'portfolio')).toBe(true);
+
+    const resultado = getSchoolsForCurrentScope({
+      superintendent: ADMIN,
+      allSchools: UNIVERSO_56,
+      isAuthenticated: true,
+      adminScope: 'portfolio',
+    });
+    expect(resultado.map(s => s.nome)).toContain(divergente);
+  });
+
+  it('isScopedAdmin só é true para admin ativo genuinamente autenticado', () => {
+    expect(isScopedAdmin(ADMIN, true)).toBe(true);
+    expect(isScopedAdmin(ADMIN_DEMO, false)).toBe(false); // modo demonstração nunca qualifica
+    expect(isScopedAdmin(SUPERINTENDENTE, true)).toBe(false);
+    expect(isScopedAdmin({ ativo: false, role: 'admin' }, true)).toBe(false);
+    expect(isScopedAdmin(null, true)).toBe(false);
+  });
+
+  it('getSchoolScopeLabel reflete o escopo atual para o admin', () => {
+    expect(getSchoolScopeLabel({
+      superintendent: ADMIN, allSchoolNames: NOMES_56, isAuthenticated: true, adminScope: 'portfolio',
+    })).toBe('7 acompanhadas');
+    expect(getSchoolScopeLabel({
+      superintendent: ADMIN, allSchoolNames: NOMES_56, isAuthenticated: true, adminScope: 'global',
+    })).toBe('Acesso global — 56 escolas');
+  });
+
+  it('getSchoolScopeLabel para superintendente comum ignora adminScope', () => {
+    expect(getSchoolScopeLabel({
+      superintendent: SUPERINTENDENTE, allSchoolNames: NOMES_56, isAuthenticated: true, adminScope: 'global',
+    })).toBe('1 Esc.');
   });
 });

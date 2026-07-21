@@ -44,14 +44,18 @@ export default function EscolasView() {
     return () => unsubscribe();
   }, []);
 
-  // Monitor Superintendent changes
+  // Monitor Superintendent (and admin portfolio/global scope) changes
   useEffect(() => {
     const handleSuperChange = () => {
       setActiveSuperId(getActiveSuperintendentId());
     };
     window.addEventListener('sefor3_active_superintendent_change', handleSuperChange);
+    window.addEventListener('sefor3_admin_scope_change', handleSuperChange);
     setActiveSuperId(getActiveSuperintendentId());
-    return () => window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
+    return () => {
+      window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
+      window.removeEventListener('sefor3_admin_scope_change', handleSuperChange);
+    };
   }, []);
 
   // Subscribe to dynamic Firebase updates
@@ -166,9 +170,11 @@ export default function EscolasView() {
     setShowAddForm(true);
   };
 
-  const filteredSchools = schools.filter(school => {
-    if (!isSchoolVisible(school.nome)) return false;
-    const matchesSearch = school.nome.toLowerCase().includes(search.toLowerCase()) || 
+  // Scope-only filter (active superintendent + admin portfolio/global toggle)
+  // powers the header indicators; search/city narrow it further for the table.
+  const visibleSchools = schools.filter(school => isSchoolVisible(school.nome));
+  const filteredSchools = visibleSchools.filter(school => {
+    const matchesSearch = school.nome.toLowerCase().includes(search.toLowerCase()) ||
                           school.codInep.includes(search);
     const matchesCity = cityFilter === 'Todas' || school.cidade === cityFilter;
     return matchesSearch && matchesCity;
@@ -208,7 +214,7 @@ export default function EscolasView() {
           </div>
           <div>
             <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Total de Unidades</div>
-            <div className="text-lg font-extrabold text-slate-900">{schools.length} Escolas</div>
+            <div className="text-lg font-extrabold text-slate-900">{visibleSchools.length} Escolas</div>
           </div>
         </div>
         <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-4">
@@ -218,7 +224,7 @@ export default function EscolasView() {
           <div>
             <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Total de Matrículas</div>
             <div className="text-lg font-extrabold text-slate-900">
-              {schools.reduce((sum, s) => sum + s.matriculas, 0).toLocaleString()} Alunos
+              {visibleSchools.reduce((sum, s) => sum + s.matriculas, 0).toLocaleString()} Alunos
             </div>
           </div>
         </div>

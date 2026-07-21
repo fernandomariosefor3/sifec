@@ -177,7 +177,7 @@ export default function CdgView() {
     return () => unsubscribe();
   }, []);
 
-  // Monitor Superintendent changes
+  // Monitor Superintendent (and admin portfolio/global scope) changes
   useEffect(() => {
     setSuperintendents(getSuperintendents());
     const handleSuperChange = () => {
@@ -186,10 +186,12 @@ export default function CdgView() {
     };
     window.addEventListener('sefor3_active_superintendent_change', handleSuperChange);
     window.addEventListener('sefor3_superintendents_change', handleSuperChange);
+    window.addEventListener('sefor3_admin_scope_change', handleSuperChange);
     setActiveSuperId(getActiveSuperintendentId());
     return () => {
       window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
       window.removeEventListener('sefor3_superintendents_change', handleSuperChange);
+      window.removeEventListener('sefor3_admin_scope_change', handleSuperChange);
     };
   }, []);
 

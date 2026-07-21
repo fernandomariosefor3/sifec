@@ -71,14 +71,18 @@ export default function NotasView() {
   const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'completed' | 'error'>('idle');
   const [syncLog, setSyncLog] = useState<string>('');
 
-  // Monitor Superintendent changes
+  // Monitor Superintendent (and admin portfolio/global scope) changes
   useEffect(() => {
     const handleSuperChange = () => {
       setActiveSuperId(getActiveSuperintendentId());
     };
     window.addEventListener('sefor3_active_superintendent_change', handleSuperChange);
+    window.addEventListener('sefor3_admin_scope_change', handleSuperChange);
     setActiveSuperId(getActiveSuperintendentId());
-    return () => window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
+    return () => {
+      window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
+      window.removeEventListener('sefor3_admin_scope_change', handleSuperChange);
+    };
   }, []);
 
   // Form states for edit modal
