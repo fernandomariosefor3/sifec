@@ -10,7 +10,11 @@ import {
   normalizeLegacyRecord,
   isRootAdminEmail,
   superintendentCanAccessSchool,
-  filterSchoolsForSuperintendent,
+  AdminSchoolScope,
+  ADMIN_SCHOOL_SCOPE_STORAGE_KEY,
+  parseAdminSchoolScope,
+  getSchoolsForCurrentScope,
+  canAccessSchoolInScope,
 } from './superintendentRules';
 
 // Re-export the pure, Firebase-free layer (types, normalization,
@@ -173,6 +177,21 @@ export function setActiveSuperintendentId(id: string): void {
   window.dispatchEvent(new Event('sefor3_filter_change'));
 }
 
+// ---- Admin portfolio vs. global scope (hotfix: default view) ----
+// Pure interface-preference toggle — never written alongside school or
+// superintendent data, and never read by firestore.rules. Defaults to
+// 'portfolio' whenever the key is missing or holds an unrecognized value
+// (see parseAdminSchoolScope), so a freshly authenticated admin always
+// opens on their own 7 schools, never the full 56.
+export function getAdminSchoolScope(): AdminSchoolScope {
+  return parseAdminSchoolScope(localStorage.getItem(ADMIN_SCHOOL_SCOPE_STORAGE_KEY));
+}
+
+export function setAdminSchoolScope(scope: AdminSchoolScope): void {
+  localStorage.setItem(ADMIN_SCHOOL_SCOPE_STORAGE_KEY, scope);
+  window.dispatchEvent(new Event('sefor3_admin_scope_change'));
+}
+
 // ---- Access control helpers (client-side convenience only — the real
 // authorization boundary is firestore.rules; these mirror it so
 // the UI can hide/disable controls, never to be relied on for security). ----
@@ -199,14 +218,19 @@ export function isSchoolVisible(schoolName: string): boolean {
   const activeId = getActiveSuperintendentId();
   const superintendents = getSuperintendents();
   const active = superintendents.find(s => s.id === activeId);
-  return superintendentCanAccessSchool(schoolName, active, !!auth.currentUser);
+  return canAccessSchoolInScope(schoolName, active, !!auth.currentUser, getAdminSchoolScope());
 }
 
 export function filterSchoolsByActiveSuperintendent<T extends { nome: string }>(schools: T[]): T[] {
   const activeId = getActiveSuperintendentId();
   const superintendents = getSuperintendents();
   const active = superintendents.find(s => s.id === activeId);
-  return filterSchoolsForSuperintendent(schools, active, !!auth.currentUser);
+  return getSchoolsForCurrentScope({
+    superintendent: active,
+    allSchools: schools,
+    isAuthenticated: !!auth.currentUser,
+    adminScope: getAdminSchoolScope(),
+  });
 }
 
 // Returns true if the currently signed-in user can write to this school.

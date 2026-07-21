@@ -38,9 +38,13 @@ import {
   setActiveSuperintendentId,
   syncSuperintendentsFromFirestore,
   ADMIN_EMAIL,
-  filterSchoolsForSuperintendent,
-  getAccessibleSchoolLabel,
-  getWatchedSchoolCount
+  getWatchedSchoolCount,
+  getSchoolsForCurrentScope,
+  getSchoolScopeLabel,
+  getAdminSchoolScope,
+  setAdminSchoolScope,
+  isScopedAdmin,
+  AdminSchoolScope
 } from './lib/superintendentService';
 import { SEED_SCHOOLS } from './lib/firebaseService';
 
@@ -65,6 +69,7 @@ export default function App() {
   const [activeSuperId, setActiveSuperId] = useState('all');
   const [superintendents, setSuperintendents] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [adminScope, setAdminScopeState] = useState<AdminSchoolScope>(getAdminSchoolScope());
 
   React.useEffect(() => {
     const unsubAuth = auth.onAuthStateChanged(async (user) => {
@@ -80,18 +85,24 @@ export default function App() {
     // Initial load
     setSuperintendents(getSuperintendents());
     setActiveSuperId(getActiveSuperintendentId());
+    setAdminScopeState(getAdminSchoolScope());
 
     const handleSuperChange = () => {
       setSuperintendents(getSuperintendents());
       setActiveSuperId(getActiveSuperintendentId());
     };
+    const handleScopeChange = () => {
+      setAdminScopeState(getAdminSchoolScope());
+    };
 
     window.addEventListener('sefor3_active_superintendent_change', handleSuperChange);
     window.addEventListener('sefor3_superintendents_change', handleSuperChange);
+    window.addEventListener('sefor3_admin_scope_change', handleScopeChange);
 
     return () => {
       window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
       window.removeEventListener('sefor3_superintendents_change', handleSuperChange);
+      window.removeEventListener('sefor3_admin_scope_change', handleScopeChange);
     };
   }, []);
 
@@ -112,13 +123,19 @@ export default function App() {
   // Selected superintendent's active workspace filter
   const activeIdToUse = activeSuperId;
 
-  // Compute dynamic stats based on schools filtered by active superintendent.
-  // isAuthenticated gates the admin global-access shortcut so the pre-login
-  // demo record (also role: 'admin') keeps its own seeded list — see
-  // superintendentRules.ts.
+  // Compute dynamic stats based on schools filtered by active superintendent
+  // AND, for an authenticated admin, by their portfolio/global scope toggle
+  // (hotfix: admin-portfolio-default-view). isAuthenticated gates the admin
+  // global-access shortcut so the pre-login demo record (also role: 'admin')
+  // keeps its own seeded list — see superintendentRules.ts.
   const activeSuperByFind = superintendents.find(s => s.id === activeIdToUse);
   const activeSuper = activeSuperByFind || (superintendents.length > 0 ? superintendents[0] : null);
-  const schoolsToCompute = filterSchoolsForSuperintendent(SEED_SCHOOLS, activeSuper, !!currentUser);
+  const schoolsToCompute = getSchoolsForCurrentScope({
+    superintendent: activeSuper,
+    allSchools: SEED_SCHOOLS,
+    isAuthenticated: !!currentUser,
+    adminScope,
+  });
 
   const countSchools = schoolsToCompute.length;
   const countMatriculas = schoolsToCompute.reduce((sum, s) => sum + s.matriculas, 0);
@@ -321,13 +338,13 @@ export default function App() {
                 >
                   {superintendents.map(s => (
                     <option key={s.id} value={s.id}>
-                      {s.nome.split(' - ')[0]} ({getAccessibleSchoolLabel({ superintendent: s, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser })})
+                      {s.nome.split(' - ')[0]} ({getSchoolScopeLabel({ superintendent: s, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser, adminScope })})
                     </option>
                   ))}
                 </select>
               ) : loggedInSuper ? (
                 <div className="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-slate-800 text-[11px]">
-                  {loggedInSuper.nome.split(' - ')[0]} ({getAccessibleSchoolLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser })})
+                  {loggedInSuper.nome.split(' - ')[0]} ({getSchoolScopeLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser, adminScope })})
                 </div>
               ) : currentUser ? (
                 <div className="w-full py-1.5 px-2 text-[11px] text-rose-500 font-bold">
@@ -339,12 +356,45 @@ export default function App() {
                 </div>
               )}
 
+              {/* Hotfix (admin-portfolio-default-view): explicit portfolio/global
+                  toggle for an authenticated admin viewing their own workspace —
+                  only appears when the active selection IS the admin, never for
+                  a plain superintendent (who has no global option). Default is
+                  always 'portfolio' (see getAdminSchoolScope), so login never
+                  auto-opens on the full 56-school universe. */}
+              {isUserAdmin && currentUser && activeSuper && isScopedAdmin(activeSuper, true) && (
+                <div className="mt-2 flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setAdminSchoolScope('portfolio')}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold border transition text-center ${
+                      adminScope === 'portfolio'
+                        ? 'bg-brand-green text-white border-brand-green-dark'
+                        : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    Minhas escolas — {getWatchedSchoolCount({ superintendent: activeSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: true })} acompanhadas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAdminSchoolScope('global')}
+                    className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold border transition text-center ${
+                      adminScope === 'global'
+                        ? 'bg-brand-turquoise text-white border-brand-turquoise-dark'
+                        : 'bg-white text-slate-500 border-slate-200 hover:border-slate-300'
+                    }`}
+                  >
+                    Acesso global — {ALL_SCHOOL_NAMES.length} escolas
+                  </button>
+                </div>
+              )}
+
               {loggedInSuper && (
                 <div className="mt-2 flex flex-col gap-1">
                   <div className="flex items-center gap-1.5 py-1 px-2 bg-brand-green/10 border border-brand-green/20 rounded-lg">
                     <ShieldCheck size={12} className="text-brand-green shrink-0 text-emerald-600" />
                     <span className="font-extrabold text-[#006034] text-[9px] leading-tight truncate" title={loggedInSuper.nome}>
-                      Gerência: {loggedInSuper.nome.split(' - ')[0]} ({getAccessibleSchoolLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser })})
+                      {isScopedAdmin(loggedInSuper, !!currentUser) && adminScope === 'portfolio' ? 'Carteira de acompanhamento' : 'Gerência'}: {loggedInSuper.nome.split(' - ')[0]} ({getSchoolScopeLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser, adminScope })})
                     </span>
                   </div>
                   {/* Fase 1G: "acompanhadas" (carteira, escolas[]) é sempre

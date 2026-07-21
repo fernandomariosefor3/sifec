@@ -76,14 +76,18 @@ export default function FluxoView() {
     return () => unsubscribe();
   }, []);
 
-  // Monitor Superintendent changes
+  // Monitor Superintendent (and admin portfolio/global scope) changes
   useEffect(() => {
     const handleSuperChange = () => {
       setActiveSuperId(getActiveSuperintendentId());
     };
     window.addEventListener('sefor3_active_superintendent_change', handleSuperChange);
+    window.addEventListener('sefor3_admin_scope_change', handleSuperChange);
     setActiveSuperId(getActiveSuperintendentId());
-    return () => window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
+    return () => {
+      window.removeEventListener('sefor3_active_superintendent_change', handleSuperChange);
+      window.removeEventListener('sefor3_admin_scope_change', handleSuperChange);
+    };
   }, []);
 
   // Merge SEED_SCHOOLS with default flow values including bimesters
@@ -451,7 +455,7 @@ export default function FluxoView() {
           <Search size={14} className="absolute left-3 top-3 text-slate-400" />
         </div>
         <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">
-          {schools.length} Escolas Reguladas ({selectedBim === 'geral' ? 'Foco Consolidado' : `Foco ${selectedBim.toUpperCase()}`})
+          {visibleSchools.length} Escolas Reguladas ({selectedBim === 'geral' ? 'Foco Consolidado' : `Foco ${selectedBim.toUpperCase()}`})
         </div>
       </div>
 

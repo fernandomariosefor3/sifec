@@ -257,3 +257,111 @@ export function getAccessibleSchoolLabel(input: AccessibleSchoolCountInput): str
   }
   return `${getAccessibleSchoolCount(input)} Esc.`;
 }
+
+// ---- Admin portfolio vs. global access scope (hotfix: default view) ----
+// The admin's OWN `escolas` list (their "carteira acompanhada") and their
+// role-granted global reach are two different things — see
+// getWatchedSchools/getAccessibleSchoolCount above. This section adds an
+// explicit, user-controlled toggle between the two so an authenticated
+// admin can choose which one drives what the tabs actually display, instead
+// of always collapsing to global the moment they're role: admin.
+
+export type AdminSchoolScope = 'portfolio' | 'global';
+
+// UI-preference-only key — never mixed with school/superintendent data.
+export const ADMIN_SCHOOL_SCOPE_STORAGE_KEY = 'sefor3_admin_school_scope';
+export const DEFAULT_ADMIN_SCHOOL_SCOPE: AdminSchoolScope = 'portfolio';
+
+// Missing or unrecognized values always fall back to 'portfolio' — the
+// admin never lands on the full 56-school universe by accident.
+export function parseAdminSchoolScope(value: string | null | undefined): AdminSchoolScope {
+  return value === 'global' ? 'global' : DEFAULT_ADMIN_SCHOOL_SCOPE;
+}
+
+// True only for a genuinely authenticated, active admin — the sole actor
+// who is ever offered a portfolio/global choice. Mirrors the
+// isAuthenticated-gated shortcut in superintendentCanAccessSchool/
+// filterSchoolsForSuperintendent so the pre-login demo record (also
+// role: 'admin') never qualifies and keeps showing its own seeded list.
+export function isScopedAdmin(
+  record: Pick<Superintendent, 'ativo' | 'role'> | null | undefined,
+  isAuthenticated: boolean
+): boolean {
+  return isAuthenticated && !!record && record.ativo === true && record.role === 'admin';
+}
+
+export interface SchoolScopeInput<T extends { nome: string }> {
+  superintendent: Pick<Superintendent, 'ativo' | 'role' | 'escolas'> | null | undefined;
+  allSchools: T[];
+  isAuthenticated: boolean;
+  adminScope: AdminSchoolScope;
+}
+
+// Central filter every tab must use instead of calling
+// filterSchoolsForSuperintendent directly. A scoped admin in 'portfolio'
+// sees only their curated `escolas` (identical to getWatchedSchools); in
+// 'global' they see the full universe passed in. A real superintendent
+// never gets a global option — adminScope is simply irrelevant for them,
+// same as inactive/demo records, which keep the existing
+// filterSchoolsForSuperintendent behavior untouched.
+export function getSchoolsForCurrentScope<T extends { nome: string }>({
+  superintendent,
+  allSchools,
+  isAuthenticated,
+  adminScope,
+}: SchoolScopeInput<T>): T[] {
+  if (isScopedAdmin(superintendent, isAuthenticated) && adminScope === 'portfolio') {
+    return getWatchedSchools(allSchools, superintendent);
+  }
+  return filterSchoolsForSuperintendent(allSchools, superintendent, isAuthenticated);
+}
+
+export interface SchoolScopeCountInput {
+  superintendent: Pick<Superintendent, 'ativo' | 'role' | 'escolas'> | null | undefined;
+  allSchoolNames: string[];
+  isAuthenticated: boolean;
+  adminScope: AdminSchoolScope;
+}
+
+// Numeric counterpart of getSchoolsForCurrentScope — same scoping rule,
+// used for header/indicator badges instead of re-deriving from a full list.
+export function getSchoolCountForCurrentScope(input: SchoolScopeCountInput): number {
+  const { superintendent, isAuthenticated, adminScope } = input;
+  if (isScopedAdmin(superintendent, isAuthenticated) && adminScope === 'portfolio') {
+    return getWatchedSchoolCount(input);
+  }
+  return getAccessibleSchoolCount(input);
+}
+
+// Single-school visibility check for the current scope — same rule as
+// getSchoolsForCurrentScope but for one school name at a time (mirrors why
+// superintendentCanAccessSchool exists alongside filterSchoolsForSuperintendent).
+export function canAccessSchoolInScope(
+  schoolName: string,
+  superintendent: Pick<Superintendent, 'ativo' | 'role' | 'escolas'> | null | undefined,
+  isAuthenticated: boolean,
+  adminScope: AdminSchoolScope
+): boolean {
+  if (isScopedAdmin(superintendent, isAuthenticated) && adminScope === 'portfolio') {
+    // Force the escolas-membership branch, skipping the admin-sees-all
+    // shortcut — same trick getWatchedSchools uses via isAuthenticated: false.
+    return superintendentCanAccessSchool(schoolName, superintendent, false);
+  }
+  return superintendentCanAccessSchool(schoolName, superintendent, isAuthenticated);
+}
+
+export type SchoolScopeLabelInput = SchoolScopeCountInput;
+
+// Scope-aware badge label for the workspace selector — an authenticated
+// admin sees a label that reflects their CURRENT toggle choice instead of
+// always collapsing to "Acesso global" (see getAccessibleSchoolLabel for
+// the non-scope-aware version, kept for call sites that don't need this).
+export function getSchoolScopeLabel(input: SchoolScopeLabelInput): string {
+  const { superintendent, isAuthenticated, adminScope, allSchoolNames } = input;
+  if (isScopedAdmin(superintendent, isAuthenticated)) {
+    return adminScope === 'global'
+      ? `Acesso global — ${allSchoolNames.length} escolas`
+      : `${getSchoolCountForCurrentScope(input)} acompanhadas`;
+  }
+  return `${getSchoolCountForCurrentScope(input)} Esc.`;
+}
