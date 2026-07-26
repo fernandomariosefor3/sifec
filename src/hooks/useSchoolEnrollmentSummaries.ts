@@ -63,7 +63,7 @@ async function loadSummaryForSchool(
 
   const [schoolYear, snapshots] = await Promise.all([
     getSchoolYear(school.id, ANO_LETIVO),
-    listEnrollmentSnapshotsForSchool(school.id),
+    listEnrollmentSnapshotsForSchool(school.id, ANO_LETIVO),
   ]);
   const totals = calculateAccumulatedTotals(snapshots);
   const matriculaInicial = schoolYear?.matriculaInicial ?? null;
@@ -108,7 +108,7 @@ export function useSchoolEnrollmentSummaries(schools: readonly SchoolLike[], isF
       }
       const entries = await Promise.all(
         schools.map(async school => {
-          const turmasDaEscola = getClassroomsForSchool(turmas, school.id);
+          const turmasDaEscola = getClassroomsForSchool(turmas, school);
           const summary = await loadSummaryForSchool(school, turmasDaEscola, isFirebaseMode);
           return [school.id, summary] as const;
         })

@@ -234,6 +234,54 @@ describe('Fase 2A — school_years', () => {
     await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ campoNaoPrevisto: 'x' })));
   });
 
+  it('id/schoolId/anoLetivo incompatíveis com o próprio documentId são rejeitados na criação', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    // Documento "diva..._2026" mas schoolId aponta para outra escola.
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ schoolId: 'outra-escola' })));
+    // Documento "..._2026" mas anoLetivo é outro.
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ anoLetivo: 2027 })));
+  });
+
+  it('update corrige o MESMO registro (mesma escola) com sucesso — fluxo legítimo de correção', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(
+      updateDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ matriculaAtual: 850 }))
+    );
+  });
+
+  it('update não pode trocar schoolId/codInep/anoLetivo para "virar" outro registro', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ anoLetivo: 2027 }))
+    );
+    await assertFails(
+      updateDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ codInep: '99999999' }))
+    );
+  });
+
+  it('update NÃO PODE sequestrar o school_year de outra escola enviando os próprios dados por cima', async () => {
+    // Documento pertence à Escola A. Superintendente B (só tem acesso à
+    // Escola B) tenta "tomar" o documento enviando escolaNome/schoolId da
+    // própria Escola B — deve falhar tanto pela checagem de imutabilidade
+    // quanto pela autorização sobre o dono ANTIGO (resource.data.escolaNome).
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(
+      updateDoc(
+        doc(db, 'school_years', `${SCHOOL_A_ID}_2026`),
+        schoolYearPayload({ schoolId: SCHOOL_B_ID, codInep: '00000102', escolaNome: ESCOLA_B })
+      )
+    );
+  });
+
   it('exclusão comum é bloqueada — só admin raiz exclui', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
@@ -312,6 +360,55 @@ describe('Fase 2A — enrollment_snapshots', () => {
       await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
     });
     await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`)));
+  });
+
+  it('schoolId/turmaId/mesReferencia incompatíveis com o próprio documentId são rejeitados na criação', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ turmaId: 'turma-outra' }))
+    );
+    await assertFails(
+      setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ mesReferencia: '2026-04' }))
+    );
+  });
+
+  it('update corrige o MESMO snapshot (mesma escola/turma/mês) com sucesso — fluxo legítimo de correção', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(
+      updateDoc(
+        doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`),
+        snapshotPayload({ matriculaFimMes: 32, observacao: 'Corrigido após conferência.', reviewStatus: 'corrigido' })
+      )
+    );
+  });
+
+  it('update não pode trocar schoolId/turmaId/anoLetivo/mesReferencia para "virar" outro registro', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ turmaId: 'turma-b' }))
+    );
+    await assertFails(
+      updateDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ anoLetivo: 2027 }))
+    );
+  });
+
+  it('update NÃO PODE sequestrar o snapshot de outra escola enviando os próprios dados por cima', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
+    });
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(
+      updateDoc(
+        doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`),
+        snapshotPayload({ schoolId: SCHOOL_B_ID, codInep: '00000102', escolaNome: ESCOLA_B })
+      )
+    );
   });
 });
 

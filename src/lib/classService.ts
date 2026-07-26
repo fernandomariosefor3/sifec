@@ -5,6 +5,7 @@
 import { updateDocument } from './firebaseService';
 import type { Turma, TurmaModalidade } from '../types/classroom';
 import { countActiveTurmas } from './enrollmentCalculations';
+import { schoolNamesMatch, type SchoolRef } from './schoolIdentity';
 
 // Reexportado para quem só precisa da contagem de turmas ativas de uma
 // escola (ver seção 6 do plano — o total de turmas é sempre calculado,
@@ -13,8 +14,18 @@ export function getActiveClassroomCount(turmas: readonly Pick<Turma, 'ativa'>[])
   return countActiveTurmas(turmas);
 }
 
-export function getClassroomsForSchool(turmas: readonly Turma[], schoolId: string): Turma[] {
-  return turmas.filter(t => t.schoolId === schoolId || t.escolaId === schoolId);
+// Prioridade codInep → schoolId/escolaId → nome normalizado (seção 4 do
+// plano) — nunca só igualdade literal de nome. codInep primeiro porque é o
+// identificador mais estável entre sistemas; schoolId/escolaId em seguida
+// porque já são chaves exatas; schoolNamesMatch só como último recurso,
+// para turmas legadas cujo escolaId não bate com o schoolId atual da
+// escola (mesmo caso-raiz que motivou schoolIdentity.ts na Fase 1G).
+export function getClassroomsForSchool(turmas: readonly Turma[], school: SchoolRef): Turma[] {
+  return turmas.filter(t =>
+    (!!school.codInep && !!t.codInep && t.codInep === school.codInep) ||
+    (!!school.id && (t.schoolId === school.id || t.escolaId === school.id)) ||
+    schoolNamesMatch(t.escolaNome, school.nome)
+  );
 }
 
 export interface ClassYearFieldsInput {

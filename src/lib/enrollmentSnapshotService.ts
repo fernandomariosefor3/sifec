@@ -122,12 +122,21 @@ export async function saveEnrollmentSnapshot(
   return payload;
 }
 
-// Histórico completo de uma escola, em ordem cronológica (YYYY-MM ordena
-// lexicograficamente igual a cronologicamente).
+// Histórico de uma escola, em ordem cronológica (YYYY-MM ordena
+// lexicograficamente igual a cronologicamente). anoLetivo é opcional só
+// para não quebrar chamadas existentes, mas deve ser sempre informado a
+// partir do momento em que mais de um ano letivo tiver dados — sem isso, a
+// partir de 2027 esta função passaria a misturar snapshots de anos
+// diferentes da mesma escola (ver revisão pré-PR).
 export async function listEnrollmentSnapshotsForSchool(
-  schoolId: string
+  schoolId: string,
+  anoLetivo?: number
 ): Promise<EnrollmentSnapshot[]> {
-  const snap = await getDocs(query(collection(db, COLLECTION), where('schoolId', '==', schoolId)));
+  const constraints = [where('schoolId', '==', schoolId)];
+  if (anoLetivo != null) {
+    constraints.push(where('anoLetivo', '==', anoLetivo));
+  }
+  const snap = await getDocs(query(collection(db, COLLECTION), ...constraints));
   return snap.docs
     .map(d => d.data() as EnrollmentSnapshot)
     .sort((a, b) => a.mesReferencia.localeCompare(b.mesReferencia));

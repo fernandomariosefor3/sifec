@@ -47,7 +47,10 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
 
-  const turmasDaEscola = useMemo(() => getClassroomsForSchool(turmas, school.id), [turmas, school.id]);
+  const turmasDaEscola = useMemo(
+    () => getClassroomsForSchool(turmas, school),
+    [turmas, school]
+  );
   const canWrite = hasSchoolWriteAccess(school.nome);
 
   const [mesReferencia, setMesReferencia] = useState('');
@@ -78,7 +81,7 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
       try {
         const [year, history] = await Promise.all([
           getSchoolYear(school.id, ANO_LETIVO),
-          listEnrollmentSnapshotsForSchool(school.id),
+          listEnrollmentSnapshotsForSchool(school.id, ANO_LETIVO),
         ]);
         if (!cancelled) {
           setSchoolYear(year);
@@ -151,7 +154,7 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
         now: new Date().toISOString(),
       });
       setFormSuccess('Registro mensal salvo com sucesso.');
-      const history = await listEnrollmentSnapshotsForSchool(school.id);
+      const history = await listEnrollmentSnapshotsForSchool(school.id, ANO_LETIVO);
       setSnapshots(history);
     } catch (err) {
       if (err instanceof EnrollmentSnapshotValidationError) {

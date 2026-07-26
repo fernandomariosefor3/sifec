@@ -21,13 +21,34 @@ describe('getActiveClassroomCount', () => {
 
 describe('getClassroomsForSchool', () => {
   it('filtra por schoolId (Fase 2A) quando presente', () => {
-    const result = getClassroomsForSchool(turmasDivaCabral, 'diva-cabral');
+    const result = getClassroomsForSchool(turmasDivaCabral, { id: 'diva-cabral', nome: 'EEM Diva Cabral' });
     expect(result.map(t => t.id)).toEqual(['t1', 't2']);
   });
 
   it('cai para escolaId legado quando schoolId não está preenchido', () => {
-    const result = getClassroomsForSchool(turmasDivaCabral, 'figueiredo-correia');
+    const result = getClassroomsForSchool(turmasDivaCabral, { id: 'figueiredo-correia', nome: 'EEM Figueiredo Correia' });
     expect(result.map(t => t.id)).toEqual(['t3']);
+  });
+
+  it('prioriza codInep mesmo quando o id não bate (turma legada com escolaId desatualizado)', () => {
+    const turmasComInep: Turma[] = [
+      { id: 't4', escolaId: 'id-antigo-divergente', escolaNome: 'EEM Diva Cabral', nome: '4A', ano: '4º Ano', periodo: 'Matutino', codInep: '23067918' },
+    ];
+    const result = getClassroomsForSchool(turmasComInep, { id: 'diva-cabral', nome: 'Nome Qualquer', codInep: '23067918' });
+    expect(result.map(t => t.id)).toEqual(['t4']);
+  });
+
+  it('cai para nome normalizado quando nem codInep nem id/escolaId batem', () => {
+    const turmasSemIdBatendo: Turma[] = [
+      { id: 't5', escolaId: 'id-totalmente-diferente', escolaNome: 'EEM DIVA CABRAL ', nome: '5A', ano: '5º Ano', periodo: 'Matutino' },
+    ];
+    const result = getClassroomsForSchool(turmasSemIdBatendo, { id: 'diva-cabral', nome: 'EEM Diva Cabral' });
+    expect(result.map(t => t.id)).toEqual(['t5']);
+  });
+
+  it('não retorna turmas de outra escola quando nada corresponde', () => {
+    const result = getClassroomsForSchool(turmasDivaCabral, { id: 'escola-inexistente', nome: 'Escola Que Não Existe' });
+    expect(result).toEqual([]);
   });
 });
 

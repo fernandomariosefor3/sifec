@@ -317,6 +317,36 @@ service cloud.firestore {
         canWriteEscola(resource.data.escola);
     }
 
+    // Shape do documento, comum a create e update — a diferença entre os
+    // dois (imutabilidade de id/schoolId/codInep/anoLetivo, autorização
+    // sobre o dono ANTIGO do documento) fica só no match abaixo.
+    function isValidSchoolYearShape(yearId) {
+      return incoming().keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo',
+          'matriculaInicial', 'matriculaAtual', 'quantidadeTurmasAtivas',
+          'status', 'dataInicio', 'dataFim', 'ultimaAtualizacao',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        incoming().id == yearId &&
+        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        // ID determinístico validado contra os campos internos (seção 5 do
+        // plano: schoolId_anoLetivo) — impede um schoolId/anoLetivo no
+        // payload que não bate com o próprio documentId.
+        yearId == incoming().schoolId + '_' + string(incoming().anoLetivo) &&
+        (incoming().matriculaInicial == null || isNonNegInt(incoming().matriculaInicial)) &&
+        (incoming().matriculaAtual == null || isNonNegInt(incoming().matriculaAtual)) &&
+        isNonNegInt(incoming().quantidadeTurmasAtivas) &&
+        incoming().status in ['planejamento', 'ativo', 'encerrado', 'arquivado'] &&
+        (incoming().dataInicio == null || (incoming().dataInicio is string && incoming().dataInicio.size() <= 30)) &&
+        (!('dataFim' in incoming()) || incoming().dataFim == null || (incoming().dataFim is string && incoming().dataFim.size() <= 30)) &&
+        incoming().ultimaAtualizacao is string &&
+        incoming().createdAt is string && incoming().updatedAt is string &&
+        incoming().createdBy is string && incoming().updatedBy is string;
+    }
+
     // --- Fase 2A: school_years ---
     // Estrutura anual da escola. Os dados pertencem à escola+anoLetivo, não
     // ao superintendente (ver seção "Regra principal" do plano) — troca de
@@ -332,31 +362,69 @@ service cloud.firestore {
       // schoolId, mesmo quando o dado real bateria. .get(..., '') evita
       // erro de avaliação contra o documento hipotético sem o campo.
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
-      allow create, update: if isAuthorized() && isValidId(yearId) &&
+
+      allow create: if isAuthorized() && isValidId(yearId) &&
         canWriteEscola(incoming().escolaNome) &&
-        incoming().keys().hasOnly([
-          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo',
-          'matriculaInicial', 'matriculaAtual', 'quantidadeTurmasAtivas',
-          'status', 'dataInicio', 'dataFim', 'ultimaAtualizacao',
-          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
-        ]) &&
-        incoming().id is string &&
-        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
-        incoming().codInep is string && incoming().codInep.size() <= 50 &&
-        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
-        isValidAnoLetivo(incoming().anoLetivo) &&
-        (incoming().matriculaInicial == null || isNonNegInt(incoming().matriculaInicial)) &&
-        (incoming().matriculaAtual == null || isNonNegInt(incoming().matriculaAtual)) &&
-        isNonNegInt(incoming().quantidadeTurmasAtivas) &&
-        incoming().status in ['planejamento', 'ativo', 'encerrado', 'arquivado'] &&
-        (incoming().dataInicio == null || (incoming().dataInicio is string && incoming().dataInicio.size() <= 30)) &&
-        (!('dataFim' in incoming()) || incoming().dataFim == null || (incoming().dataFim is string && incoming().dataFim.size() <= 30)) &&
-        incoming().ultimaAtualizacao is string &&
-        incoming().createdAt is string && incoming().updatedAt is string &&
-        incoming().createdBy is string && incoming().updatedBy is string;
+        isValidSchoolYearShape(yearId);
+
+      // create/update SEPARADOS de propósito (ver revisão pré-PR): a versão
+      // anterior usava canWriteEscola(incoming().escolaNome) para os dois,
+      // o que autorizava um update olhando só para o payload NOVO — um
+      // superintendente da Escola B podia sequestrar o documento existente
+      // da Escola A bastando enviar escolaNome/schoolId da própria Escola B
+      // no update. Agora update exige acesso à escola JÁ DONA do documento
+      // (resource.data.escolaNome — um único canWriteEscola(), não dois: o
+      // emulador local estoura o limite de expressões ao avaliar isAdmin()
+      // repetidas vezes na mesma regra) e trava id/schoolId/codInep/
+      // anoLetivo/escolaNome como imutáveis — o ano letivo de um registro
+      // nunca muda para "virar" outro registro, e isAuthorized() sai daqui
+      // de propósito porque canWriteEscola() já implica isAuthorized().
+      allow update: if isValidId(yearId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        isValidSchoolYearShape(yearId);
+
       // Sem exclusão livre — igual a `schools`, o histórico anual só é
       // arquivado (status: 'arquivado'), nunca apagado por um usuário comum.
       allow delete: if isPlatformAdmin() && isValidId(yearId);
+    }
+
+    // Shape do documento, comum a create e update — mesma separação de
+    // responsabilidade de isValidSchoolYearShape() acima.
+    function isValidEnrollmentSnapshotShape(snapshotId) {
+      return incoming().keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
+          'anoLetivo', 'mesReferencia', 'matriculaInicioMes', 'novasMatriculas',
+          'transferenciasEntrada', 'transferenciasSaida', 'abandono', 'outrasSaidas',
+          'matriculaFimMes', 'observacao', 'reviewStatus',
+          'sourceSystem', 'sourceReportType', 'sourceReportTitle', 'sourceFileName',
+          'sourceGeneratedAt', 'sourceFileHash', 'importBatchId',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        incoming().id == snapshotId &&
+        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
+        incoming().turmaId is string && incoming().turmaId.size() <= 128 &&
+        incoming().turmaNome is string && incoming().turmaNome.size() <= 150 &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        isValidMesReferencia(incoming().mesReferencia) &&
+        // ID determinístico validado contra os campos internos (seção 7 do
+        // plano: schoolId_turmaId_mesReferencia).
+        snapshotId == incoming().schoolId + '_' + incoming().turmaId + '_' + incoming().mesReferencia &&
+        isNonNegInt(incoming().matriculaInicioMes) &&
+        isNonNegInt(incoming().novasMatriculas) &&
+        isNonNegInt(incoming().transferenciasEntrada) &&
+        isNonNegInt(incoming().transferenciasSaida) &&
+        isNonNegInt(incoming().abandono) &&
+        isNonNegInt(incoming().outrasSaidas) &&
+        isNonNegInt(incoming().matriculaFimMes) &&
+        incoming().reviewStatus in ['manual', 'importado_pendente', 'confirmado', 'divergencia', 'corrigido'] &&
+        incoming().createdAt is string && incoming().updatedAt is string &&
+        incoming().createdBy is string && incoming().updatedBy is string;
     }
 
     // --- Fase 2A: enrollment_snapshots ---
@@ -368,35 +436,28 @@ service cloud.firestore {
       // (o campo que EnrollmentSnapshotService realmente usa no where() de
       // listEnrollmentSnapshotsForSchool), não em escolaNome.
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
-      allow create, update: if isAuthorized() && isValidId(snapshotId) &&
+
+      allow create: if isAuthorized() && isValidId(snapshotId) &&
         canWriteEscola(incoming().escolaNome) &&
-        incoming().keys().hasOnly([
-          'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
-          'anoLetivo', 'mesReferencia', 'matriculaInicioMes', 'novasMatriculas',
-          'transferenciasEntrada', 'transferenciasSaida', 'abandono', 'outrasSaidas',
-          'matriculaFimMes', 'observacao', 'reviewStatus',
-          'sourceSystem', 'sourceReportType', 'sourceReportTitle', 'sourceFileName',
-          'sourceGeneratedAt', 'sourceFileHash', 'importBatchId',
-          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
-        ]) &&
-        incoming().id is string &&
-        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
-        incoming().codInep is string && incoming().codInep.size() <= 50 &&
-        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
-        incoming().turmaId is string && incoming().turmaId.size() <= 128 &&
-        incoming().turmaNome is string && incoming().turmaNome.size() <= 150 &&
-        isValidAnoLetivo(incoming().anoLetivo) &&
-        isValidMesReferencia(incoming().mesReferencia) &&
-        isNonNegInt(incoming().matriculaInicioMes) &&
-        isNonNegInt(incoming().novasMatriculas) &&
-        isNonNegInt(incoming().transferenciasEntrada) &&
-        isNonNegInt(incoming().transferenciasSaida) &&
-        isNonNegInt(incoming().abandono) &&
-        isNonNegInt(incoming().outrasSaidas) &&
-        isNonNegInt(incoming().matriculaFimMes) &&
-        incoming().reviewStatus in ['manual', 'importado_pendente', 'confirmado', 'divergencia', 'corrigido'] &&
-        incoming().createdAt is string && incoming().updatedAt is string &&
-        incoming().createdBy is string && incoming().updatedBy is string;
+        isValidEnrollmentSnapshotShape(snapshotId);
+
+      // Update = correção do MESMO mês/turma/escola (ver seção "Histórico"
+      // do plano) — nunca uma forma de mudar de escola/turma/mês mantendo o
+      // ID. Mesma correção de segurança/desempenho de school_years: um só
+      // canWriteEscola() sobre o dono ANTIGO do documento (não dois — ver
+      // comentário em school_years sobre o limite de expressões do
+      // emulador), schoolId/turmaId/anoLetivo/mesReferencia/escolaNome
+      // travados como imutáveis, isAuthorized() removido por já estar
+      // implícito em canWriteEscola().
+      allow update: if isValidId(snapshotId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().turmaId == resource.data.turmaId &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().mesReferencia == resource.data.mesReferencia &&
+        isValidEnrollmentSnapshotShape(snapshotId);
+
       allow delete: if isPlatformAdmin() && isValidId(snapshotId);
     }
 
