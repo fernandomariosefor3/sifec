@@ -45,6 +45,16 @@ rules_version = '2';
 //   superintendentes cadastrados e ativos (fecha o buraco de "qualquer
 //   conta Google"), mas não é isolado por escola. Ver recomendação no
 //   relatório para uma fase futura.
+//
+// FASE 2A — adição (sem alterar nenhuma regra acima): school_years,
+// enrollment_snapshots, imports e audit_logs. Mesmo modelo de autorização já
+// usado por schools/turmas (isAuthorized() para leitura, canWriteEscola()
+// para escrita por nome de escola), com hasOnly() nos quatro para rejeitar
+// campo inesperado — mais estrito que schools/turmas/grades/visitas (que não
+// usam hasOnly), porque são coleções novas sem dado legado a acomodar.
+// audit_logs é somente-criação: update/delete sempre bloqueados, mesmo para
+// admin, para que a trilha de auditoria nunca possa ser alterada depois de
+// gravada.
 // ============================================================================
 
 service cloud.firestore {
@@ -129,6 +139,7 @@ service cloud.firestore {
       return isAdmin() || (isActiveSuperintendent() && escolaNome in myEscolas());
     }
 
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
@@ -142,6 +153,40 @@ service cloud.firestore {
 
     function incoming() {
       return request.resource.data;
+    }
+
+    // --- Fase 2A — helpers compartilhados por school_years/enrollment_snapshots/imports/audit_logs ---
+
+    function isValidAnoLetivo(ano) {
+      return ano is int && ano >= 2000 && ano <= 2100;
+    }
+
+    function isNonNegInt(n) {
+      return n is int && n >= 0;
+    }
+
+    function isValidMesReferencia(mes) {
+      return mes is string && mes.matches('^[0-9]{4}-(0[1-9]|1[0-2])$');
+    }
+
+    // `imports` só tem schoolId/codInep (sem escolaNome — ver seção 15 do
+    // plano), então a autorização por escola precisa de um lookup no
+    // documento real de `schools` em vez de canWriteEscola() direto.
+    function schoolNomeById(schoolId) {
+      return get(/databases/$(database)/documents/schools/$(schoolId)).data.nome;
+    }
+
+    // schoolId is string vem primeiro e de propósito: garante que
+    // $(schoolId) nunca seja interpolado num path com um tipo inesperado,
+    // mesmo que esta função seja chamada antes de outra validação de campo
+    // (mesma ordem "autorização antes do shape" já usada em canWriteEscola()
+    // para turmas/visitas).
+    function canWriteSchoolById(schoolId) {
+      return schoolId is string && (isAdmin() || (
+        isActiveSuperintendent() &&
+        exists(/databases/$(database)/documents/schools/$(schoolId)) &&
+        schoolNomeById(schoolId) in myEscolas()
+      ));
     }
 
     // --- Superintendentes ---
@@ -270,6 +315,186 @@ service cloud.firestore {
         incoming().status is string;
       allow delete: if isAuthorized() && isValidId(visitaId) &&
         canWriteEscola(resource.data.escola);
+    }
+
+    // --- Fase 2A: school_years ---
+    // Estrutura anual da escola. Os dados pertencem à escola+anoLetivo, não
+    // ao superintendente (ver seção "Regra principal" do plano) — troca de
+    // responsável não afeta estes documentos, só o vínculo em
+    // superintendentes/{email}.escolas.
+    match /school_years/{yearId} {
+      // Baseado em schoolId (canWriteSchoolById), não em escolaNome: os
+      // serviços desta fase sempre consultam school_years filtrando por
+      // schoolId (ver SchoolYearService), e o Firestore só consegue provar
+      // a segurança de uma consulta (list) quando a regra depende do MESMO
+      // campo usado no where() da consulta — uma regra baseada em
+      // escolaNome nunca seria aprovada para uma consulta filtrada por
+      // schoolId, mesmo quando o dado real bateria. .get(..., '') evita
+      // erro de avaliação contra o documento hipotético sem o campo.
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create, update: if isAuthorized() && isValidId(yearId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        incoming().keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo',
+          'matriculaInicial', 'matriculaAtual', 'quantidadeTurmasAtivas',
+          'status', 'dataInicio', 'dataFim', 'ultimaAtualizacao',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        incoming().id is string &&
+        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        (incoming().matriculaInicial == null || isNonNegInt(incoming().matriculaInicial)) &&
+        (incoming().matriculaAtual == null || isNonNegInt(incoming().matriculaAtual)) &&
+        isNonNegInt(incoming().quantidadeTurmasAtivas) &&
+        incoming().status in ['planejamento', 'ativo', 'encerrado', 'arquivado'] &&
+        (incoming().dataInicio == null || (incoming().dataInicio is string && incoming().dataInicio.size() <= 30)) &&
+        (!('dataFim' in incoming()) || incoming().dataFim == null || (incoming().dataFim is string && incoming().dataFim.size() <= 30)) &&
+        incoming().ultimaAtualizacao is string &&
+        incoming().createdAt is string && incoming().updatedAt is string &&
+        incoming().createdBy is string && incoming().updatedBy is string;
+      // Sem exclusão livre — igual a `schools`, o histórico anual só é
+      // arquivado (status: 'arquivado'), nunca apagado por um usuário comum.
+      allow delete: if isPlatformAdmin() && isValidId(yearId);
+    }
+
+    // --- Fase 2A: enrollment_snapshots ---
+    // Matrícula mensal por turma. Imutável por mês: o ID determinístico
+    // (schoolId_turmaId_YYYY-MM) garante que corrigir um mês nunca sobrescreve
+    // outro. Exclusão comum bloqueada (seção "Histórico" do plano).
+    match /enrollment_snapshots/{snapshotId} {
+      // Ver comentário equivalente em school_years — baseado em schoolId
+      // (o campo que EnrollmentSnapshotService realmente usa no where() de
+      // listEnrollmentSnapshotsForSchool), não em escolaNome.
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create, update: if isAuthorized() && isValidId(snapshotId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        incoming().keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
+          'anoLetivo', 'mesReferencia', 'matriculaInicioMes', 'novasMatriculas',
+          'transferenciasEntrada', 'transferenciasSaida', 'abandono', 'outrasSaidas',
+          'matriculaFimMes', 'observacao', 'reviewStatus',
+          'sourceSystem', 'sourceReportType', 'sourceReportTitle', 'sourceFileName',
+          'sourceGeneratedAt', 'sourceFileHash', 'importBatchId',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        incoming().id is string &&
+        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
+        incoming().turmaId is string && incoming().turmaId.size() <= 128 &&
+        incoming().turmaNome is string && incoming().turmaNome.size() <= 150 &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        isValidMesReferencia(incoming().mesReferencia) &&
+        isNonNegInt(incoming().matriculaInicioMes) &&
+        isNonNegInt(incoming().novasMatriculas) &&
+        isNonNegInt(incoming().transferenciasEntrada) &&
+        isNonNegInt(incoming().transferenciasSaida) &&
+        isNonNegInt(incoming().abandono) &&
+        isNonNegInt(incoming().outrasSaidas) &&
+        isNonNegInt(incoming().matriculaFimMes) &&
+        incoming().reviewStatus in ['manual', 'importado_pendente', 'confirmado', 'divergencia', 'corrigido'] &&
+        incoming().createdAt is string && incoming().updatedAt is string &&
+        incoming().createdBy is string && incoming().updatedBy is string;
+      allow delete: if isPlatformAdmin() && isValidId(snapshotId);
+    }
+
+    // --- Fase 2A: imports ---
+    // Sem escolaNome no schema (seção 15) — autorização por escola faz
+    // lookup em `schools/{schoolId}` via canWriteSchoolById(). Todo import
+    // nasce em 'analisando' ou 'aguardando_confirmacao': nunca é possível
+    // CRIAR um documento já 'confirmado'/'processado' por esta via.
+    match /imports/{importId} {
+      // Mesma restrição por escola de canAccessEscola(), via lookup por
+      // schoolId (ver canWriteSchoolById — imports não tem escolaNome).
+      // .get() com default pelo mesmo motivo do comentário em school_years.
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isAuthorized() && isValidId(importId) &&
+        incoming().schoolId is string &&
+        // Checagem de integridade, independente de autorização: mesmo um
+        // admin não pode criar um import apontando para um schoolId que não
+        // existe em `schools` (seção 23 do plano — "importação sem escola
+        // válida rejeitada").
+        exists(/databases/$(database)/documents/schools/$(incoming().schoolId)) &&
+        canWriteSchoolById(incoming().schoolId) &&
+        incoming().status in ['analisando', 'aguardando_confirmacao'] &&
+        incoming().keys().hasOnly([
+          'id', 'sourceSystem', 'reportType', 'reportTitle', 'fileName', 'fileHash',
+          'schoolId', 'codInep', 'anoLetivo', 'mesReferencia', 'bimestre',
+          'recordsRead', 'recordsCreated', 'recordsUpdated', 'recordsIgnored',
+          'inconsistencies', 'status', 'preview',
+          'createdAt', 'confirmedAt', 'processedAt', 'createdBy', 'confirmedBy'
+        ]) &&
+        incoming().id is string &&
+        incoming().sourceSystem in ['Manual', 'SIGE Escola', 'SIGAE', 'Importação administrativa', 'Migração'] &&
+        incoming().reportType is string && incoming().reportType.size() <= 150 &&
+        incoming().reportTitle is string && incoming().reportTitle.size() <= 200 &&
+        incoming().fileName is string && incoming().fileName.size() <= 260 &&
+        incoming().fileHash is string && incoming().fileHash.size() <= 128 &&
+        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        isNonNegInt(incoming().recordsRead) &&
+        isNonNegInt(incoming().recordsCreated) &&
+        isNonNegInt(incoming().recordsUpdated) &&
+        isNonNegInt(incoming().recordsIgnored) &&
+        incoming().inconsistencies is list &&
+        incoming().createdAt is string &&
+        incoming().createdBy is string;
+      // Update cobre tanto reprocessar o preview quanto confirmar/avançar o
+      // status — em ambos os casos exige poder escrever na MESMA escola do
+      // import (admin, ou o superintendente vinculado a ela). Um
+      // superintendente sem vínculo àquela escola nunca confirma o import
+      // (seção 19 do plano).
+      // A escola do import nunca muda por update (só um novo import aponta
+      // para outra escola) — comparar por igualdade em vez de chamar
+      // canWriteSchoolById() duas vezes evita duplicar toda a cadeia de
+      // get()/exists() interna e estourar o limite de expressões do
+      // emulador local em avaliações mais profundas.
+      allow update: if isAuthorized() && isValidId(importId) &&
+        incoming().schoolId == resource.data.get('schoolId', '') &&
+        canWriteSchoolById(incoming().schoolId) &&
+        incoming().keys().hasOnly([
+          'id', 'sourceSystem', 'reportType', 'reportTitle', 'fileName', 'fileHash',
+          'schoolId', 'codInep', 'anoLetivo', 'mesReferencia', 'bimestre',
+          'recordsRead', 'recordsCreated', 'recordsUpdated', 'recordsIgnored',
+          'inconsistencies', 'status', 'preview',
+          'createdAt', 'confirmedAt', 'processedAt', 'createdBy', 'confirmedBy'
+        ]) &&
+        incoming().status in [
+          'analisando', 'aguardando_confirmacao', 'confirmado',
+          'processado', 'processado_com_alertas', 'cancelado', 'erro'
+        ] &&
+        isNonNegInt(incoming().recordsRead) &&
+        isNonNegInt(incoming().recordsCreated) &&
+        isNonNegInt(incoming().recordsUpdated) &&
+        isNonNegInt(incoming().recordsIgnored);
+      allow delete: if isPlatformAdmin() && isValidId(importId);
+    }
+
+    // --- Fase 2A: audit_logs ---
+    // Somente-criação por design: update/delete sempre bloqueados, inclusive
+    // para admin — uma trilha de auditoria que pode ser editada não serve
+    // para nada. userEmail precisa bater com quem está autenticado, para que
+    // ninguém grave um log em nome de outra pessoa.
+    match /audit_logs/{logId} {
+      allow read: if isAdmin();
+      allow create: if isAuthorized() && isValidId(logId) &&
+        incoming().keys().hasOnly([
+          'id', 'collectionName', 'documentId', 'schoolId', 'codInep', 'anoLetivo',
+          'operation', 'previousValue', 'newValue', 'source', 'importBatchId',
+          'userId', 'userEmail', 'timestamp'
+        ]) &&
+        incoming().id is string &&
+        incoming().collectionName is string && incoming().collectionName.size() <= 100 &&
+        incoming().documentId is string && incoming().documentId.size() <= 200 &&
+        incoming().operation in ['create', 'update', 'archive', 'import', 'correction'] &&
+        incoming().source in ['Manual', 'SIGE Escola', 'SIGAE', 'Importação administrativa', 'Migração'] &&
+        incoming().userId is string &&
+        incoming().userEmail is string && incoming().userEmail.lower() == myEmail() &&
+        incoming().timestamp is string;
+      allow update, delete: if false;
     }
   }
 }

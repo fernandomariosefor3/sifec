@@ -1,0 +1,390 @@
+// Fase 2A — testes das regras de school_years/enrollment_snapshots/imports/
+// audit_logs, usando o Firebase Emulator (100% local, mesmo padrão de
+// tests/firestore.rules.test.ts). Nenhum nome ou dado real de aluno é usado
+// — tudo aqui é sintético, só para este teste.
+import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import {
+  assertFails,
+  assertSucceeds,
+  initializeTestEnvironment,
+  type RulesTestEnvironment,
+} from '@firebase/rules-unit-testing';
+import { readFileSync } from 'node:fs';
+import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
+
+const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
+const ACTIVE_A_EMAIL = 'super.a@example.com'; // vinculado só à Escola A
+const ACTIVE_B_EMAIL = 'super.b@example.com'; // vinculado só à Escola B
+const INACTIVE_EMAIL = 'super.inativo@example.com';
+const STRANGER_EMAIL = 'estranho@example.com';
+
+const ESCOLA_A = 'Escola A - Teste Fase 2A';
+const ESCOLA_B = 'Escola B - Teste Fase 2A';
+const SCHOOL_A_ID = 'escola-a-2a';
+const SCHOOL_B_ID = 'escola-b-2a';
+
+let testEnv: RulesTestEnvironment;
+
+beforeAll(async () => {
+  testEnv = await initializeTestEnvironment({
+    projectId: 'sifec-rules-test-fase2a',
+    firestore: {
+      rules: readFileSync('firestore.rules', 'utf8'),
+      host: '127.0.0.1',
+      port: 8090,
+    },
+  });
+});
+
+afterAll(async () => {
+  await testEnv.cleanup();
+});
+
+beforeEach(async () => {
+  await testEnv.clearFirestore();
+  await testEnv.withSecurityRulesDisabled(async (context) => {
+    const db = context.firestore();
+
+    await setDoc(doc(db, 'superintendentes', ADMIN_EMAIL), {
+      id: 'root', nome: 'Admin Raiz (Teste)', cargo: 'Superintendente de Regulação Seduc',
+      email: ADMIN_EMAIL, escolas: [], ativo: true, role: 'admin',
+    });
+    await setDoc(doc(db, 'superintendentes', ACTIVE_A_EMAIL), {
+      id: 'super-a', nome: 'Superintendente A (Teste)', cargo: 'Superintendente Regional',
+      email: ACTIVE_A_EMAIL, escolas: [ESCOLA_A], ativo: true, role: 'superintendent',
+    });
+    await setDoc(doc(db, 'superintendentes', ACTIVE_B_EMAIL), {
+      id: 'super-b', nome: 'Superintendente B (Teste)', cargo: 'Superintendente Regional',
+      email: ACTIVE_B_EMAIL, escolas: [ESCOLA_B], ativo: true, role: 'superintendent',
+    });
+    await setDoc(doc(db, 'superintendentes', INACTIVE_EMAIL), {
+      id: 'super-inativo', nome: 'Superintendente Inativo (Teste)', cargo: 'Superintendente Regional',
+      email: INACTIVE_EMAIL, escolas: [ESCOLA_A], ativo: false, role: 'superintendent',
+    });
+
+    await setDoc(doc(db, 'schools', SCHOOL_A_ID), {
+      nome: ESCOLA_A, codInep: '00000101', cidade: 'Fortaleza',
+      matriculas: 100, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
+    });
+    await setDoc(doc(db, 'schools', SCHOOL_B_ID), {
+      nome: ESCOLA_B, codInep: '00000102', cidade: 'Fortaleza',
+      matriculas: 100, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
+    });
+  });
+});
+
+function ctxFor(email: string | null) {
+  return email
+    ? testEnv.authenticatedContext(email, { email })
+    : testEnv.unauthenticatedContext();
+}
+
+function schoolYearPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    id: `${SCHOOL_A_ID}_2026`,
+    schoolId: SCHOOL_A_ID,
+    codInep: '00000101',
+    escolaNome: ESCOLA_A,
+    anoLetivo: 2026,
+    matriculaInicial: null,
+    matriculaAtual: null,
+    quantidadeTurmasAtivas: 0,
+    status: 'planejamento',
+    dataInicio: null,
+    dataFim: null,
+    ultimaAtualizacao: '2026-01-05T00:00:00.000Z',
+    createdAt: '2026-01-05T00:00:00.000Z',
+    updatedAt: '2026-01-05T00:00:00.000Z',
+    createdBy: ACTIVE_A_EMAIL,
+    updatedBy: ACTIVE_A_EMAIL,
+    ...overrides,
+  };
+}
+
+function snapshotPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    id: `${SCHOOL_A_ID}_turma-a_2026-03`,
+    schoolId: SCHOOL_A_ID,
+    codInep: '00000101',
+    escolaNome: ESCOLA_A,
+    turmaId: 'turma-a',
+    turmaNome: 'Turma A - Teste',
+    anoLetivo: 2026,
+    mesReferencia: '2026-03',
+    matriculaInicioMes: 30,
+    novasMatriculas: 2,
+    transferenciasEntrada: 0,
+    transferenciasSaida: 1,
+    abandono: 0,
+    outrasSaidas: 0,
+    matriculaFimMes: 31,
+    reviewStatus: 'manual',
+    createdAt: '2026-03-01T00:00:00.000Z',
+    updatedAt: '2026-03-01T00:00:00.000Z',
+    createdBy: ACTIVE_A_EMAIL,
+    updatedBy: ACTIVE_A_EMAIL,
+    ...overrides,
+  };
+}
+
+function importPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    id: `${SCHOOL_A_ID}_hash1`,
+    sourceSystem: 'SIGE Escola',
+    reportType: 'Enturmação',
+    reportTitle: 'Relação de Enturmação — Teste',
+    fileName: 'enturmacao-teste.pdf',
+    fileHash: 'hash1',
+    schoolId: SCHOOL_A_ID,
+    codInep: '00000101',
+    anoLetivo: 2026,
+    recordsRead: 0,
+    recordsCreated: 0,
+    recordsUpdated: 0,
+    recordsIgnored: 0,
+    inconsistencies: [],
+    status: 'analisando',
+    preview: { linhas: 10 },
+    createdAt: '2026-03-01T00:00:00.000Z',
+    createdBy: ACTIVE_A_EMAIL,
+    ...overrides,
+  };
+}
+
+function auditLogPayload(email: string, overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'log-1',
+    collectionName: 'school_years',
+    documentId: `${SCHOOL_A_ID}_2026`,
+    schoolId: SCHOOL_A_ID,
+    codInep: '00000101',
+    anoLetivo: 2026,
+    operation: 'update',
+    previousValue: { matriculaAtual: 100 },
+    newValue: { matriculaAtual: 110 },
+    source: 'Manual',
+    userId: 'uid-1',
+    userEmail: email,
+    timestamp: '2026-03-01T00:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('Fase 2A — school_years', () => {
+  it('administrador cria e lê school_year de qualquer escola', async () => {
+    const db = ctxFor(ADMIN_EMAIL).firestore();
+    await assertSucceeds(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload()));
+    await assertSucceeds(getDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+
+  it('superintendente grava school_year da própria escola', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload()));
+  });
+
+  it('superintendente não grava school_year de outra escola', async () => {
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload()));
+  });
+
+  it('superintendente sem vínculo não lê school_year de outra escola', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(getDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+
+  it('superintendente com vínculo lê a própria escola normalmente', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(getDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+
+  it('usuário inativo não lê nem escreve', async () => {
+    const db = ctxFor(INACTIVE_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload()));
+    await assertFails(getDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+
+  it('usuário não cadastrado é bloqueado', async () => {
+    const db = ctxFor(STRANGER_EMAIL).firestore();
+    await assertFails(getDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+
+  it('matriculaInicial negativa é rejeitada', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ matriculaInicial: -1 })));
+  });
+
+  it('matriculaAtual decimal é rejeitada', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ matriculaAtual: 10.5 })));
+  });
+
+  it('status fora do enum é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ status: 'invalido' })));
+  });
+
+  it('campo inesperado é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ campoNaoPrevisto: 'x' })));
+  });
+
+  it('exclusão comum é bloqueada — só admin raiz exclui', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'school_years', `${SCHOOL_A_ID}_2026`)));
+    await assertSucceeds(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+});
+
+describe('Fase 2A — enrollment_snapshots', () => {
+  it('superintendente grava snapshot mensal da própria escola', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload()));
+  });
+
+  it('superintendente não grava snapshot de outra escola', async () => {
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload()));
+  });
+
+  it('valor negativo é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ abandono: -1 }))
+    );
+  });
+
+  it('valor decimal é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ novasMatriculas: 1.5 }))
+    );
+  });
+
+  it('mês de referência inválido é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-13`), snapshotPayload({ mesReferencia: '2026-13' }))
+    );
+    await assertFails(
+      setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_03-2026`), snapshotPayload({ mesReferencia: '03-2026' }))
+    );
+  });
+
+  it('fevereiro preservado ao gravar março — são documentos (IDs) diferentes', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(
+      setDoc(
+        doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-02`),
+        snapshotPayload({ id: `${SCHOOL_A_ID}_turma-a_2026-02`, mesReferencia: '2026-02', matriculaFimMes: 30, matriculaInicioMes: 28 })
+      )
+    );
+    await assertSucceeds(
+      setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload())
+    );
+
+    const fevereiro = await getDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-02`));
+    const marco = await getDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`));
+    if (fevereiro.data()?.matriculaFimMes !== 30) throw new Error('fevereiro foi alterado inesperadamente');
+    if (marco.data()?.matriculaFimMes !== 31) throw new Error('março não foi gravado corretamente');
+  });
+
+  it('consulta por escola só retorna (e só é permitida) para quem tem vínculo com ela', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
+    });
+    const ownDb = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(getDocs(query(collection(ownDb, 'enrollment_snapshots'), where('schoolId', '==', SCHOOL_A_ID))));
+
+    const otherDb = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(getDocs(query(collection(otherDb, 'enrollment_snapshots'), where('schoolId', '==', SCHOOL_A_ID))));
+  });
+
+  it('exclusão de snapshot é sempre bloqueada para usuário comum', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
+    });
+    await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`)));
+  });
+});
+
+describe('Fase 2A — imports', () => {
+  it('superintendente cria import para a própria escola', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(setDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), importPayload()));
+  });
+
+  it('import sem escola válida (schoolId de escola inexistente) é rejeitado', async () => {
+    const db = ctxFor(ADMIN_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'imports', 'escola-inexistente_hash1'), importPayload({ id: 'escola-inexistente_hash1', schoolId: 'escola-inexistente' }))
+    );
+  });
+
+  it('import não pode nascer já confirmado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), importPayload({ status: 'confirmado' })));
+  });
+
+  it('superintendente sem permissão não confirma import de outra escola', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'imports', `${SCHOOL_A_ID}_hash1`), importPayload());
+    });
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(updateDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), { status: 'confirmado' }));
+  });
+
+  it('superintendente com permissão confirma import da própria escola', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'imports', `${SCHOOL_A_ID}_hash1`), importPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(updateDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), { status: 'confirmado', confirmedAt: '2026-03-02T00:00:00.000Z', confirmedBy: ACTIVE_A_EMAIL }));
+  });
+
+  it('campo inesperado no import é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), importPayload({ campoNaoPrevisto: 'x' })));
+  });
+});
+
+describe('Fase 2A — audit_logs', () => {
+  it('usuário autorizado registra um log de auditoria em seu próprio nome', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(setDoc(doc(db, 'audit_logs', 'log-1'), auditLogPayload(ACTIVE_A_EMAIL)));
+  });
+
+  it('não é possível gravar um log em nome de outro usuário', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'audit_logs', 'log-1'), auditLogPayload(ACTIVE_B_EMAIL)));
+  });
+
+  it('usuário comum não lê audit_logs — só administrador', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'audit_logs', 'log-1'), auditLogPayload(ACTIVE_A_EMAIL));
+    });
+    await assertFails(getDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'audit_logs', 'log-1')));
+    await assertSucceeds(getDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'audit_logs', 'log-1')));
+  });
+
+  it('audit_log não pode ser alterado, nem por administrador', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'audit_logs', 'log-1'), auditLogPayload(ACTIVE_A_EMAIL));
+    });
+    await assertFails(updateDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'audit_logs', 'log-1'), { operation: 'correction' }));
+  });
+
+  it('audit_log não pode ser excluído, nem por administrador', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'audit_logs', 'log-1'), auditLogPayload(ACTIVE_A_EMAIL));
+    });
+    await assertFails(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'audit_logs', 'log-1')));
+  });
+});
