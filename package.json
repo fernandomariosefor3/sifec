@@ -10,7 +10,7 @@
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
     "test:rules": "firebase emulators:exec --only firestore \"vitest run tests/firestore.rules.test.ts tests/schoolYearRules.test.ts\"",
-    "test:unit": "vitest run tests/superintendentRules.test.ts tests/schoolIdentity.test.ts tests/deterministicIds.test.ts tests/enrollmentCalculations.test.ts tests/schoolYearService.test.ts tests/enrollmentSnapshotService.test.ts tests/classService.test.ts tests/importService.test.ts tests/auditService.test.ts tests/schoolYearOwnershipTransfer.test.ts"
+    "test:unit": "vitest run tests/superintendentRules.test.ts tests/schoolIdentity.test.ts tests/deterministicIds.test.ts tests/enrollmentCalculations.test.ts tests/schoolYearService.test.ts tests/enrollmentSnapshotService.test.ts tests/classService.test.ts tests/importService.test.ts tests/auditService.test.ts tests/schoolYearOwnershipTransfer.test.ts tests/schoolSetupGuidance.test.ts tests/panelFillGuidance.component.test.tsx tests/monthlyEnrollmentForm.component.test.tsx tests/schoolsTableEnrollmentAction.component.test.tsx"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -27,6 +27,8 @@
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^5.0.1",
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/react": "^19.2.17",
@@ -35,6 +37,7 @@
     "esbuild": "^0.25.0",
     "firebase-admin": "^14.2.0",
     "firebase-tools": "^13.29.1",
+    "jsdom": "^30.0.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

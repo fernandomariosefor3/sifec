@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, Save, AlertTriangle, Lock, Settings } from 'lucide-react';
+import { X, AlertTriangle, Settings } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { hasSchoolWriteAccess } from '../lib/superintendentService';
 import { getSchoolYear } from '../lib/schoolYearService';
@@ -21,16 +21,36 @@ import {
   formatEnrollmentValue,
   suggestMatriculaInicioMes,
 } from '../lib/enrollmentCalculations';
+import {
+  getClassroomsSetupGuidance,
+  getMonthlyEnrollmentSetupGuidance,
+  getSchoolYearSetupGuidance,
+} from '../lib/schoolSetupGuidance';
 import { DEMO_SCHOOL_YEARS_2026 } from '../data/demoSchoolYears';
 import SchoolYearConfigForm from './SchoolYearConfigForm';
 import ClassroomFormModal from './ClassroomFormModal';
 import ClassroomsSection from './ClassroomsSection';
 import EnrollmentHistoryTable from './EnrollmentHistoryTable';
+import PanelFillGuidance from './PanelFillGuidance';
+import MonthlyEnrollmentForm from './MonthlyEnrollmentForm';
 import type { Turma } from '../types/classroom';
 import type { SchoolYear } from '../types/schoolYear';
 import type { EnrollmentSnapshot } from '../types/enrollment';
 
 const ANO_LETIVO = 2026;
+
+// IDs das seções internas do painel — usados pelos atalhos "Preencha nesta
+// ordem" (correção de usabilidade) para rolar até a seção correspondente.
+// Puramente de navegação: não alteram nenhuma lógica de gravação.
+const SECTION_IDS = {
+  schoolYearConfig: 'school-year-config',
+  classrooms: 'classrooms-section',
+  monthlyEnrollment: 'monthly-enrollment',
+} as const;
+
+function scrollToSection(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 interface SchoolLike {
   id: string;
@@ -140,6 +160,11 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
   }, [turmaId, mesReferencia]);
 
   const turmasAtivas = getActiveClassroomCount(turmasDaEscola);
+  // Orientação de estado inicial (seção 7 da correção de usabilidade) —
+  // puramente informativo, nunca bloqueia o preenchimento.
+  const schoolYearGuidance = getSchoolYearSetupGuidance(schoolYear != null);
+  const classroomsGuidance = getClassroomsSetupGuidance(turmasDaEscola.length > 0);
+  const monthlyEnrollmentGuidance = getMonthlyEnrollmentSetupGuidance(snapshots.length > 0);
   const demoTotals = !isFirebaseMode ? DEMO_SCHOOL_YEARS_2026[school.id]?.totals : undefined;
   const totals = demoTotals ?? calculateAccumulatedTotals(snapshots);
   const matriculaInicial = schoolYear?.matriculaInicial ?? null;
@@ -251,15 +276,31 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
   return (
     <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
       <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-4xl max-h-[90vh] shadow-2xl relative flex flex-col overflow-hidden">
-        <div className="bg-slate-50 border-b border-slate-150 px-6 py-4 flex justify-between items-center shrink-0">
-          <div>
-            <span className="text-[10px] text-emerald-700 tracking-wider uppercase font-black font-mono">Acompanhar Matrículas — {ANO_LETIVO}</span>
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">{school.nome}</h3>
-            <p className="text-[10px] text-slate-500 font-mono">INEP: {school.codInep}</p>
+        <div className="bg-slate-50 border-b border-slate-150 px-6 py-4 shrink-0">
+          <div className="flex justify-between items-start">
+            <div>
+              <span className="text-[10px] text-emerald-700 tracking-wider uppercase font-black font-mono">Acompanhar Matrículas — {ANO_LETIVO}</span>
+              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">{school.nome}</h3>
+              <p className="text-[10px] text-slate-500 font-mono">INEP: {school.codInep}</p>
+            </div>
+            <button onClick={onClose} className="text-slate-400 hover:text-slate-650 transition">
+              <X size={18} />
+            </button>
           </div>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-650 transition">
-            <X size={18} />
-          </button>
+
+          {/* Orientação de preenchimento (correção de usabilidade) — atalhos
+              sempre visíveis no topo do painel, rolam até a seção
+              correspondente. Não altera nenhuma lógica de gravação. */}
+          {!loading && !loadError && (
+            <PanelFillGuidance
+              onScrollToSchoolYearConfig={() => scrollToSection(SECTION_IDS.schoolYearConfig)}
+              onScrollToClassrooms={() => scrollToSection(SECTION_IDS.classrooms)}
+              onScrollToMonthlyEnrollment={() => scrollToSection(SECTION_IDS.monthlyEnrollment)}
+              schoolYearGuidance={schoolYearGuidance}
+              classroomsGuidance={classroomsGuidance}
+              monthlyEnrollmentGuidance={monthlyEnrollmentGuidance}
+            />
+          )}
         </div>
 
         <div className="overflow-y-auto p-6 space-y-6">
@@ -310,7 +351,7 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
               </section>
 
               {/* Configuração do ano letivo (seção 6 do plano) */}
-              <section>
+              <section id={SECTION_IDS.schoolYearConfig}>
                 <h4 className="text-xs font-black uppercase text-slate-700 mb-2 flex items-center gap-1.5">
                   <Settings size={14} /> Configuração do Ano Letivo {ANO_LETIVO}
                 </h4>
@@ -330,6 +371,7 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
 
               {/* B. Turmas */}
               <ClassroomsSection
+                id={SECTION_IDS.classrooms}
                 turmasDaEscola={turmasDaEscola}
                 canWrite={canWrite}
                 isFirebaseMode={isFirebaseMode}
@@ -340,89 +382,35 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
               />
 
               {/* C. Registro mensal */}
-              <section>
-                <h4 className="text-xs font-black uppercase text-slate-700 mb-2 flex items-center gap-1.5">
-                  <Save size={14} /> Registro mensal
-                </h4>
-                {!canWrite ? (
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-500 flex items-center gap-2">
-                    <Lock size={12} className="text-amber-500" /> Sem permissão para registrar matrícula mensal desta escola.
-                  </div>
-                ) : !isFirebaseMode ? (
-                  <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-[11px] text-slate-500">
-                    Modo demonstração — faça login para registrar matrícula mensal real.
-                  </div>
-                ) : (
-                  <form onSubmit={handleSaveSnapshot} className="space-y-3 bg-slate-50 border border-slate-200 rounded-xl p-4">
-                    {formError && (
-                      <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-[11px] rounded-lg font-bold">{formError}</div>
-                    )}
-                    {formSuccess && (
-                      <div className="p-2.5 bg-emerald-50 border border-emerald-200 text-emerald-700 text-[11px] rounded-lg font-bold">{formSuccess}</div>
-                    )}
-                    <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-black uppercase text-slate-600 block">Turma *</label>
-                        <select value={turmaId} onChange={e => setTurmaId(e.target.value)} className="w-full p-2 bg-white border border-slate-250 text-xs rounded-lg" required>
-                          <option value="">Selecione</option>
-                          {turmasDaEscola.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
-                        </select>
-                      </div>
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-black uppercase text-slate-600 block">Mês de referência *</label>
-                        <input
-                          type="month" value={mesReferencia} onChange={e => setMesReferencia(e.target.value)}
-                          min={`${ANO_LETIVO}-01`} max={`${ANO_LETIVO}-12`}
-                          className="w-full p-2 bg-white border border-slate-250 text-xs rounded-lg" required
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
-                      {[
-                        ['Matr. início do mês', matriculaInicioMes, setMatriculaInicioMes],
-                        ['Novas matrículas', novasMatriculas, setNovasMatriculas],
-                        ['Transf. entrada', transferenciasEntrada, setTransferenciasEntrada],
-                        ['Transf. saída', transferenciasSaida, setTransferenciasSaida],
-                        ['Abandono', abandono, setAbandono],
-                        ['Outras saídas', outrasSaidas, setOutrasSaidas],
-                      ].map(([label, value, setter]) => (
-                        <div key={label as string} className="space-y-1">
-                          <label className="text-[9px] font-black uppercase text-slate-600 block">{label as string}</label>
-                          <input
-                            type="number" min={0} step={1} value={value as string}
-                            onChange={e => (setter as (v: string) => void)(e.target.value)}
-                            className="w-full p-2 bg-white border border-slate-250 text-xs rounded-lg"
-                          />
-                        </div>
-                      ))}
-                    </div>
-                    <div className="grid grid-cols-2 gap-3 items-end">
-                      <div className="space-y-1">
-                        <label className="text-[9px] font-black uppercase text-slate-600 block">Matrícula final *</label>
-                        <input
-                          type="number" min={0} step={1} value={matriculaFimMes}
-                          onChange={e => setMatriculaFimMes(e.target.value)}
-                          className="w-full p-2 bg-white border border-slate-250 text-xs rounded-lg"
-                        />
-                      </div>
-                      <div className="text-[10px] text-slate-500">Cálculo esperado: <strong>{calculoPreview}</strong></div>
-                    </div>
-                    {divergente && (
-                      <div className="p-2.5 bg-amber-50 border border-amber-200 text-amber-700 text-[11px] rounded-lg flex items-start gap-1.5">
-                        <AlertTriangle size={12} className="shrink-0 mt-0.5" />
-                        Matrícula final diverge do cálculo esperado ({calculoPreview}). Informe uma observação para salvar mesmo assim.
-                      </div>
-                    )}
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-black uppercase text-slate-600 block">Observação {divergente ? '*' : ''}</label>
-                      <textarea value={observacao} onChange={e => setObservacao(e.target.value)} className="w-full p-2 bg-white border border-slate-250 text-xs rounded-lg" rows={2} />
-                    </div>
-                    <button type="submit" className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition">
-                      Salvar registro mensal
-                    </button>
-                  </form>
-                )}
-              </section>
+              <MonthlyEnrollmentForm
+                sectionId={SECTION_IDS.monthlyEnrollment}
+                canWrite={canWrite}
+                isFirebaseMode={isFirebaseMode}
+                turmasDaEscola={turmasDaEscola}
+                anoLetivo={ANO_LETIVO}
+                formError={formError}
+                formSuccess={formSuccess}
+                turmaId={turmaId}
+                onTurmaIdChange={setTurmaId}
+                mesReferencia={mesReferencia}
+                onMesReferenciaChange={setMesReferencia}
+                movementFields={[
+                  { label: 'Matr. início do mês', value: matriculaInicioMes, onChange: setMatriculaInicioMes },
+                  { label: 'Novas matrículas', value: novasMatriculas, onChange: setNovasMatriculas },
+                  { label: 'Transf. entrada', value: transferenciasEntrada, onChange: setTransferenciasEntrada },
+                  { label: 'Transf. saída', value: transferenciasSaida, onChange: setTransferenciasSaida },
+                  { label: 'Abandono', value: abandono, onChange: setAbandono },
+                  { label: 'Outras saídas', value: outrasSaidas, onChange: setOutrasSaidas },
+                ]}
+                matriculaFimMes={matriculaFimMes}
+                onMatriculaFimMesChange={setMatriculaFimMes}
+                observacao={observacao}
+                onObservacaoChange={setObservacao}
+                calculoPreview={calculoPreview}
+                divergente={divergente}
+                onSubmit={handleSaveSnapshot}
+                onCreateFirstClassroom={openCreateClassroom}
+              />
 
               {/* D. Histórico */}
               <EnrollmentHistoryTable snapshots={snapshots} />

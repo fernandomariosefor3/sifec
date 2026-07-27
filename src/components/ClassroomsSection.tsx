@@ -7,6 +7,7 @@ import { formatEnrollmentValue } from '../lib/enrollmentCalculations';
 import type { Turma } from '../types/classroom';
 
 interface ClassroomsSectionProps {
+  id?: string;
   turmasDaEscola: Turma[];
   canWrite: boolean;
   isFirebaseMode: boolean;
@@ -17,12 +18,12 @@ interface ClassroomsSectionProps {
 }
 
 export default function ClassroomsSection({
-  turmasDaEscola, canWrite, isFirebaseMode, turmaActionError, onCreateClick, onEditClick, onToggleAtiva,
+  id, turmasDaEscola, canWrite, isFirebaseMode, turmaActionError, onCreateClick, onEditClick, onToggleAtiva,
 }: ClassroomsSectionProps) {
   const canManage = canWrite && isFirebaseMode;
 
   return (
-    <section>
+    <section id={id}>
       <div className="flex items-center justify-between mb-2">
         <h4 className="text-xs font-black uppercase text-slate-700 flex items-center gap-1.5">
           <Users size={14} /> Turmas
