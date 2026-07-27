@@ -9,8 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:rules": "firebase emulators:exec --only firestore \"vitest run tests/firestore.rules.test.ts\"",
-    "test:unit": "vitest run tests/superintendentRules.test.ts tests/schoolIdentity.test.ts"
+    "test:rules": "firebase emulators:exec --only firestore \"vitest run tests/firestore.rules.test.ts tests/schoolYearRules.test.ts\"",
+    "test:unit": "vitest run tests/superintendentRules.test.ts tests/schoolIdentity.test.ts tests/deterministicIds.test.ts tests/enrollmentCalculations.test.ts tests/schoolYearService.test.ts tests/enrollmentSnapshotService.test.ts tests/classService.test.ts tests/importService.test.ts tests/auditService.test.ts tests/schoolYearOwnershipTransfer.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

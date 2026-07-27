@@ -260,22 +260,63 @@ describe('Firestore Rules propostas — SIFEC', () => {
         matriculas: 50, idebMedio: 5.5, metaIdeb: 6.0, status: 'Ativo',
       }));
     });
+
+    it('superintendente não altera o nome da escola por update comum', async () => {
+      const db = ctxFor(ACTIVE_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'schools', 'escola-a-teste'), {
+        nome: 'Nome Divergente Qualquer', codInep: '00000001', cidade: 'Fortaleza',
+        matriculas: 150, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
+      }));
+    });
+
+    it('superintendente não altera o código INEP da escola por update comum', async () => {
+      const db = ctxFor(ACTIVE_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'schools', 'escola-a-teste'), {
+        nome: ESCOLA_A, codInep: '99999999', cidade: 'Fortaleza',
+        matriculas: 150, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
+      }));
+    });
+
+    it('administrador também não altera a identidade (nome/codInep) por update comum', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertFails(updateDoc(doc(db, 'schools', 'escola-a-teste'), {
+        nome: 'Nome Divergente Qualquer', codInep: '00000001', cidade: 'Fortaleza',
+        matriculas: 150, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
+      }));
+      await assertFails(updateDoc(doc(db, 'schools', 'escola-a-teste'), {
+        nome: ESCOLA_A, codInep: '99999999', cidade: 'Fortaleza',
+        matriculas: 150, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
+      }));
+    });
+
+    it('atualização de indicadores permitidos (não identitários) continua funcionando', async () => {
+      const db = ctxFor(ACTIVE_EMAIL).firestore();
+      await assertSucceeds(updateDoc(doc(db, 'schools', 'escola-a-teste'), {
+        nome: ESCOLA_A, codInep: '00000001', cidade: 'Fortaleza',
+        matriculas: 812, idebMedio: 6.3, metaIdeb: 6.6, status: 'Ativo',
+      }));
+    });
   });
 
   describe('TURMAS', () => {
     it('responsável cria turma de escola atribuída', async () => {
       const db = ctxFor(ACTIVE_EMAIL).firestore();
       await assertSucceeds(setDoc(doc(db, 'turmas', 'turma-a-nova'), {
-        escolaId: 'escola-a-teste', escolaNome: ESCOLA_A, nome: 'Turma A Nova - Teste',
+        schoolId: 'escola-a-teste', escolaId: 'escola-a-teste', escolaNome: ESCOLA_A,
+        codInep: '00000001', anoLetivo: 2026, nome: 'Turma A Nova - Teste',
         ano: '2º Ano', periodo: 'Tarde', alunosSinalizados: 0,
+        matriculaInicial: 0, matriculaAtual: 0,
+        createdAt: '2026-01-05T00:00:00.000Z', createdBy: ACTIVE_EMAIL,
+        updatedAt: '2026-01-05T00:00:00.000Z', updatedBy: ACTIVE_EMAIL,
       }));
     });
 
-    it('responsável atualiza turma de escola atribuída', async () => {
+    it('responsável atualiza turma de escola atribuída (turma legada, sem enriquecer campos novos)', async () => {
       const db = ctxFor(ACTIVE_EMAIL).firestore();
       await assertSucceeds(updateDoc(doc(db, 'turmas', 'turma-a-teste'), {
         escolaId: 'escola-a-teste', escolaNome: ESCOLA_A, nome: 'Turma A - Teste',
         ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 3,
+        updatedAt: '2026-01-06T00:00:00.000Z', updatedBy: ACTIVE_EMAIL,
       }));
     });
 
@@ -284,12 +325,15 @@ describe('Firestore Rules propostas — SIFEC', () => {
       await assertFails(updateDoc(doc(db, 'turmas', 'turma-b-teste'), {
         escolaId: 'escola-b-teste', escolaNome: ESCOLA_B, nome: 'Turma B - Teste',
         ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 3,
+        updatedAt: '2026-01-06T00:00:00.000Z', updatedBy: ACTIVE_EMAIL,
       }));
     });
 
-    it('exclusão indevida é bloqueada', async () => {
-      const db = ctxFor(ACTIVE_EMAIL).firestore();
-      await assertFails(deleteDoc(doc(db, 'turmas', 'turma-b-teste')));
+    it('superintendente comum não exclui turma — só admin raiz', async () => {
+      const activeDb = ctxFor(ACTIVE_EMAIL).firestore();
+      await assertFails(deleteDoc(doc(activeDb, 'turmas', 'turma-a-teste')));
+      const adminDb = ctxFor(ADMIN_EMAIL).firestore();
+      await assertSucceeds(deleteDoc(doc(adminDb, 'turmas', 'turma-a-teste')));
     });
   });
 

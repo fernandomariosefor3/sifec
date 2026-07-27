@@ -1,8 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { GraduationCap, PlusCircle, Search, MapPin, BarChart2, Plus, X, Edit, Lock } from 'lucide-react';
+import { GraduationCap, PlusCircle, Search, MapPin, BarChart2, Plus, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { subscribeToCollection, addDocument, updateDocument, SEED_SCHOOLS } from '../lib/firebaseService';
-import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, addSchoolToLoggedInSuperintendent } from '../lib/superintendentService';
+import { isSchoolVisible, getActiveSuperintendentId, addSchoolToLoggedInSuperintendent, isCurrentUserAdmin } from '../lib/superintendentService';
+import { useSchoolEnrollmentSummaries } from '../hooks/useSchoolEnrollmentSummaries';
+import SchoolEnrollmentPanel from './SchoolEnrollmentPanel';
+import SchoolsTable from './SchoolsTable';
 
 interface School {
   id: string;
@@ -22,6 +25,7 @@ export default function EscolasView() {
   const [cityFilter, setCityFilter] = useState('Todas');
   const [showAddForm, setShowAddForm] = useState(false);
   const [isFirebaseMode, setIsFirebaseMode] = useState(false);
+  const [panelSchool, setPanelSchool] = useState<School | null>(null);
 
   // Form states with strict scheme validations
   const [editingSchool, setEditingSchool] = useState<School | null>(null);
@@ -77,6 +81,7 @@ export default function EscolasView() {
   // Verification & Submission
   const handleSaveSchool = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError('');
     if (!nome.trim() || !codInep.trim() || !matriculas || !idebMedio || !metaIdeb) {
       setFormError('Por favor, preencha todos os campos obrigatórios.');
       return;
@@ -88,16 +93,24 @@ export default function EscolasView() {
       return;
     }
 
-    if (editingSchool) {
-      if (!hasSchoolWriteAccess(editingSchool.nome)) {
-        setFormError('Acesso Negado: Você não tem permissão para editar os dados desta escola.');
-        return;
-      }
+    // Cadastro mestre (criar e editar escola) é restrito a administrador —
+    // superintendente comum usa "Acompanhar matrículas", nunca este
+    // formulário (revisão final PR #8, seção 4).
+    if (!isCurrentUserAdmin()) {
+      setFormError('Acesso Negado: somente administradores podem cadastrar ou editar o registro mestre de uma escola.');
+      return;
+    }
 
+    if (editingSchool) {
+      // nome/codInep são imutáveis por update comum (ver firestore.rules) —
+      // sempre reenvia os valores originais do registro, nunca o que está
+      // no formulário (os campos ficam desabilitados na interface, mas
+      // isto garante que a regra nunca rejeite a edição dos indicadores
+      // por uma divergência acidental).
       const updatedSchool: School = {
         ...editingSchool,
-        nome,
-        codInep,
+        nome: editingSchool.nome,
+        codInep: editingSchool.codInep,
         cidade,
         matriculas: parseInt(matriculas),
         idebMedio: parseFloat(idebMedio),
@@ -115,8 +128,12 @@ export default function EscolasView() {
         setSchools(schools.map(s => s.id === editingSchool.id ? updatedSchool : s));
       }
     } else {
-      // If logged in, automatically assign newly created school to this user
-      addSchoolToLoggedInSuperintendent(nome);
+      // Duplicidade de codInep entre as escolas j\u00e1 carregadas \u2014 checado
+      // antes de gravar, nunca depois (revis\u00e3o final PR #8, se\u00e7\u00e3o 4).
+      if (schools.some(s => s.codInep === codInep)) {
+        setFormError('J\u00e1 existe uma escola cadastrada com este c\u00f3digo INEP.');
+        return;
+      }
 
       const generatedId = nome.toLowerCase()
         .normalize('NFD')
@@ -144,6 +161,10 @@ export default function EscolasView() {
       } else {
         setSchools([newSchool, ...schools]);
       }
+      // S\u00f3 depois da cria\u00e7\u00e3o bem-sucedida (Firestore, ou estado local em
+      // modo demonstra\u00e7\u00e3o) \u2014 nunca antes, sen\u00e3o a carteira local aponta
+      // para uma escola que pode n\u00e3o ter sido gravada de verdade.
+      addSchoolToLoggedInSuperintendent(nome);
     }
     
     setShowAddForm(false);
@@ -180,6 +201,11 @@ export default function EscolasView() {
     return matchesSearch && matchesCity;
   });
 
+  // Fase 2A — matrícula inicial/atual, turmas ativas, média por turma e
+  // entradas/saídas acumuladas, buscados por escola (nunca a coleção
+  // inteira sem filtro — ver useSchoolEnrollmentSummaries).
+  const { summaries, summariesLoading, summaryErrors, turmas: turmasFase2A, refresh: refreshEnrollmentSummaries } = useSchoolEnrollmentSummaries(filteredSchools, isFirebaseMode);
+
   return (
     <div className="space-y-6">
       {/* Page header with subtitle and trigger */}
@@ -189,21 +215,23 @@ export default function EscolasView() {
           <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Escolas da Coordenadoria Regional</h2>
           <p className="text-xs text-slate-500 font-normal">Controle cadastral, matrículas ativas e monitoramento de desempenho do IDEB.</p>
         </div>
-        <button
-          onClick={() => {
-            setEditingSchool(null);
-            setNome('');
-            setCodInep('');
-            setCidade('Fortaleza');
-            setMatriculas('');
-            setIdebMedio('');
-            setMetaIdeb('');
-            setShowAddForm(true);
-          }}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-sans transition flex items-center gap-1.5 shadow-sm"
-        >
-          <Plus size={16} /> Cadastrar Nova Escola
-        </button>
+        {isCurrentUserAdmin() && (
+          <button
+            onClick={() => {
+              setEditingSchool(null);
+              setNome('');
+              setCodInep('');
+              setCidade('Fortaleza');
+              setMatriculas('');
+              setIdebMedio('');
+              setMetaIdeb('');
+              setShowAddForm(true);
+            }}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-sans transition flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus size={16} /> Cadastrar Nova Escola
+          </button>
+        )}
       </div>
 
       {/* Grid summarizing core regional school markers */}
@@ -275,77 +303,14 @@ export default function EscolasView() {
       </div>
 
        {/* Schools List Render */}
-      <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="bg-slate-50/70 border-b border-slate-200 text-slate-500 font-bold text-[11px] uppercase tracking-wider">
-                <th className="py-3.5 px-6">Código INEP</th>
-                <th className="py-3.5 px-6">Nome da Unidade Escolar</th>
-                <th className="py-3.5 px-6">Sede / Cidade</th>
-                <th className="py-3.5 px-6 text-right">Alunos Regulados</th>
-                <th className="py-3.5 px-6 text-center">Meta SPAECE 2026</th>
-                <th className="py-3.5 px-6 text-center">Meta IDEB</th>
-                <th className="py-3.5 px-6 text-center">Status</th>
-                <th className="py-3.5 px-6 text-right">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 text-slate-700 font-medium">
-              {filteredSchools.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400 font-normal">
-                    Nenhuma escola corresponde aos critérios de pesquisa informados.
-                  </td>
-                </tr>
-              ) : (
-                filteredSchools.map((school) => (
-                  <tr key={school.id} className="hover:bg-slate-55/40 transition">
-                    <td className="py-4 px-6 font-mono text-slate-500 text-[11px] font-bold">{school.codInep}</td>
-                    <td className="py-4 px-6 font-extrabold text-slate-900 text-sm">{school.nome}</td>
-                    <td className="py-4 px-6">
-                      <span className="flex items-center gap-1.5">
-                        <MapPin size={12} className="text-slate-400" />
-                        {school.cidade}
-                      </span>
-                    </td>
-                    <td className="py-4 px-6 text-right font-bold text-slate-800">{school.matriculas}</td>
-                    <td className="py-4 px-6 text-center">
-                      <span className="font-extrabold text-brand-turquoise font-mono text-xs">{school.idebMedio.toFixed(1)}</span>
-                    </td>
-
-                    <td className="py-4 px-6 text-center font-mono font-bold text-slate-500">{school.metaIdeb.toFixed(1)}</td>
-                    <td className="py-4 px-6 text-center">
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                        school.status === 'Ativo'
-                          ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                          : 'bg-amber-50 border-amber-200 text-amber-700'
-                      }`}>
-                        {school.status}
-                      </span>
-                    </td>
-                    <td className="py-4 px-6 text-right">
-                      {hasSchoolWriteAccess(school.nome) ? (
-                        <button
-                          onClick={() => handleOpenEdit(school)}
-                          className="p-1.5 hover:bg-slate-100 hover:text-blue-750 text-slate-400 rounded-lg transition"
-                          title="Editar Escola"
-                        >
-                          <Edit size={14} />
-                        </button>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 text-slate-400 font-mono text-[10px] bg-slate-50 border border-slate-200 px-2 py-1 rounded-md" title="Sem permissão de edição para este usuário">
-                          <Lock size={10} className="text-amber-500" />
-                          Restrito
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+      <SchoolsTable
+        schools={filteredSchools}
+        summaries={summaries}
+        summariesLoading={summariesLoading}
+        summaryErrors={summaryErrors}
+        onEdit={handleOpenEdit}
+        onOpenEnrollmentPanel={setPanelSchool}
+      />
 
       {/* Add School Modal Overlay */}
       {showAddForm && (
@@ -372,28 +337,34 @@ export default function EscolasView() {
               )}
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-700 block">Nome da Unidade Escolar *</label>
+                <label className="text-[10px] font-black uppercase text-slate-700 block">
+                  Nome da Unidade Escolar * {editingSchool && <span className="text-slate-400 font-normal normal-case">(identidade — não editável)</span>}
+                </label>
                 <input
                   type="text"
                   required
+                  disabled={!!editingSchool}
                   placeholder="Ex: EEMTI Cinderela de Nazaré"
                   value={nome}
                   onChange={(e) => setNome(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-700 block">Código INEP (8 dígitos) *</label>
+                  <label className="text-[10px] font-black uppercase text-slate-700 block">
+                    Código INEP (8 dígitos) * {editingSchool && <span className="text-slate-400 font-normal normal-case">(não editável)</span>}
+                  </label>
                   <input
                     type="text"
                     required
+                    disabled={!!editingSchool}
                     maxLength={8}
                     placeholder="Ex: 23075841"
                     value={codInep}
                     onChange={(e) => setCodInep(e.target.value.replace(/\D/g, ''))}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs font-mono rounded-xl"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs font-mono rounded-xl disabled:bg-slate-100 disabled:text-slate-500"
                   />
                 </div>
 
@@ -465,6 +436,16 @@ export default function EscolasView() {
             </form>
           </div>
         </div>
+      )}
+
+      {panelSchool && (
+        <SchoolEnrollmentPanel
+          school={panelSchool}
+          turmas={turmasFase2A}
+          isFirebaseMode={isFirebaseMode}
+          onClose={() => setPanelSchool(null)}
+          onDataChanged={refreshEnrollmentSummaries}
+        />
       )}
     </div>
   );
