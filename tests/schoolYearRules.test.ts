@@ -498,6 +498,69 @@ describe('Correção final PR #8 — turmas (create/update/delete separados)', (
       })
     );
   });
+
+  describe('último ajuste de integridade — validação de campos novos no update', () => {
+    it('Ativar/Inativar (só ativa boolean) continua funcionando', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'turmas', 'turma-toggle'), turmaPayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        updateDoc(doc(db, 'turmas', 'turma-toggle'), {
+          ativa: false, updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+
+    it('update rejeita ativa com tipo errado (string em vez de boolean)', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'turmas', 'turma-ativa-invalida'), turmaPayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'turmas', 'turma-ativa-invalida'), {
+          ativa: 'false', updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+
+    it('update rejeita modalidade fora do enum', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'turmas', 'turma-modalidade-invalida'), turmaPayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'turmas', 'turma-modalidade-invalida'), {
+          modalidade: 'Inventada', updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+
+    it('update rejeita matriculaAtual negativa', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'turmas', 'turma-matricula-invalida'), turmaPayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'turmas', 'turma-matricula-invalida'), {
+          matriculaAtual: -5, updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+
+    it('Editar turma com campos pedagógicos válidos continua funcionando', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'turmas', 'turma-edicao-valida'), turmaPayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        updateDoc(doc(db, 'turmas', 'turma-edicao-valida'), {
+          modalidade: 'Tempo Integral', cargaHoraria: 900, matriculaAtual: 32,
+          updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+  });
 });
 
 describe('Fase 2A — enrollment_snapshots', () => {

@@ -376,6 +376,20 @@ service cloud.firestore {
         : true;
     }
 
+    // Campos novos (Fase 2A) genuinamente opcionais da turma — quando
+    // presentes no payload, precisam ter o tipo certo. Reutilizada por
+    // create e update: no update, nem toda gravação toca estes campos
+    // (ex.: Ativar/Inativar só envia `ativa`), então a validação é sempre
+    // "se presente, válido" (último ajuste de integridade das turmas —
+    // antes, só o create validava; um update malformado de ativa/
+    // modalidade/cargaHoraria passava sem checagem nenhuma de tipo).
+    function isValidTurmaOptionalFieldsIfPresent() {
+      return
+        (!('modalidade' in incoming()) || incoming().modalidade in ['Regular', 'Tempo Integral', 'Educação Profissional', 'EJA', 'Educação Especial', 'Outra']) &&
+        (!('cargaHoraria' in incoming()) || isNonNegInt(incoming().cargaHoraria)) &&
+        (!('ativa' in incoming()) || incoming().ativa is bool);
+    }
+
     match /turmas/{turmaId} {
       allow read: if isAuthorized();
 
@@ -396,9 +410,7 @@ service cloud.firestore {
         incoming().ano is string && incoming().ano.size() <= 20 &&
         incoming().periodo is string && incoming().periodo.size() <= 50 &&
         incoming().alunosSinalizados is number &&
-        (!('modalidade' in incoming()) || incoming().modalidade in ['Regular', 'Tempo Integral', 'Educação Profissional', 'EJA', 'Educação Especial', 'Outra']) &&
-        (!('cargaHoraria' in incoming()) || isNonNegInt(incoming().cargaHoraria)) &&
-        (!('ativa' in incoming()) || incoming().ativa is bool) &&
+        isValidTurmaOptionalFieldsIfPresent() &&
         incoming().createdAt is string && incoming().createdBy is string &&
         incoming().updatedAt is string && incoming().updatedBy is string;
 
@@ -421,6 +433,9 @@ service cloud.firestore {
         incoming().ano is string && incoming().ano.size() <= 20 &&
         incoming().periodo is string && incoming().periodo.size() <= 50 &&
         incoming().alunosSinalizados is number &&
+        isValidTurmaOptionalFieldsIfPresent() &&
+        (!('matriculaInicial' in incoming()) || isNonNegInt(incoming().matriculaInicial)) &&
+        (!('matriculaAtual' in incoming()) || isNonNegInt(incoming().matriculaAtual)) &&
         incoming().updatedAt is string && incoming().updatedBy is string;
 
       // Superintendente comum NUNCA exclui turma — o fluxo normal é
