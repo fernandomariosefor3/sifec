@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { GraduationCap, PlusCircle, Search, MapPin, BarChart2, Plus, X } from 'lucide-react';
+import { GraduationCap, PlusCircle, Search, MapPin, BarChart2, Plus, X, ClipboardList } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { subscribeToCollection, addDocument, updateDocument, SEED_SCHOOLS } from '../lib/firebaseService';
 import { isSchoolVisible, getActiveSuperintendentId, addSchoolToLoggedInSuperintendent, isCurrentUserAdmin } from '../lib/superintendentService';
@@ -302,7 +302,18 @@ export default function EscolasView() {
         </div>
       </div>
 
-       {/* Schools List Render */}
+      {/* Faixa de orientação — antes o único caminho para preencher matrícula/
+          turmas/registro mensal era um ícone escondido na coluna Ações; o
+          usuário não descobria onde entrar. Discreta, aparece para admin e
+          superintendente, não repete por linha (correção de usabilidade). */}
+      <div className="bg-brand-turquoise/5 border border-brand-turquoise/20 rounded-xl px-4 py-2.5 text-[11px] text-slate-600 flex items-center gap-2">
+        <ClipboardList size={14} className="text-brand-turquoise shrink-0" />
+        <span>
+          Para informar matrícula inicial, cadastrar turmas ou lançar a movimentação mensal, clique em <strong>“Preencher dados 2026”</strong> na escola desejada.
+        </span>
+      </div>
+
+      {/* Schools List Render */}
       <SchoolsTable
         schools={filteredSchools}
         summaries={summaries}
