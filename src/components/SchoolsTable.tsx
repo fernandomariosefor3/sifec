@@ -1,4 +1,5 @@
-import { MapPin, Edit, Lock, ClipboardList } from 'lucide-react';
+import type { ReactNode } from 'react';
+import { MapPin, Edit, Lock, ClipboardList, AlertTriangle } from 'lucide-react';
 import { hasSchoolWriteAccess } from '../lib/superintendentService';
 import { formatEnrollmentValue } from '../lib/enrollmentCalculations';
 import type { SchoolEnrollmentSummary } from '../hooks/useSchoolEnrollmentSummaries';
@@ -17,11 +18,23 @@ interface School {
 interface SchoolsTableProps {
   schools: School[];
   summaries: Record<string, SchoolEnrollmentSummary>;
+  summariesLoading: boolean;
+  summaryErrors: Record<string, string>;
   onEdit: (school: School) => void;
   onOpenEnrollmentPanel: (school: School) => void;
 }
 
-export default function SchoolsTable({ schools, summaries, onEdit, onOpenEnrollmentPanel }: SchoolsTableProps) {
+// Enquanto carrega, mostra "Carregando..."; sem resumo confirmado (ainda
+// não carregou, ou falhou), mostra "Não informado" — nunca 0 por ausência
+// do dado (seção 10 do plano). Zero só aparece depois que o resumo
+// carregou e confirmou o valor real.
+function summaryCell(loading: boolean, hasSummary: boolean, value: ReactNode): ReactNode {
+  if (loading) return <span className="text-slate-400 font-normal">Carregando...</span>;
+  if (!hasSummary) return <span className="text-slate-400 font-normal">Não informado</span>;
+  return value;
+}
+
+export default function SchoolsTable({ schools, summaries, summariesLoading, summaryErrors, onEdit, onOpenEnrollmentPanel }: SchoolsTableProps) {
   return (
     <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
       <div className="overflow-x-auto">
@@ -55,33 +68,54 @@ export default function SchoolsTable({ schools, summaries, onEdit, onOpenEnrollm
             ) : (
               schools.map((school) => {
                 const summary = summaries[school.id];
+                const hasSummary = summary != null;
+                const summaryError = summaryErrors[school.id];
                 return (
                   <tr key={school.id} className="hover:bg-slate-55/40 transition">
                     <td className="py-4 px-6 font-mono text-slate-500 text-[11px] font-bold">{school.codInep}</td>
-                    <td className="py-4 px-6 font-extrabold text-slate-900 text-sm">{school.nome}</td>
+                    <td className="py-4 px-6 font-extrabold text-slate-900 text-sm">
+                      {school.nome}
+                      {summaryError && (
+                        <span title={summaryError} className="ml-1.5 inline-flex text-amber-500 align-middle">
+                          <AlertTriangle size={12} />
+                        </span>
+                      )}
+                    </td>
                     <td className="py-4 px-6">
                       <span className="flex items-center gap-1.5">
                         <MapPin size={12} className="text-slate-400" />
                         {school.cidade}
                       </span>
                     </td>
-                    <td className="py-4 px-6 text-right font-bold text-slate-800">{formatEnrollmentValue(summary?.matriculaInicial)}</td>
-                    <td className="py-4 px-6 text-right font-bold text-slate-800">{formatEnrollmentValue(summary?.matriculaAtual)}</td>
+                    <td className="py-4 px-6 text-right font-bold text-slate-800">
+                      {summaryCell(summariesLoading, hasSummary, formatEnrollmentValue(summary?.matriculaInicial))}
+                    </td>
+                    <td className="py-4 px-6 text-right font-bold text-slate-800">
+                      {summaryCell(summariesLoading, hasSummary, formatEnrollmentValue(summary?.matriculaAtual))}
+                    </td>
                     <td className="py-4 px-6 text-right font-bold">
-                      {summary?.variacao == null ? (
+                      {summaryCell(summariesLoading, hasSummary, summary?.variacao == null ? (
                         <span className="text-slate-400 font-normal">Não informado</span>
                       ) : (
                         <span className={summary.variacao >= 0 ? 'text-emerald-600' : 'text-rose-600'}>
                           {summary.variacao >= 0 ? `+${summary.variacao}` : summary.variacao}
                         </span>
-                      )}
+                      ))}
                     </td>
-                    <td className="py-4 px-6 text-right text-slate-700">{summary?.turmasAtivas ?? 0}</td>
-                    <td className="py-4 px-6 text-right text-slate-700">{summary?.mediaPorTurma == null ? 'Não informado' : summary.mediaPorTurma.toFixed(1)}</td>
-                    <td className="py-4 px-6 text-right text-slate-700">{summary?.entradasAcumuladas ?? 0}</td>
-                    <td className="py-4 px-6 text-right text-slate-700">{summary?.saidasAcumuladas ?? 0}</td>
+                    <td className="py-4 px-6 text-right text-slate-700">
+                      {summaryCell(summariesLoading, hasSummary, summary?.turmasAtivas)}
+                    </td>
+                    <td className="py-4 px-6 text-right text-slate-700">
+                      {summaryCell(summariesLoading, hasSummary, summary?.mediaPorTurma == null ? 'Não informado' : summary.mediaPorTurma.toFixed(1))}
+                    </td>
+                    <td className="py-4 px-6 text-right text-slate-700">
+                      {summaryCell(summariesLoading, hasSummary, summary?.entradasAcumuladas)}
+                    </td>
+                    <td className="py-4 px-6 text-right text-slate-700">
+                      {summaryCell(summariesLoading, hasSummary, summary?.saidasAcumuladas)}
+                    </td>
                     <td className="py-4 px-6 text-[11px] text-slate-500">
-                      {summary?.ultimaAtualizacao ? summary.ultimaAtualizacao.slice(0, 10) : 'Não informado'}
+                      {summaryCell(summariesLoading, hasSummary, summary?.ultimaAtualizacao ? summary.ultimaAtualizacao.slice(0, 10) : 'Não informado')}
                     </td>
                     <td className="py-4 px-6 text-center">
                       <span className="font-extrabold text-brand-turquoise font-mono text-xs">{school.idebMedio.toFixed(1)}</span>

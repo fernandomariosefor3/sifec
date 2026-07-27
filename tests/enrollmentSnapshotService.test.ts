@@ -54,6 +54,12 @@ describe('validateEnrollmentSnapshotInput', () => {
     );
   });
 
+  it('rejeita mês de referência fora do ano letivo informado', () => {
+    expect(() => validateEnrollmentSnapshotInput(baseInput({ mesReferencia: '2027-02', anoLetivo: 2026 }))).toThrow(
+      EnrollmentSnapshotValidationError
+    );
+  });
+
   it('rejeita divergência sem observação', () => {
     expect(() => validateEnrollmentSnapshotInput(baseInput({ matriculaFimMes: 999 }))).toThrow(
       EnrollmentSnapshotValidationError

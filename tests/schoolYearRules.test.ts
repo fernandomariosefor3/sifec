@@ -70,6 +70,17 @@ beforeEach(async () => {
       nome: ESCOLA_B, codInep: '00000102', cidade: 'Fortaleza',
       matriculas: 100, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
     });
+
+    // Turmas reais para isCanonicalTurmaOfSchool — enrollment_snapshots só
+    // pode referenciar uma turma que exista e pertença à MESMA escola.
+    await setDoc(doc(db, 'turmas', 'turma-a'), {
+      schoolId: SCHOOL_A_ID, escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A,
+      nome: 'Turma A - Teste', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0,
+    });
+    await setDoc(doc(db, 'turmas', 'turma-b'), {
+      schoolId: SCHOOL_B_ID, escolaId: SCHOOL_B_ID, escolaNome: ESCOLA_B,
+      nome: 'Turma B - Teste', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0,
+    });
   });
 });
 
@@ -282,6 +293,44 @@ describe('Fase 2A — school_years', () => {
     );
   });
 
+  it('update não pode reescrever createdAt/createdBy', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ createdAt: '2020-01-01T00:00:00.000Z' }))
+    );
+    await assertFails(
+      updateDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ createdBy: 'outro@example.com' }))
+    );
+  });
+
+  describe('propriedade canônica na criação (bloqueantes do PR #8)', () => {
+    it('A. superintendente da Escola A não cria school_year usando o schoolId real da Escola B', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      // schoolId aponta para a Escola B de verdade, mas escolaNome é a
+      // Escola A (que o superintendente A tem permissão de escrever) — o
+      // ataque que canWriteEscola(incoming().escolaNome) sozinho não pegava.
+      await assertFails(
+        setDoc(
+          doc(db, 'school_years', `${SCHOOL_B_ID}_2026`),
+          schoolYearPayload({ id: `${SCHOOL_B_ID}_2026`, schoolId: SCHOOL_B_ID, escolaNome: ESCOLA_A })
+        )
+      );
+    });
+
+    it('D. codInep ou escolaNome divergentes do canônico da escola são rejeitados mesmo com schoolId correto', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ codInep: '99999999' }))
+      );
+      await assertFails(
+        setDoc(doc(db, 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload({ escolaNome: 'Nome Divergente Qualquer' }))
+      );
+    });
+  });
+
   it('exclusão comum é bloqueada — só admin raiz exclui', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
@@ -323,6 +372,16 @@ describe('Fase 2A — enrollment_snapshots', () => {
     );
     await assertFails(
       setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_03-2026`), snapshotPayload({ mesReferencia: '03-2026' }))
+    );
+  });
+
+  it('mês de referência de outro ano (fora do anoLetivo) é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(
+        doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2027-03`),
+        snapshotPayload({ id: `${SCHOOL_A_ID}_turma-a_2027-03`, mesReferencia: '2027-03' })
+      )
     );
   });
 
@@ -410,6 +469,63 @@ describe('Fase 2A — enrollment_snapshots', () => {
       )
     );
   });
+
+  it('update não pode reescrever createdAt/createdBy', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ createdAt: '2020-01-01T00:00:00.000Z' }))
+    );
+    await assertFails(
+      updateDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ createdBy: 'outro@example.com' }))
+    );
+  });
+
+  describe('propriedade canônica na criação (bloqueantes do PR #8)', () => {
+    it('B. superintendente da Escola A não cria snapshot usando o schoolId real da Escola B', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        setDoc(
+          doc(db, 'enrollment_snapshots', `${SCHOOL_B_ID}_turma-a_2026-03`),
+          snapshotPayload({ id: `${SCHOOL_B_ID}_turma-a_2026-03`, schoolId: SCHOOL_B_ID, escolaNome: ESCOLA_A })
+        )
+      );
+    });
+
+    it('C. turma pertencente a outra escola é rejeitada mesmo com schoolId/codInep/escolaNome corretos', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      // turma-b pertence à Escola B (ver seed em beforeEach) — a Escola A
+      // não pode registrar um snapshot próprio referenciando essa turma.
+      await assertFails(
+        setDoc(
+          doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-b_2026-03`),
+          snapshotPayload({ id: `${SCHOOL_A_ID}_turma-b_2026-03`, turmaId: 'turma-b' })
+        )
+      );
+    });
+
+    it('D. codInep ou escolaNome divergentes do canônico da escola são rejeitados mesmo com schoolId correto', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ codInep: '99999999' }))
+      );
+      await assertFails(
+        setDoc(doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload({ escolaNome: 'Nome Divergente Qualquer' }))
+      );
+    });
+
+    it('snapshot referenciando uma turma inexistente é rejeitado', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        setDoc(
+          doc(db, 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-fantasma_2026-03`),
+          snapshotPayload({ id: `${SCHOOL_A_ID}_turma-fantasma_2026-03`, turmaId: 'turma-fantasma' })
+        )
+      );
+    });
+  });
 });
 
 describe('Fase 2A — imports', () => {
@@ -450,6 +566,28 @@ describe('Fase 2A — imports', () => {
     const db = ctxFor(ACTIVE_A_EMAIL).firestore();
     await assertFails(setDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), importPayload({ campoNaoPrevisto: 'x' })));
   });
+
+  it('importId incompatível com schoolId_fileHash é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'imports', 'id-qualquer'), importPayload({ id: 'id-qualquer' })));
+  });
+
+  it('incoming().id divergente do documentId é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), importPayload({ id: 'outro-id' })));
+  });
+
+  it('update não pode reescrever id/codInep/anoLetivo/fileHash/createdAt/createdBy', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'imports', `${SCHOOL_A_ID}_hash1`), importPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(updateDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), { codInep: '99999999' }));
+    await assertFails(updateDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), { anoLetivo: 2027 }));
+    await assertFails(updateDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), { fileHash: 'outro-hash' }));
+    await assertFails(updateDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), { createdAt: '2020-01-01T00:00:00.000Z' }));
+    await assertFails(updateDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), { createdBy: 'outro@example.com' }));
+  });
 });
 
 describe('Fase 2A — audit_logs', () => {
@@ -483,5 +621,48 @@ describe('Fase 2A — audit_logs', () => {
       await setDoc(doc(ctx.firestore(), 'audit_logs', 'log-1'), auditLogPayload(ACTIVE_A_EMAIL));
     });
     await assertFails(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'audit_logs', 'log-1')));
+  });
+
+  it('log escolar apontando para escola de outra carteira é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    // ACTIVE_A_EMAIL só tem acesso à Escola A — tentar gravar um log
+    // "escolar" (collectionName em isSchoolScopedAuditCollection) com o
+    // schoolId real da Escola B deve falhar.
+    await assertFails(
+      setDoc(
+        doc(db, 'audit_logs', 'log-carteira-errada'),
+        auditLogPayload(ACTIVE_A_EMAIL, { id: 'log-carteira-errada', schoolId: SCHOOL_B_ID, codInep: '00000102' })
+      )
+    );
+  });
+
+  it('log escolar com codInep divergente do canônico da escola é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(
+        doc(db, 'audit_logs', 'log-codinep-errado'),
+        auditLogPayload(ACTIVE_A_EMAIL, { id: 'log-codinep-errado', codInep: '99999999' })
+      )
+    );
+  });
+
+  it('log escolar sem schoolId é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    const payload = auditLogPayload(ACTIVE_A_EMAIL, { id: 'log-sem-escola' });
+    delete (payload as Record<string, unknown>).schoolId;
+    await assertFails(setDoc(doc(db, 'audit_logs', 'log-sem-escola'), payload));
+  });
+
+  it('log de coleção não-escolar (ex.: superintendentes) não exige schoolId', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    const payload = auditLogPayload(ACTIVE_A_EMAIL, {
+      id: 'log-nao-escolar',
+      collectionName: 'superintendentes',
+      documentId: ACTIVE_A_EMAIL,
+    });
+    delete (payload as Record<string, unknown>).schoolId;
+    delete (payload as Record<string, unknown>).codInep;
+    delete (payload as Record<string, unknown>).anoLetivo;
+    await assertSucceeds(setDoc(doc(db, 'audit_logs', 'log-nao-escolar'), payload));
   });
 });

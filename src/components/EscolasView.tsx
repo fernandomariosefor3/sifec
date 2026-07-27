@@ -187,7 +187,7 @@ export default function EscolasView() {
   // Fase 2A — matrícula inicial/atual, turmas ativas, média por turma e
   // entradas/saídas acumuladas, buscados por escola (nunca a coleção
   // inteira sem filtro — ver useSchoolEnrollmentSummaries).
-  const { summaries, turmas: turmasFase2A } = useSchoolEnrollmentSummaries(filteredSchools, isFirebaseMode);
+  const { summaries, summariesLoading, summaryErrors, turmas: turmasFase2A, refresh: refreshEnrollmentSummaries } = useSchoolEnrollmentSummaries(filteredSchools, isFirebaseMode);
 
   return (
     <div className="space-y-6">
@@ -287,6 +287,8 @@ export default function EscolasView() {
       <SchoolsTable
         schools={filteredSchools}
         summaries={summaries}
+        summariesLoading={summariesLoading}
+        summaryErrors={summaryErrors}
         onEdit={handleOpenEdit}
         onOpenEnrollmentPanel={setPanelSchool}
       />
@@ -417,6 +419,7 @@ export default function EscolasView() {
           turmas={turmasFase2A}
           isFirebaseMode={isFirebaseMode}
           onClose={() => setPanelSchool(null)}
+          onDataChanged={refreshEnrollmentSummaries}
         />
       )}
     </div>

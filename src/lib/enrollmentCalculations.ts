@@ -14,6 +14,14 @@ export function isValidMonthReference(value: string): boolean {
   return MONTH_REFERENCE_PATTERN.test(value);
 }
 
+// O ano de `mesReferencia` (prefixo YYYY) precisa bater com `anoLetivo` —
+// evita lançar um mês de 2027 dentro do ano letivo de 2026 (ou vice-versa).
+// Só compara o ano quando o formato já é válido; formato inválido é
+// responsabilidade de isValidMonthReference.
+export function isMonthWithinSchoolYear(mesReferencia: string, anoLetivo: number): boolean {
+  return isValidMonthReference(mesReferencia) && Number(mesReferencia.slice(0, 4)) === anoLetivo;
+}
+
 export interface EnrollmentMonthMovement {
   matriculaInicioMes: number;
   novasMatriculas: number;
@@ -129,4 +137,73 @@ export function calculateSchoolMatriculaAtual(
   const known = turmas.filter(t => t.ativa !== false && t.matriculaAtual != null);
   if (known.length === 0) return null;
   return known.reduce((sum, t) => sum + (t.matriculaAtual as number), 0);
+}
+
+export interface SnapshotLike {
+  turmaId: string;
+  mesReferencia: string;
+  matriculaFimMes: number;
+}
+
+// Para cada turma, seleciona só o snapshot do mês mais recente (mesReferencia
+// no formato YYYY-MM ordena lexicograficamente igual a cronologicamente).
+// Corrigir um mês antigo (gravado DEPOIS de um mês mais novo já existir)
+// nunca "vence" o mês mais recente — a comparação é sempre por
+// mesReferencia, nunca pela ordem de chegada no array.
+export function getLatestSnapshotPerClass<T extends SnapshotLike>(
+  snapshots: readonly T[]
+): Map<string, T> {
+  const latestByTurma = new Map<string, T>();
+  for (const snapshot of snapshots) {
+    const current = latestByTurma.get(snapshot.turmaId);
+    if (!current || snapshot.mesReferencia > current.mesReferencia) {
+      latestByTurma.set(snapshot.turmaId, snapshot);
+    }
+  }
+  return latestByTurma;
+}
+
+export interface TurmaAtivaIdLike extends TurmaAtivaLike {
+  id: string;
+}
+
+// Sugestão de matriculaInicioMes para continuidade mensal (seção 9 do
+// plano): matriculaFimMes do snapshot mais recente ANTERIOR ao mês
+// selecionado, da MESMA turma (snapshotsDaTurma já deve vir filtrado por
+// turma pelo chamador). Retorna null quando não há mês anterior lançado —
+// turma nova, ou é o primeiro mês da série. Só uma sugestão: o chamador
+// decide se aplica (nunca sobrescrever um valor que o usuário já digitou).
+export function suggestMatriculaInicioMes<T extends SnapshotLike>(
+  snapshotsDaTurma: readonly T[],
+  mesReferenciaSelecionado: string
+): number | null {
+  const anteriores = snapshotsDaTurma.filter(s => s.mesReferencia < mesReferenciaSelecionado);
+  if (anteriores.length === 0) return null;
+  const maisRecente = anteriores.reduce((latest, s) =>
+    s.mesReferencia > latest.mesReferencia ? s : latest
+  );
+  return maisRecente.matriculaFimMes;
+}
+
+// Matrícula atual da escola a partir do histórico mensal (seção 8 do
+// plano): soma matriculaFimMes do snapshot MAIS RECENTE de cada turma
+// ATIVA — nunca soma todos os meses, e turma inativa nunca entra na soma
+// mesmo que tenha snapshot recente. Retorna null quando nenhuma turma
+// ativa tem snapshot algum (o chamador decide o fallback — ver precedência
+// de exibição no hook/painel).
+export function calculateCurrentSchoolEnrollmentFromSnapshots<T extends SnapshotLike>(
+  snapshots: readonly T[],
+  turmas: readonly TurmaAtivaIdLike[]
+): number | null {
+  const latestByTurma = getLatestSnapshotPerClass(snapshots);
+  const activeTurmaIds = new Set(turmas.filter(t => t.ativa !== false).map(t => t.id));
+
+  let total = 0;
+  let matchCount = 0;
+  for (const [turmaId, snapshot] of latestByTurma) {
+    if (!activeTurmaIds.has(turmaId)) continue;
+    total += snapshot.matriculaFimMes;
+    matchCount += 1;
+  }
+  return matchCount === 0 ? null : total;
 }

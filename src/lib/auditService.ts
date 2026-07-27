@@ -9,17 +9,32 @@ import type { SourceSystem } from '../types/import';
 
 const COLLECTION = 'audit_logs';
 
-const FORBIDDEN_KEY_FRAGMENTS = ['password', 'senha', 'token', 'credential', 'credencial', 'secret'];
+// "nome" isolado NÃO entra aqui de propósito (bloquearia campos de negócio
+// legítimos como turmaNome/escolaNome) — só nomeAluno, que é dado pessoal
+// de estudante, é bloqueado (ver revisão pós-PR #8, seção 11 do plano).
+const FORBIDDEN_KEY_FRAGMENTS = [
+  'password', 'senha', 'token', 'credential', 'credencial', 'secret',
+  'matriculasige', 'idcenso', 'datanascimento', 'nascimento', 'nomealuno',
+];
 
 export class AuditPayloadError extends Error {}
 
+// Recursiva por objetos E arrays (revisão pós-PR #8): um campo sensível só
+// aparecia bloqueado no nível raiz antes — um objeto aninhado (ex.:
+// `{ aluno: { matriculaSige: '...' } }`) ou uma lista de objetos (ex.:
+// `{ alunos: [{ dataNascimento: '...' }] }`) passava batido.
 function assertNoSensitiveKeys(value: unknown, label: string): void {
+  if (Array.isArray(value)) {
+    value.forEach((item, index) => assertNoSensitiveKeys(item, `${label}[${index}]`));
+    return;
+  }
   if (!value || typeof value !== 'object') return;
-  for (const key of Object.keys(value as Record<string, unknown>)) {
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
     const lowerKey = key.toLowerCase();
     if (FORBIDDEN_KEY_FRAGMENTS.some(fragment => lowerKey.includes(fragment))) {
       throw new AuditPayloadError(`Campo sensível "${key}" não pode ser registrado em ${label}.`);
     }
+    assertNoSensitiveKeys(nested, `${label}.${key}`);
   }
 }
 

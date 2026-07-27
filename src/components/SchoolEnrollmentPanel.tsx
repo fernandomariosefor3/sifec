@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { X, Users, History, Save, AlertTriangle, Lock } from 'lucide-react';
+import { X, Save, AlertTriangle, Lock, Settings } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { hasSchoolWriteAccess } from '../lib/superintendentService';
 import { getSchoolYear } from '../lib/schoolYearService';
@@ -8,15 +8,21 @@ import {
   saveEnrollmentSnapshot,
   EnrollmentSnapshotValidationError,
 } from '../lib/enrollmentSnapshotService';
-import { getActiveClassroomCount, getClassroomsForSchool } from '../lib/classService';
+import { getActiveClassroomCount, getClassroomsForSchool, saveClassYearFields } from '../lib/classService';
 import {
   calculateAccumulatedTotals,
   calculateAverageStudentsPerClass,
+  calculateCurrentSchoolEnrollmentFromSnapshots,
   calculateEnrollmentVariation,
   calculateMatriculaFimMes,
   formatEnrollmentValue,
+  suggestMatriculaInicioMes,
 } from '../lib/enrollmentCalculations';
 import { DEMO_SCHOOL_YEARS_2026 } from '../data/demoSchoolYears';
+import SchoolYearConfigForm from './SchoolYearConfigForm';
+import ClassroomFormModal from './ClassroomFormModal';
+import ClassroomsSection from './ClassroomsSection';
+import EnrollmentHistoryTable from './EnrollmentHistoryTable';
 import type { Turma } from '../types/classroom';
 import type { SchoolYear } from '../types/schoolYear';
 import type { EnrollmentSnapshot } from '../types/enrollment';
@@ -34,18 +40,26 @@ interface SchoolEnrollmentPanelProps {
   turmas: Turma[];
   isFirebaseMode: boolean;
   onClose: () => void;
+  // Chamado depois de qualquer gravação (config anual, turma, registro
+  // mensal) para a tabela principal (EscolasView/SchoolsTable) atualizar
+  // sem exigir reload manual — ver seção 8 do plano.
+  onDataChanged?: () => void;
 }
 
 function naoInformado(value: number | null | undefined): string {
   return formatEnrollmentValue(value);
 }
 
-export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, onClose }: SchoolEnrollmentPanelProps) {
+export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, onClose, onDataChanged }: SchoolEnrollmentPanelProps) {
   const [schoolYear, setSchoolYear] = useState<SchoolYear | null>(null);
   const [snapshots, setSnapshots] = useState<EnrollmentSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState('');
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
+  const [turmaActionError, setTurmaActionError] = useState('');
+  const [classroomModalOpen, setClassroomModalOpen] = useState(false);
+  const [editingTurma, setEditingTurma] = useState<Turma | null>(null);
 
   const turmasDaEscola = useMemo(
     () => getClassroomsForSchool(turmas, school),
@@ -64,11 +78,21 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
   const [matriculaFimMes, setMatriculaFimMes] = useState('0');
   const [observacao, setObservacao] = useState('');
 
+  async function reloadSchoolData() {
+    const [year, history] = await Promise.all([
+      getSchoolYear(school.id, ANO_LETIVO),
+      listEnrollmentSnapshotsForSchool(school.id, ANO_LETIVO),
+    ]);
+    setSchoolYear(year);
+    setSnapshots(history);
+  }
+
   useEffect(() => {
     let cancelled = false;
 
     async function load() {
       setLoading(true);
+      setLoadError('');
       if (!isFirebaseMode) {
         const demo = DEMO_SCHOOL_YEARS_2026[school.id];
         if (!cancelled) {
@@ -79,13 +103,12 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
         return;
       }
       try {
-        const [year, history] = await Promise.all([
-          getSchoolYear(school.id, ANO_LETIVO),
-          listEnrollmentSnapshotsForSchool(school.id, ANO_LETIVO),
-        ]);
+        await reloadSchoolData();
+      } catch (err) {
+        // Nunca deixar a tela renderizar como se a escola simplesmente não
+        // tivesse dados — seção 10 do plano.
         if (!cancelled) {
-          setSchoolYear(year);
-          setSnapshots(history);
+          setLoadError(err instanceof Error ? err.message : 'Erro ao carregar dados da escola.');
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -96,13 +119,35 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadSchoolData depende só de school.id/ANO_LETIVO, já cobertos abaixo
   }, [school.id, isFirebaseMode]);
+
+  // Continuidade mensal (seção 9 do plano): ao trocar turma OU mês, sugere
+  // matriculaFimMes do mês anterior mais recente DAQUELA turma como
+  // matriculaInicioMes. Só dispara na troca de turma/mês — nunca sobrescreve
+  // um valor que o usuário já tenha digitado para a combinação atual.
+  useEffect(() => {
+    if (!turmaId || !mesReferencia) return;
+    const snapshotsDaTurma = snapshots.filter(s => s.turmaId === turmaId);
+    const suggestion = suggestMatriculaInicioMes(snapshotsDaTurma, mesReferencia);
+    if (suggestion != null) {
+      setMatriculaInicioMes(String(suggestion));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- só recalcula ao trocar turma/mês (ver comentário acima)
+  }, [turmaId, mesReferencia]);
 
   const turmasAtivas = getActiveClassroomCount(turmasDaEscola);
   const demoTotals = !isFirebaseMode ? DEMO_SCHOOL_YEARS_2026[school.id]?.totals : undefined;
   const totals = demoTotals ?? calculateAccumulatedTotals(snapshots);
   const matriculaInicial = schoolYear?.matriculaInicial ?? null;
-  const matriculaAtual = schoolYear?.matriculaAtual ?? null;
+  // Precedência de exibição (seção 8 do plano): 1) snapshots mensais mais
+  // recentes de cada turma ativa; 2) school_years.matriculaAtual; 3)
+  // turmas.matriculaAtual (fallback legado, calculado por quem monta
+  // turmasDaEscola); 4) null — "Não informado".
+  const matriculaAtual =
+    calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmasDaEscola) ??
+    schoolYear?.matriculaAtual ??
+    null;
   const variacao = calculateEnrollmentVariation(matriculaInicial, matriculaAtual);
   const media = calculateAverageStudentsPerClass(matriculaAtual, turmasAtivas);
   const ultimoMes = snapshots.length > 0 ? snapshots[snapshots.length - 1].mesReferencia : (schoolYear?.ultimaAtualizacao ? schoolYear.ultimaAtualizacao.slice(0, 7) : null);
@@ -154,8 +199,11 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
         now: new Date().toISOString(),
       });
       setFormSuccess('Registro mensal salvo com sucesso.');
-      const history = await listEnrollmentSnapshotsForSchool(school.id, ANO_LETIVO);
-      setSnapshots(history);
+      // Recarrega histórico + ano letivo: matrícula atual/variação/média
+      // são derivados de `snapshots`/`schoolYear` no corpo do componente,
+      // então já recalculam sozinhos ao re-renderizar (seção 8 do plano).
+      await reloadSchoolData();
+      onDataChanged?.();
     } catch (err) {
       if (err instanceof EnrollmentSnapshotValidationError) {
         setFormError(err.message);
@@ -163,6 +211,39 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
         setFormError('Erro ao salvar registro mensal: ' + (err instanceof Error ? err.message : String(err)));
       }
     }
+  }
+
+  async function handleToggleAtiva(turma: Turma) {
+    setTurmaActionError('');
+    const email = auth.currentUser?.email;
+    if (!email) {
+      setTurmaActionError('É preciso estar autenticado para ativar/inativar turmas.');
+      return;
+    }
+    try {
+      await saveClassYearFields(turma.id, {
+        schoolId: turma.schoolId ?? school.id,
+        codInep: turma.codInep ?? school.codInep,
+        escolaNome: turma.escolaNome,
+        anoLetivo: turma.anoLetivo ?? ANO_LETIVO,
+        ativa: turma.ativa === false,
+        actingUserEmail: email,
+        now: new Date().toISOString(),
+      });
+      onDataChanged?.();
+    } catch (err) {
+      setTurmaActionError('Erro ao alterar status da turma: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  }
+
+  function openCreateClassroom() {
+    setEditingTurma(null);
+    setClassroomModalOpen(true);
+  }
+
+  function openEditClassroom(turma: Turma) {
+    setEditingTurma(turma);
+    setClassroomModalOpen(true);
   }
 
   return (
@@ -182,6 +263,12 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
         <div className="overflow-y-auto p-6 space-y-6">
           {loading ? (
             <div className="py-10 text-center text-slate-400 text-xs">Carregando dados da escola...</div>
+          ) : loadError ? (
+            <div className="py-10 text-center text-rose-600 text-xs flex flex-col items-center gap-2">
+              <AlertTriangle size={18} />
+              <span className="font-bold">Não foi possível carregar os dados desta escola.</span>
+              <span className="text-slate-500 font-normal">{loadError}</span>
+            </div>
           ) : (
             <>
               {/* A. Resumo */}
@@ -206,46 +293,35 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
                 </div>
               </section>
 
-              {/* B. Turmas */}
+              {/* Configuração do ano letivo (seção 6 do plano) */}
               <section>
                 <h4 className="text-xs font-black uppercase text-slate-700 mb-2 flex items-center gap-1.5">
-                  <Users size={14} /> Turmas
+                  <Settings size={14} /> Configuração do Ano Letivo {ANO_LETIVO}
                 </h4>
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <table className="w-full text-left text-[11px] border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wide">
-                        <th className="py-2 px-3">Turma</th>
-                        <th className="py-2 px-3">Modalidade</th>
-                        <th className="py-2 px-3">Turno</th>
-                        <th className="py-2 px-3 text-right">Matr. inicial</th>
-                        <th className="py-2 px-3 text-right">Matr. atual</th>
-                        <th className="py-2 px-3 text-center">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {turmasDaEscola.length === 0 ? (
-                        <tr><td colSpan={6} className="py-6 text-center text-slate-400">Nenhuma turma cadastrada para esta escola.</td></tr>
-                      ) : (
-                        turmasDaEscola.map(t => (
-                          <tr key={t.id}>
-                            <td className="py-2 px-3 font-bold text-slate-800">{t.nome}</td>
-                            <td className="py-2 px-3">{t.modalidade ?? 'Não informado'}</td>
-                            <td className="py-2 px-3">{t.turno ?? t.periodo}</td>
-                            <td className="py-2 px-3 text-right">{naoInformado(t.matriculaInicial)}</td>
-                            <td className="py-2 px-3 text-right">{naoInformado(t.matriculaAtual)}</td>
-                            <td className="py-2 px-3 text-center">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${t.ativa === false ? 'bg-slate-100 border-slate-200 text-slate-500' : 'bg-emerald-50 border-emerald-200 text-emerald-700'}`}>
-                                {t.ativa === false ? 'Inativa' : 'Ativa'}
-                              </span>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                <SchoolYearConfigForm
+                  school={school}
+                  schoolYear={schoolYear}
+                  anoLetivo={ANO_LETIVO}
+                  turmasAtivas={turmasAtivas}
+                  canWrite={canWrite}
+                  isFirebaseMode={isFirebaseMode}
+                  onSaved={updated => {
+                    setSchoolYear(updated);
+                    onDataChanged?.();
+                  }}
+                />
               </section>
+
+              {/* B. Turmas */}
+              <ClassroomsSection
+                turmasDaEscola={turmasDaEscola}
+                canWrite={canWrite}
+                isFirebaseMode={isFirebaseMode}
+                turmaActionError={turmaActionError}
+                onCreateClick={openCreateClassroom}
+                onEditClick={openEditClassroom}
+                onToggleAtiva={handleToggleAtiva}
+              />
 
               {/* C. Registro mensal */}
               <section>
@@ -278,7 +354,11 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
                       </div>
                       <div className="space-y-1">
                         <label className="text-[9px] font-black uppercase text-slate-600 block">Mês de referência *</label>
-                        <input type="month" value={mesReferencia} onChange={e => setMesReferencia(e.target.value)} className="w-full p-2 bg-white border border-slate-250 text-xs rounded-lg" required />
+                        <input
+                          type="month" value={mesReferencia} onChange={e => setMesReferencia(e.target.value)}
+                          min={`${ANO_LETIVO}-01`} max={`${ANO_LETIVO}-12`}
+                          className="w-full p-2 bg-white border border-slate-250 text-xs rounded-lg" required
+                        />
                       </div>
                     </div>
                     <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
@@ -329,51 +409,22 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
               </section>
 
               {/* D. Histórico */}
-              <section>
-                <h4 className="text-xs font-black uppercase text-slate-700 mb-2 flex items-center gap-1.5">
-                  <History size={14} /> Histórico
-                </h4>
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <table className="w-full text-left text-[11px] border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wide">
-                        <th className="py-2 px-3">Mês</th>
-                        <th className="py-2 px-3">Turma</th>
-                        <th className="py-2 px-3 text-right">Início</th>
-                        <th className="py-2 px-3 text-right">Final</th>
-                        <th className="py-2 px-3 text-center">Situação</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100">
-                      {snapshots.length === 0 ? (
-                        <tr><td colSpan={5} className="py-6 text-center text-slate-400">Nenhum registro mensal ainda — Não informado.</td></tr>
-                      ) : (
-                        snapshots.map(s => (
-                          <tr key={s.id}>
-                            <td className="py-2 px-3 font-mono font-bold text-slate-700">{s.mesReferencia}</td>
-                            <td className="py-2 px-3">{s.turmaNome}</td>
-                            <td className="py-2 px-3 text-right">{s.matriculaInicioMes}</td>
-                            <td className="py-2 px-3 text-right font-bold">{s.matriculaFimMes}</td>
-                            <td className="py-2 px-3 text-center">
-                              <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${
-                                s.reviewStatus === 'divergencia'
-                                  ? 'bg-amber-50 border-amber-200 text-amber-700'
-                                  : 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                              }`}>
-                                {s.reviewStatus}
-                              </span>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </section>
+              <EnrollmentHistoryTable snapshots={snapshots} />
             </>
           )}
         </div>
       </div>
+
+      {classroomModalOpen && (
+        <ClassroomFormModal
+          school={school}
+          anoLetivo={ANO_LETIVO}
+          existingTurmas={turmasDaEscola}
+          editingTurma={editingTurma}
+          onClose={() => setClassroomModalOpen(false)}
+          onSaved={() => onDataChanged?.()}
+        />
+      )}
     </div>
   );
 }

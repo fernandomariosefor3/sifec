@@ -52,4 +52,36 @@ describe('buildAuditLogEntry', () => {
   it('aceita valores de negócio comuns sem lançar erro', () => {
     expect(() => buildAuditLogEntry(baseInput(), 'log-6')).not.toThrow();
   });
+
+  it('nunca registra "token" aninhado dentro de outro objeto', () => {
+    expect(() =>
+      buildAuditLogEntry(baseInput({ newValue: { auth: { token: 'xyz' } } }), 'log-7')
+    ).toThrow(AuditPayloadError);
+  });
+
+  it('nunca registra "matriculaSige" aninhada', () => {
+    expect(() =>
+      buildAuditLogEntry(baseInput({ newValue: { aluno: { matriculaSige: '123456' } } }), 'log-8')
+    ).toThrow(AuditPayloadError);
+  });
+
+  it('nunca registra "dataNascimento" dentro de um array de objetos', () => {
+    expect(() =>
+      buildAuditLogEntry(
+        baseInput({ newValue: { alunos: [{ nome: 'Aluno Um' }, { dataNascimento: '2010-05-01' }] } }),
+        'log-9'
+      )
+    ).toThrow(AuditPayloadError);
+  });
+
+  it('nunca registra "idCenso" ou "nomeAluno"', () => {
+    expect(() => buildAuditLogEntry(baseInput({ newValue: { idCenso: '999' } }), 'log-10')).toThrow(AuditPayloadError);
+    expect(() => buildAuditLogEntry(baseInput({ newValue: { nomeAluno: 'Fulano' } }), 'log-11')).toThrow(AuditPayloadError);
+  });
+
+  it('não bloqueia "nome" isoladamente (campo de negócio legítimo, ex.: turmaNome/escolaNome)', () => {
+    expect(() =>
+      buildAuditLogEntry(baseInput({ newValue: { turmaNome: '3º Ano A', escolaNome: 'EEM Diva Cabral' } }), 'log-12')
+    ).not.toThrow();
+  });
 });

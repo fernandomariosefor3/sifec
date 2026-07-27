@@ -169,6 +169,14 @@ service cloud.firestore {
       return mes is string && mes.matches('^[0-9]{4}-(0[1-9]|1[0-2])$');
     }
 
+    // O ano (prefixo YYYY) de mesReferencia precisa bater com anoLetivo —
+    // mesmo requisito de src/lib/enrollmentCalculations.ts
+    // (isMonthWithinSchoolYear). Só chamar depois de isValidMesReferencia()
+    // já ter confirmado o formato.
+    function isMesReferenciaWithinAnoLetivo(mes, ano) {
+      return mes[0:4] == string(ano);
+    }
+
     // `imports` só tem schoolId/codInep (sem escolaNome — ver seção 15 do
     // plano), então a autorização por escola precisa de um lookup no
     // documento real de `schools` em vez de canWriteEscola() direto.
@@ -187,6 +195,60 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/schools/$(schoolId)) &&
         schoolNomeById(schoolId) in myEscolas()
       ));
+    }
+
+    // Coleções cujos audit_logs são necessariamente de UMA escola (revisão
+    // pós-PR #8, seção 11 do plano) — todo log dessas coleções exige
+    // schoolId/codInep válidos e acesso à escola; logs de outras coleções
+    // (ex.: superintendentes) não são "escolares" e não exigem escola.
+    function isSchoolScopedAuditCollection(collectionName) {
+      return collectionName in ['school_years', 'enrollment_snapshots', 'turmas', 'schools', 'imports'];
+    }
+
+    // codInep do audit_log precisa bater com o codInep REAL da escola —
+    // mesmo princípio de isCanonicalSchoolMatch, só que audit_logs não tem
+    // campo escolaNome no schema (só schoolId/codInep). Só é chamada depois
+    // de canWriteSchoolById(schoolId) já ter confirmado que a escola existe
+    // (mesmo padrão de curto-circuito usado nas outras funções acima).
+    function isCanonicalCodInepForSchool(schoolId, codInep) {
+      return get(/databases/$(database)/documents/schools/$(schoolId)).data.codInep == codInep;
+    }
+
+    // Integridade canônica na CRIAÇÃO de school_years/enrollment_snapshots
+    // (revisão pós-PR #8): canWriteEscola(incoming().escolaNome) sozinho só
+    // prova que o usuário pode escrever numa escola CHAMADA escolaNome — não
+    // prova que schoolId/codInep/escolaNome no payload realmente descrevem a
+    // MESMA escola. Sem isto, um superintendente da Escola A podia criar um
+    // documento com schoolId da Escola B, desde que preenchesse escolaNome
+    // com o nome da própria Escola A (que ele tem permissão de escrever).
+    // Esta função fecha essa lacuna: exige que schoolId aponte para um
+    // documento real de `schools` cujo codInep/nome batem EXATAMENTE com o
+    // que o payload está declarando.
+    //
+    // Sem exists() de propósito (diferente de canWriteSchoolById acima): um
+    // get() num path inexistente faz só essa cláusula `allow` falhar
+    // (nega o acesso), não derruba a requisição — mesmo resultado prático
+    // de negar a escrita, só que com 1 leitura em vez de 2. O emulador
+    // local tem um limite de 1000 sub-expressões por avaliação de regra, e
+    // enrollment_snapshots já soma canWriteEscola() + este helper + o de
+    // turma no mesmo `allow create` — cada leitura a menos ajuda a caber
+    // no orçamento (ver revisão pós-PR #8).
+    function isCanonicalSchoolMatch(schoolId, codInep, escolaNome) {
+      let school = get(/databases/$(database)/documents/schools/$(schoolId)).data;
+      return school.nome == escolaNome && school.codInep == codInep;
+    }
+
+    // Integridade da turma referenciada por um enrollment_snapshot na
+    // CRIAÇÃO: a turma precisa existir e pertencer à MESMA escola do
+    // snapshot — nunca só por nome (ver revisão pós-PR #8, mesma
+    // motivação de getClassroomsForSchool em src/lib/classService.ts).
+    // Aceita tanto turma.schoolId (Fase 2A) quanto turma.escolaId (legado)
+    // durante a compatibilidade — mas nunca aceita silenciosamente uma
+    // turma sem NENHUM dos dois batendo. Mesmo motivo de
+    // isCanonicalSchoolMatch para omitir exists().
+    function isCanonicalTurmaOfSchool(turmaId, schoolId) {
+      let turma = get(/databases/$(database)/documents/turmas/$(turmaId)).data;
+      return turma.get('schoolId', '') == schoolId || turma.get('escolaId', '') == schoolId;
     }
 
     // --- Superintendentes ---
@@ -363,8 +425,20 @@ service cloud.firestore {
       // erro de avaliação contra o documento hipotético sem o campo.
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
 
-      allow create: if isAuthorized() && isValidId(yearId) &&
+      // isCanonicalSchoolMatch (revisão pós-PR #8) fecha a lacuna de
+      // canWriteEscola(incoming().escolaNome) sozinho: prova não só que o
+      // usuário PODE escrever numa escola com esse nome, mas que
+      // schoolId/codInep/escolaNome do payload realmente descrevem a MESMA
+      // escola em `schools` — sem isso, a Escola A podia criar um
+      // school_year com o schoolId real da Escola B só preenchendo
+      // escolaNome com o próprio nome (que ela tem permissão de escrever).
+      // isAuthorized() sai daqui de propósito (mesmo motivo do update
+      // logo abaixo): canWriteEscola() já implica isAuthorized(), e cada
+      // chamada extra a isAdmin()/isActiveSuperintendent() pesa no limite
+      // de 1000 sub-expressões do emulador local.
+      allow create: if isValidId(yearId) &&
         canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
         isValidSchoolYearShape(yearId);
 
       // create/update SEPARADOS de propósito (ver revisão pré-PR): a versão
@@ -379,12 +453,16 @@ service cloud.firestore {
       // anoLetivo/escolaNome como imutáveis — o ano letivo de um registro
       // nunca muda para "virar" outro registro, e isAuthorized() sai daqui
       // de propósito porque canWriteEscola() já implica isAuthorized().
+      // createdAt/createdBy também travados (revisão pós-PR #8): sem isso,
+      // um update podia reescrever a autoria/data de criação originais.
       allow update: if isValidId(yearId) &&
         canWriteEscola(resource.data.escolaNome) &&
         incoming().schoolId == resource.data.schoolId &&
         incoming().codInep == resource.data.codInep &&
         incoming().anoLetivo == resource.data.anoLetivo &&
         incoming().escolaNome == resource.data.escolaNome &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
         isValidSchoolYearShape(yearId);
 
       // Sem exclusão livre — igual a `schools`, o histórico anual só é
@@ -412,6 +490,7 @@ service cloud.firestore {
         incoming().turmaNome is string && incoming().turmaNome.size() <= 150 &&
         isValidAnoLetivo(incoming().anoLetivo) &&
         isValidMesReferencia(incoming().mesReferencia) &&
+        isMesReferenciaWithinAnoLetivo(incoming().mesReferencia, incoming().anoLetivo) &&
         // ID determinístico validado contra os campos internos (seção 7 do
         // plano: schoolId_turmaId_mesReferencia).
         snapshotId == incoming().schoolId + '_' + incoming().turmaId + '_' + incoming().mesReferencia &&
@@ -437,8 +516,18 @@ service cloud.firestore {
       // listEnrollmentSnapshotsForSchool), não em escolaNome.
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
 
-      allow create: if isAuthorized() && isValidId(snapshotId) &&
+      // isCanonicalSchoolMatch/isCanonicalTurmaOfSchool (revisão pós-PR #8):
+      // mesma lacuna de school_years, mais a integridade da turma —
+      // canWriteEscola(incoming().escolaNome) sozinho não provava que
+      // turmaId pertence à MESMA escola do snapshot, nem que schoolId
+      // aponta para a escola que escolaNome diz ser. isAuthorized() sai
+      // daqui de propósito (mesmo motivo de school_years — canWriteEscola()
+      // já implica isAuthorized(), e o emulador local tem um limite de 1000
+      // sub-expressões por avaliação de regra).
+      allow create: if isValidId(snapshotId) &&
         canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isCanonicalTurmaOfSchool(incoming().turmaId, incoming().schoolId) &&
         isValidEnrollmentSnapshotShape(snapshotId);
 
       // Update = correção do MESMO mês/turma/escola (ver seção "Histórico"
@@ -448,7 +537,8 @@ service cloud.firestore {
       // comentário em school_years sobre o limite de expressões do
       // emulador), schoolId/turmaId/anoLetivo/mesReferencia/escolaNome
       // travados como imutáveis, isAuthorized() removido por já estar
-      // implícito em canWriteEscola().
+      // implícito em canWriteEscola(). createdAt/createdBy também travados
+      // (revisão pós-PR #8), mesmo motivo de school_years.
       allow update: if isValidId(snapshotId) &&
         canWriteEscola(resource.data.escolaNome) &&
         incoming().schoolId == resource.data.schoolId &&
@@ -456,6 +546,8 @@ service cloud.firestore {
         incoming().anoLetivo == resource.data.anoLetivo &&
         incoming().escolaNome == resource.data.escolaNome &&
         incoming().mesReferencia == resource.data.mesReferencia &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
         isValidEnrollmentSnapshotShape(snapshotId);
 
       allow delete: if isPlatformAdmin() && isValidId(snapshotId);
@@ -495,6 +587,11 @@ service cloud.firestore {
         incoming().fileHash is string && incoming().fileHash.size() <= 128 &&
         incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
         incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        // ID determinístico validado contra os campos internos (mesmo
+        // padrão de school_years/enrollment_snapshots — ver
+        // buildImportId em src/lib/importService.ts: schoolId_fileHash).
+        importId == incoming().schoolId + '_' + incoming().fileHash &&
+        incoming().id == importId &&
         isValidAnoLetivo(incoming().anoLetivo) &&
         isNonNegInt(incoming().recordsRead) &&
         isNonNegInt(incoming().recordsCreated) &&
@@ -513,6 +610,10 @@ service cloud.firestore {
       // canWriteSchoolById() duas vezes evita duplicar toda a cadeia de
       // get()/exists() interna e estourar o limite de expressões do
       // emulador local em avaliações mais profundas.
+      // id/codInep/anoLetivo/fileHash/createdAt/createdBy travados como
+      // imutáveis (revisão pós-PR #8) — update é só para reprocessar o
+      // preview/avançar o status, nunca para reescrever de qual arquivo ou
+      // ano letivo o import veio, nem sua autoria original.
       allow update: if isAuthorized() && isValidId(importId) &&
         incoming().schoolId == resource.data.get('schoolId', '') &&
         canWriteSchoolById(incoming().schoolId) &&
@@ -523,6 +624,12 @@ service cloud.firestore {
           'inconsistencies', 'status', 'preview',
           'createdAt', 'confirmedAt', 'processedAt', 'createdBy', 'confirmedBy'
         ]) &&
+        incoming().id == resource.data.id &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().fileHash == resource.data.fileHash &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
         incoming().status in [
           'analisando', 'aguardando_confirmacao', 'confirmado',
           'processado', 'processado_com_alertas', 'cancelado', 'erro'
@@ -539,9 +646,17 @@ service cloud.firestore {
     // para admin — uma trilha de auditoria que pode ser editada não serve
     // para nada. userEmail precisa bater com quem está autenticado, para que
     // ninguém grave um log em nome de outra pessoa.
+    //
+    // Revisão pós-PR #8 (seção 11 do plano): logs de coleções escolares
+    // (isSchoolScopedAuditCollection) agora exigem schoolId/codInep válidos
+    // — escola existente, codInep canônico, e o autor precisa ter acesso de
+    // escrita àquela escola (canWriteSchoolById, que já implica
+    // isAuthorized()) — nunca um log escolar apontando para a carteira de
+    // outro superintendente. Logs de coleções não-escolares continuam só
+    // exigindo isAuthorized().
     match /audit_logs/{logId} {
       allow read: if isAdmin();
-      allow create: if isAuthorized() && isValidId(logId) &&
+      allow create: if isValidId(logId) &&
         incoming().keys().hasOnly([
           'id', 'collectionName', 'documentId', 'schoolId', 'codInep', 'anoLetivo',
           'operation', 'previousValue', 'newValue', 'source', 'importBatchId',
@@ -554,7 +669,17 @@ service cloud.firestore {
         incoming().source in ['Manual', 'SIGE Escola', 'SIGAE', 'Importação administrativa', 'Migração'] &&
         incoming().userId is string &&
         incoming().userEmail is string && incoming().userEmail.lower() == myEmail() &&
-        incoming().timestamp is string;
+        incoming().timestamp is string &&
+        (
+          isSchoolScopedAuditCollection(incoming().collectionName)
+            ? (
+                incoming().schoolId is string &&
+                canWriteSchoolById(incoming().schoolId) &&
+                incoming().codInep is string &&
+                isCanonicalCodInepForSchool(incoming().schoolId, incoming().codInep)
+              )
+            : isAuthorized()
+        );
       allow update, delete: if false;
     }
   }

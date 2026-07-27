@@ -5,7 +5,7 @@
 // funciona igualmente para admin e para superintendente. `turmas` continua
 // com leitura ampla (regra inalterada), então essa parte é uma única
 // subscrição normal.
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { subscribeToCollection, SEED_TURMAS } from '../lib/firebaseService';
 import { getSchoolYear } from '../lib/schoolYearService';
 import { listEnrollmentSnapshotsForSchool } from '../lib/enrollmentSnapshotService';
@@ -13,6 +13,7 @@ import { getActiveClassroomCount, getClassroomsForSchool } from '../lib/classSer
 import {
   calculateAccumulatedTotals,
   calculateAverageStudentsPerClass,
+  calculateCurrentSchoolEnrollmentFromSnapshots,
   calculateEnrollmentVariation,
   calculateSchoolMatriculaAtual,
 } from '../lib/enrollmentCalculations';
@@ -67,7 +68,14 @@ async function loadSummaryForSchool(
   ]);
   const totals = calculateAccumulatedTotals(snapshots);
   const matriculaInicial = schoolYear?.matriculaInicial ?? null;
-  const matriculaAtual = schoolYear?.matriculaAtual ?? calculateSchoolMatriculaAtual(turmasDaEscola);
+  // Precedência de exibição (seção 8 do plano): 1) snapshots mensais mais
+  // recentes de cada turma ativa; 2) school_years.matriculaAtual; 3)
+  // turmas.matriculaAtual (fallback legado); 4) null — "Não informado".
+  const matriculaAtual =
+    calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmasDaEscola) ??
+    schoolYear?.matriculaAtual ??
+    calculateSchoolMatriculaAtual(turmasDaEscola) ??
+    null;
 
   return {
     matriculaInicial,
@@ -84,6 +92,15 @@ async function loadSummaryForSchool(
 export function useSchoolEnrollmentSummaries(schools: readonly SchoolLike[], isFirebaseMode: boolean) {
   const [turmas, setTurmas] = useState<Turma[]>([]);
   const [summaries, setSummaries] = useState<Record<string, SchoolEnrollmentSummary>>({});
+  const [loading, setLoading] = useState(true);
+  const [errors, setErrors] = useState<Record<string, string>>({});
+  // Incrementado por refresh() para forçar o efeito abaixo a rodar de novo
+  // sem depender de uma mudança em `schools`/`turmas` — usado pelo painel
+  // da escola para atualizar a tabela principal depois de salvar um
+  // registro mensal, configuração anual ou turma, sem exigir reload manual
+  // (seção 8 do plano).
+  const [refreshTick, setRefreshTick] = useState(0);
+  const refresh = useCallback(() => setRefreshTick(t => t + 1), []);
 
   useEffect(() => {
     if (!isFirebaseMode) {
@@ -103,17 +120,44 @@ export function useSchoolEnrollmentSummaries(schools: readonly SchoolLike[], isF
 
     async function load() {
       if (schools.length === 0) {
-        if (!cancelled) setSummaries({});
+        if (!cancelled) {
+          setSummaries({});
+          setErrors({});
+          setLoading(false);
+        }
         return;
       }
+      setLoading(true);
+      // Cada escola é isolada em seu próprio try/catch: a falha de UMA
+      // escola (ex.: permissão negada, rede instável) nunca derruba as
+      // demais nem vira uma Promise rejection não tratada (seção 10 do
+      // plano).
       const entries = await Promise.all(
         schools.map(async school => {
           const turmasDaEscola = getClassroomsForSchool(turmas, school);
-          const summary = await loadSummaryForSchool(school, turmasDaEscola, isFirebaseMode);
-          return [school.id, summary] as const;
+          try {
+            const summary = await loadSummaryForSchool(school, turmasDaEscola, isFirebaseMode);
+            return { schoolId: school.id, summary, error: null as string | null };
+          } catch (err) {
+            return {
+              schoolId: school.id,
+              summary: null as SchoolEnrollmentSummary | null,
+              error: err instanceof Error ? err.message : 'Erro ao carregar dados de matrícula desta escola.',
+            };
+          }
         })
       );
-      if (!cancelled) setSummaries(Object.fromEntries(entries));
+      if (!cancelled) {
+        setSummaries(Object.fromEntries(
+          entries.filter((e): e is typeof e & { summary: SchoolEnrollmentSummary } => e.summary != null)
+            .map(e => [e.schoolId, e.summary])
+        ));
+        setErrors(Object.fromEntries(
+          entries.filter((e): e is typeof e & { error: string } => e.error != null)
+            .map(e => [e.schoolId, e.error])
+        ));
+        setLoading(false);
+      }
     }
 
     load();
@@ -121,7 +165,7 @@ export function useSchoolEnrollmentSummaries(schools: readonly SchoolLike[], isF
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- schoolIdsKey substitui `schools` de propósito (ver comentário acima)
-  }, [schoolIdsKey, turmas, isFirebaseMode]);
+  }, [schoolIdsKey, turmas, isFirebaseMode, refreshTick]);
 
-  return { turmas, summaries };
+  return { turmas, summaries, summariesLoading: loading, summaryErrors: errors, refresh };
 }

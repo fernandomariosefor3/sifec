@@ -15,6 +15,7 @@ import { buildEnrollmentSnapshotId } from './deterministicIds';
 import {
   calculateMatriculaFimMes,
   hasEnrollmentDivergence,
+  isMonthWithinSchoolYear,
   isNonNegativeInteger,
   isValidEnrollmentMovement,
   isValidMonthReference,
@@ -45,6 +46,11 @@ export function validateEnrollmentSnapshotInput(input: SaveEnrollmentSnapshotInp
   if (!isValidMonthReference(input.mesReferencia)) {
     throw new EnrollmentSnapshotValidationError(
       'Mês de referência inválido — use o formato YYYY-MM.'
+    );
+  }
+  if (!isMonthWithinSchoolYear(input.mesReferencia, input.anoLetivo)) {
+    throw new EnrollmentSnapshotValidationError(
+      `Mês de referência (${input.mesReferencia}) não pertence ao ano letivo ${input.anoLetivo}.`
     );
   }
   if (!isValidEnrollmentMovement(input) || !isNonNegativeInteger(input.matriculaFimMes)) {
