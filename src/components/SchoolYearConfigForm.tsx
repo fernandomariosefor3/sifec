@@ -1,7 +1,7 @@
 // Fase 2A / revisão pós-PR #8 — seção 6 do plano: "Configuração do Ano
 // Letivo". Só matrícula inicial, data de início e status são digitados
 // aqui — matrícula ATUAL nunca é campo manual porque é sempre calculada
-// dos registros mensais (ver seção 8 / calculateCurrentSchoolEnrollmentFromSnapshots)
+// dos registros mensais (ver seção 5 / calculateCurrentSchoolEnrollmentCoverage)
 // e quantidadeTurmasAtivas vem computada de turmasDaEscola, nunca duplicada
 // manualmente. saveSchoolYear() preserva createdAt/createdBy e nunca copia
 // schools.matriculas automaticamente (ver schoolYearService.ts).

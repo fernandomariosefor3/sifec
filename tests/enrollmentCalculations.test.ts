@@ -4,11 +4,12 @@ import { describe, expect, it } from 'vitest';
 import {
   calculateAccumulatedTotals,
   calculateAverageStudentsPerClass,
-  calculateCurrentSchoolEnrollmentFromSnapshots,
+  calculateCurrentSchoolEnrollmentCoverage,
   calculateEnrollmentVariation,
   calculateMatriculaFimMes,
-  calculateSchoolMatriculaAtual,
+  calculateUltimaAtualizacao,
   countActiveTurmas,
+  describeCoverageStatus,
   formatEnrollmentValue,
   getLatestSnapshotPerClass,
   hasEnrollmentDivergence,
@@ -180,30 +181,6 @@ describe('calculateAccumulatedTotals', () => {
   });
 });
 
-describe('calculateSchoolMatriculaAtual', () => {
-  it('soma a matrícula atual das turmas ativas conhecidas', () => {
-    expect(
-      calculateSchoolMatriculaAtual([
-        { ativa: true, matriculaAtual: 30 },
-        { ativa: true, matriculaAtual: 28 },
-      ])
-    ).toBe(58);
-  });
-
-  it('ignora turmas inativas na soma', () => {
-    expect(
-      calculateSchoolMatriculaAtual([
-        { ativa: true, matriculaAtual: 30 },
-        { ativa: false, matriculaAtual: 999 },
-      ])
-    ).toBe(30);
-  });
-
-  it('retorna null quando nenhuma turma ativa tem matrícula conhecida', () => {
-    expect(calculateSchoolMatriculaAtual([{ ativa: true }, { ativa: false, matriculaAtual: 10 }])).toBeNull();
-  });
-});
-
 describe('getLatestSnapshotPerClass', () => {
   it('fevereiro e março da mesma turma — retém só março (o mais recente)', () => {
     const snapshots: SnapshotLike[] = [
@@ -268,50 +245,162 @@ describe('suggestMatriculaInicioMes', () => {
   });
 });
 
-describe('calculateCurrentSchoolEnrollmentFromSnapshots', () => {
-  it('fevereiro e março da mesma turma contam somente março', () => {
+describe('calculateCurrentSchoolEnrollmentCoverage', () => {
+  // 10 turmas ativas, t1..t10 — usado nos testes A/B que falam explicitamente
+  // em "dez turmas" (seção 7 do plano).
+  const dezTurmasAtivas = Array.from({ length: 10 }, (_, i) => ({ id: `t${i + 1}`, ativa: true }));
+
+  it('A. uma de dez turmas possui snapshot → resultado incompleto (nunca total parcial como total)', () => {
+    const snapshots: SnapshotLike[] = [{ turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 }];
+    const result = calculateCurrentSchoolEnrollmentCoverage(snapshots, dezTurmasAtivas);
+    expect(result.complete).toBe(false);
+    expect(result.total).toBeNull();
+    expect(result.coveredClassCount).toBe(1);
+    expect(result.activeClassCount).toBe(10);
+    expect(result.partialTotal).toBe(31);
+  });
+
+  it('B. todas as turmas possuem snapshot → total completo', () => {
+    const snapshots: SnapshotLike[] = dezTurmasAtivas.map((t, i) => ({
+      turmaId: t.id, mesReferencia: '2026-03', matriculaFimMes: 30 + i,
+    }));
+    const result = calculateCurrentSchoolEnrollmentCoverage(snapshots, dezTurmasAtivas);
+    expect(result.complete).toBe(true);
+    // soma de 30..39 = 345
+    expect(result.total).toBe(345);
+    expect(result.coveredClassCount).toBe(10);
+  });
+
+  it('C. snapshot em uma turma e matriculaAtual em outra → total completo por fallback', () => {
+    const snapshots: SnapshotLike[] = [{ turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 }];
+    const turmas = [
+      { id: 't1', ativa: true, matriculaAtual: 999 }, // snapshot prevalece sobre matriculaAtual
+      { id: 't2', ativa: true, matriculaAtual: 28 },
+    ];
+    const result = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmas);
+    expect(result.complete).toBe(true);
+    expect(result.total).toBe(31 + 28);
+  });
+
+  it('D. turma sem qualquer valor → total null e partialTotal disponível', () => {
+    const snapshots: SnapshotLike[] = [{ turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 }];
+    const turmas = [
+      { id: 't1', ativa: true },
+      { id: 't2', ativa: true }, // sem snapshot e sem matriculaAtual
+    ];
+    const result = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmas);
+    expect(result.complete).toBe(false);
+    expect(result.total).toBeNull();
+    expect(result.partialTotal).toBe(31);
+    expect(result.coveredClassCount).toBe(1);
+    expect(result.activeClassCount).toBe(2);
+  });
+
+  it('E. turma inativa é ignorada (não conta como ativa nem entra na soma)', () => {
+    const snapshots: SnapshotLike[] = [
+      { turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 },
+      { turmaId: 't2', mesReferencia: '2026-03', matriculaFimMes: 999 },
+    ];
+    const turmas = [
+      { id: 't1', ativa: true },
+      { id: 't2', ativa: false },
+    ];
+    const result = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmas);
+    expect(result.complete).toBe(true);
+    expect(result.total).toBe(31);
+    expect(result.activeClassCount).toBe(1);
+  });
+
+  it('F. fevereiro e março da mesma turma contam apenas março', () => {
     const snapshots: SnapshotLike[] = [
       { turmaId: 't1', mesReferencia: '2026-02', matriculaFimMes: 30 },
       { turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 },
     ];
     const turmas = [{ id: 't1', ativa: true }];
-    expect(calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmas)).toBe(31);
+    const result = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmas);
+    expect(result.total).toBe(31);
   });
 
-  it('duas turmas somam seus snapshots mais recentes', () => {
+  it('G. correção posterior de fevereiro não substitui março', () => {
     const snapshots: SnapshotLike[] = [
       { turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 },
-      { turmaId: 't2', mesReferencia: '2026-03', matriculaFimMes: 28 },
-    ];
-    const turmas = [{ id: 't1', ativa: true }, { id: 't2', ativa: true }];
-    expect(calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmas)).toBe(59);
-  });
-
-  it('turma inativa não entra na soma mesmo com snapshot recente', () => {
-    const snapshots: SnapshotLike[] = [
-      { turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 },
-      { turmaId: 't2', mesReferencia: '2026-03', matriculaFimMes: 28 },
-    ];
-    const turmas = [{ id: 't1', ativa: true }, { id: 't2', ativa: false }];
-    expect(calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmas)).toBe(31);
-  });
-
-  it('correção de mês antigo não substitui o mês mais recente na soma final', () => {
-    const snapshots: SnapshotLike[] = [
-      { turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 },
+      // "corrigido" depois, mas é um mês mais antigo — não deve vencer março.
       { turmaId: 't1', mesReferencia: '2026-02', matriculaFimMes: 999 },
     ];
     const turmas = [{ id: 't1', ativa: true }];
-    expect(calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmas)).toBe(31);
+    const result = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmas);
+    expect(result.total).toBe(31);
   });
 
-  it('escola sem snapshots retorna null (fallback fica a cargo do chamador)', () => {
-    const turmas = [{ id: 't1', ativa: true }];
-    expect(calculateCurrentSchoolEnrollmentFromSnapshots([], turmas)).toBeNull();
+  it('H. cobertura 0 de 0 não é apresentada como zero confirmado', () => {
+    const result = calculateCurrentSchoolEnrollmentCoverage([], []);
+    expect(result.activeClassCount).toBe(0);
+    expect(result.coveredClassCount).toBe(0);
+    expect(result.complete).toBe(false);
+    expect(result.total).toBeNull();
   });
 
-  it('escola sem nenhuma informação (sem snapshots e sem turmas) retorna null', () => {
-    expect(calculateCurrentSchoolEnrollmentFromSnapshots([], [])).toBeNull();
+  it('I. média e variação não são calculadas a partir de uma cobertura incompleta', () => {
+    const snapshots: SnapshotLike[] = [{ turmaId: 't1', mesReferencia: '2026-03', matriculaFimMes: 31 }];
+    const turmas = [{ id: 't1', ativa: true }, { id: 't2', ativa: true }];
+    const coverage = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmas);
+
+    expect(coverage.complete).toBe(false);
+    // matriculaAtual "oficial" da escola é coverage.total (null quando
+    // incompleto) — nunca partialTotal. Alimentando isso nas funções de
+    // média/variação, o resultado é sempre null, nunca calculado sobre
+    // dado parcial.
+    expect(calculateAverageStudentsPerClass(coverage.total, coverage.activeClassCount)).toBeNull();
+    expect(calculateEnrollmentVariation(800, coverage.total)).toBeNull();
+  });
+});
+
+describe('calculateUltimaAtualizacao', () => {
+  it('não prioriza uma data antiga de school_year quando existe snapshot mais recente', () => {
+    const schoolYear = { updatedAt: '2026-01-05T00:00:00.000Z', ultimaAtualizacao: '2026-01-05T00:00:00.000Z' };
+    const snapshots = [{ updatedAt: '2026-03-10T12:00:00.000Z' }];
+    expect(calculateUltimaAtualizacao(schoolYear, snapshots, [])).toBe('2026-03-10T12:00:00.000Z');
+  });
+
+  it('considera updatedAt das turmas quando é o mais recente', () => {
+    const schoolYear = { updatedAt: '2026-01-05T00:00:00.000Z' };
+    const snapshots = [{ updatedAt: '2026-02-01T00:00:00.000Z' }];
+    const turmas = [{ updatedAt: '2026-04-01T00:00:00.000Z' }];
+    expect(calculateUltimaAtualizacao(schoolYear, snapshots, turmas)).toBe('2026-04-01T00:00:00.000Z');
+  });
+
+  it('usa school_year quando é realmente o mais recente', () => {
+    const schoolYear = { updatedAt: '2026-05-01T00:00:00.000Z' };
+    const snapshots = [{ updatedAt: '2026-02-01T00:00:00.000Z' }];
+    expect(calculateUltimaAtualizacao(schoolYear, snapshots, [])).toBe('2026-05-01T00:00:00.000Z');
+  });
+
+  it('retorna null quando não há nenhuma data disponível', () => {
+    expect(calculateUltimaAtualizacao(null, [], [])).toBeNull();
+  });
+
+  it('ignora turmas sem updatedAt (legadas)', () => {
+    const snapshots = [{ updatedAt: '2026-02-01T00:00:00.000Z' }];
+    const turmas = [{}, { updatedAt: undefined }];
+    expect(calculateUltimaAtualizacao(null, snapshots, turmas)).toBe('2026-02-01T00:00:00.000Z');
+  });
+});
+
+describe('describeCoverageStatus', () => {
+  it('10 de 10 turmas — completo', () => {
+    expect(describeCoverageStatus(10, 10)).toBe('completo');
+  });
+
+  it('6 de 10 turmas — parcial', () => {
+    expect(describeCoverageStatus(6, 10)).toBe('parcial');
+  });
+
+  it('0 de 10 turmas — não informado (nunca "parcial" com cobertura zero)', () => {
+    expect(describeCoverageStatus(0, 10)).toBe('nao_informado');
+  });
+
+  it('0 de 0 turmas — não informado (nunca "completo")', () => {
+    expect(describeCoverageStatus(0, 0)).toBe('nao_informado');
   });
 });
 

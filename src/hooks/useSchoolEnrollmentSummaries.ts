@@ -13,9 +13,9 @@ import { getActiveClassroomCount, getClassroomsForSchool } from '../lib/classSer
 import {
   calculateAccumulatedTotals,
   calculateAverageStudentsPerClass,
-  calculateCurrentSchoolEnrollmentFromSnapshots,
+  calculateCurrentSchoolEnrollmentCoverage,
   calculateEnrollmentVariation,
-  calculateSchoolMatriculaAtual,
+  calculateUltimaAtualizacao,
 } from '../lib/enrollmentCalculations';
 import { DEMO_SCHOOL_YEARS_2026 } from '../data/demoSchoolYears';
 import type { Turma } from '../types/classroom';
@@ -31,6 +31,13 @@ export interface SchoolEnrollmentSummary {
   entradasAcumuladas: number;
   saidasAcumuladas: number;
   ultimaAtualizacao: string | null;
+  // Cobertura mensal (seção 6 da revisão final PR #8) — ver
+  // calculateCurrentSchoolEnrollmentCoverage. `matriculaAtual` só reflete
+  // coverageComplete === true; quando false, é sempre null e estes campos
+  // servem de informação auxiliar ("Parcial: X em Y de Z turmas").
+  coverageComplete: boolean;
+  coveredClassCount: number;
+  partialMatriculaAtual: number;
 }
 
 interface SchoolLike {
@@ -59,6 +66,9 @@ async function loadSummaryForSchool(
       entradasAcumuladas: demo?.totals.entradasAcumuladas ?? 0,
       saidasAcumuladas: demo?.totals.saidasAcumuladas ?? 0,
       ultimaAtualizacao: demo?.schoolYear.ultimaAtualizacao ?? null,
+      coverageComplete: matriculaAtual != null,
+      coveredClassCount: turmasAtivas,
+      partialMatriculaAtual: matriculaAtual ?? 0,
     };
   }
 
@@ -68,14 +78,12 @@ async function loadSummaryForSchool(
   ]);
   const totals = calculateAccumulatedTotals(snapshots);
   const matriculaInicial = schoolYear?.matriculaInicial ?? null;
-  // Precedência de exibição (seção 8 do plano): 1) snapshots mensais mais
-  // recentes de cada turma ativa; 2) school_years.matriculaAtual; 3)
-  // turmas.matriculaAtual (fallback legado); 4) null — "Não informado".
-  const matriculaAtual =
-    calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmasDaEscola) ??
-    schoolYear?.matriculaAtual ??
-    calculateSchoolMatriculaAtual(turmasDaEscola) ??
-    null;
+  // Cobertura por turma (seção 5 da revisão final PR #8) — nunca apresenta
+  // um total PARCIAL como se fosse a matrícula completa da escola.
+  // Precedência final: 1) total completo calculado por turma; 2)
+  // school_years.matriculaAtual como fallback; 3) null — "Não informado".
+  const coverage = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmasDaEscola);
+  const matriculaAtual = coverage.total ?? schoolYear?.matriculaAtual ?? null;
 
   return {
     matriculaInicial,
@@ -84,8 +92,13 @@ async function loadSummaryForSchool(
     turmasAtivas,
     mediaPorTurma: calculateAverageStudentsPerClass(matriculaAtual, turmasAtivas),
     entradasAcumuladas: totals.entradasAcumuladas,
+    coverageComplete: coverage.complete,
+    coveredClassCount: coverage.coveredClassCount,
+    partialMatriculaAtual: coverage.partialTotal,
     saidasAcumuladas: totals.saidasAcumuladas,
-    ultimaAtualizacao: schoolYear?.ultimaAtualizacao ?? (snapshots.length > 0 ? snapshots[snapshots.length - 1].updatedAt : null),
+    // Data mais recente entre school_year, snapshots e turmas (seção 9 da
+    // revisão final PR #8) — nunca prioriza uma data antiga de school_year.
+    ultimaAtualizacao: calculateUltimaAtualizacao(schoolYear, snapshots, turmasDaEscola),
   };
 }
 

@@ -118,6 +118,29 @@ export function calculateAccumulatedTotals(
   );
 }
 
+// Última atualização real da escola (seção 9 da revisão final PR #8): a
+// mais recente entre school_year (updatedAt/ultimaAtualizacao), os
+// snapshots mensais e as turmas — nunca prioriza uma data antiga de
+// school_year quando já existe um snapshot ou turma mais recente.
+// Comparação por string funciona porque todas as datas são ISO 8601
+// (new Date().toISOString()), que ordena lexicograficamente igual a
+// cronologicamente.
+export function calculateUltimaAtualizacao(
+  schoolYear: { updatedAt?: string | null; ultimaAtualizacao?: string | null } | null | undefined,
+  snapshots: readonly { updatedAt: string }[],
+  turmas: readonly { updatedAt?: string | null }[]
+): string | null {
+  const candidates: (string | null | undefined)[] = [
+    schoolYear?.updatedAt,
+    schoolYear?.ultimaAtualizacao,
+    ...snapshots.map(s => s.updatedAt),
+    ...turmas.map(t => t.updatedAt),
+  ];
+  const valid = candidates.filter((c): c is string => !!c);
+  if (valid.length === 0) return null;
+  return valid.reduce((latest, c) => (c > latest ? c : latest));
+}
+
 // Rótulo de exibição padrão quando o dado ainda não existe — nunca
 // renderizar 0 como se fosse um valor confirmado (seção 10 do plano).
 export function formatEnrollmentValue(value: number | null | undefined): string {
@@ -126,17 +149,6 @@ export function formatEnrollmentValue(value: number | null | undefined): string 
 
 export interface TurmaMatriculaLike extends TurmaAtivaLike {
   matriculaAtual?: number | null;
-}
-
-// Matrícula atual da escola = soma da matrícula atual das turmas ATIVAS que
-// já têm o dado preenchido. Retorna null quando nenhuma turma ativa tem
-// matriculaAtual conhecida (nunca soma 0 turmas como se fosse "zero alunos").
-export function calculateSchoolMatriculaAtual(
-  turmas: readonly TurmaMatriculaLike[]
-): number | null {
-  const known = turmas.filter(t => t.ativa !== false && t.matriculaAtual != null);
-  if (known.length === 0) return null;
-  return known.reduce((sum, t) => sum + (t.matriculaAtual as number), 0);
 }
 
 export interface SnapshotLike {
@@ -185,25 +197,81 @@ export function suggestMatriculaInicioMes<T extends SnapshotLike>(
   return maisRecente.matriculaFimMes;
 }
 
-// Matrícula atual da escola a partir do histórico mensal (seção 8 do
-// plano): soma matriculaFimMes do snapshot MAIS RECENTE de cada turma
-// ATIVA — nunca soma todos os meses, e turma inativa nunca entra na soma
-// mesmo que tenha snapshot recente. Retorna null quando nenhuma turma
-// ativa tem snapshot algum (o chamador decide o fallback — ver precedência
-// de exibição no hook/painel).
-export function calculateCurrentSchoolEnrollmentFromSnapshots<T extends SnapshotLike>(
-  snapshots: readonly T[],
-  turmas: readonly TurmaAtivaIdLike[]
-): number | null {
-  const latestByTurma = getLatestSnapshotPerClass(snapshots);
-  const activeTurmaIds = new Set(turmas.filter(t => t.ativa !== false).map(t => t.id));
-
-  let total = 0;
-  let matchCount = 0;
-  for (const [turmaId, snapshot] of latestByTurma) {
-    if (!activeTurmaIds.has(turmaId)) continue;
-    total += snapshot.matriculaFimMes;
-    matchCount += 1;
-  }
-  return matchCount === 0 ? null : total;
+export interface SchoolEnrollmentCoverage {
+  // Só preenchido quando complete === true — nunca um total parcial
+  // apresentado como se fosse a matrícula completa da escola (revisão
+  // final PR #8, seção 5).
+  total: number | null;
+  // Soma do que já é conhecido, mesmo quando incompleto — informação
+  // auxiliar ("Parcial: X alunos em Y de Z turmas"), nunca a matrícula
+  // total confirmada.
+  partialTotal: number;
+  activeClassCount: number;
+  coveredClassCount: number;
+  complete: boolean;
 }
+
+// Cobertura da matrícula atual por turma (seção 5 do plano — corrige o
+// bug de apresentar um total PARCIAL como se fosse o total confirmado da
+// escola). Para cada turma ATIVA, usa nesta ordem:
+//   1) matriculaFimMes do snapshot mais recente da turma;
+//   2) turma.matriculaAtual como fallback, quando não há snapshot;
+//   3) turma sem snapshot E sem matriculaAtual não soma nada e marca a
+//      cobertura como incompleta.
+// `complete` só é true quando TODAS as turmas ativas foram cobertas (e há
+// pelo menos uma turma ativa — 0 de 0 nunca é "completo", ver seção 6).
+// `total` só é preenchido quando complete === true; caso contrário fica
+// null e o chamador usa `partialTotal`/`coveredClassCount` só como
+// informação auxiliar, nunca como matrícula confirmada.
+export function calculateCurrentSchoolEnrollmentCoverage<T extends SnapshotLike>(
+  snapshots: readonly T[],
+  turmas: readonly (TurmaAtivaIdLike & TurmaMatriculaLike)[]
+): SchoolEnrollmentCoverage {
+  const latestByTurma = getLatestSnapshotPerClass(snapshots);
+  const activeTurmas = turmas.filter(t => t.ativa !== false);
+
+  let partialTotal = 0;
+  let coveredClassCount = 0;
+
+  for (const turma of activeTurmas) {
+    const snapshot = latestByTurma.get(turma.id);
+    if (snapshot != null) {
+      partialTotal += snapshot.matriculaFimMes;
+      coveredClassCount += 1;
+    } else if (turma.matriculaAtual != null) {
+      partialTotal += turma.matriculaAtual;
+      coveredClassCount += 1;
+    }
+  }
+
+  const activeClassCount = activeTurmas.length;
+  const complete = activeClassCount > 0 && coveredClassCount === activeClassCount;
+
+  return {
+    total: complete ? partialTotal : null,
+    partialTotal,
+    activeClassCount,
+    coveredClassCount,
+    complete,
+  };
+}
+
+export type EnrollmentCoverageStatus = 'completo' | 'parcial' | 'nao_informado';
+
+// Rótulo de status da cobertura mensal (seção 6 do plano) — compartilhado
+// entre SchoolEnrollmentPanel e SchoolsTable para não duplicar a mesma
+// lógica de decisão em dois componentes. "0 de N" e "N de 0" nunca contam
+// como "completo".
+export function describeCoverageStatus(coveredClassCount: number, activeClassCount: number): EnrollmentCoverageStatus {
+  if (activeClassCount === 0 || coveredClassCount === 0) return 'nao_informado';
+  if (coveredClassCount === activeClassCount) return 'completo';
+  return 'parcial';
+}
+
+// Rótulo em português exibido na interface — único ponto de tradução
+// usado por SchoolEnrollmentPanel e SchoolsTable.
+export const COVERAGE_STATUS_LABELS: Record<EnrollmentCoverageStatus, string> = {
+  completo: 'Completo',
+  parcial: 'Parcial',
+  nao_informado: 'Não informado',
+};

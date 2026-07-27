@@ -12,9 +12,12 @@ import { getActiveClassroomCount, getClassroomsForSchool, saveClassYearFields } 
 import {
   calculateAccumulatedTotals,
   calculateAverageStudentsPerClass,
-  calculateCurrentSchoolEnrollmentFromSnapshots,
+  calculateCurrentSchoolEnrollmentCoverage,
   calculateEnrollmentVariation,
   calculateMatriculaFimMes,
+  calculateUltimaAtualizacao,
+  COVERAGE_STATUS_LABELS,
+  describeCoverageStatus,
   formatEnrollmentValue,
   suggestMatriculaInicioMes,
 } from '../lib/enrollmentCalculations';
@@ -140,17 +143,16 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
   const demoTotals = !isFirebaseMode ? DEMO_SCHOOL_YEARS_2026[school.id]?.totals : undefined;
   const totals = demoTotals ?? calculateAccumulatedTotals(snapshots);
   const matriculaInicial = schoolYear?.matriculaInicial ?? null;
-  // Precedência de exibição (seção 8 do plano): 1) snapshots mensais mais
-  // recentes de cada turma ativa; 2) school_years.matriculaAtual; 3)
-  // turmas.matriculaAtual (fallback legado, calculado por quem monta
-  // turmasDaEscola); 4) null — "Não informado".
-  const matriculaAtual =
-    calculateCurrentSchoolEnrollmentFromSnapshots(snapshots, turmasDaEscola) ??
-    schoolYear?.matriculaAtual ??
-    null;
+  // Cobertura por turma (seção 5 da revisão final PR #8) — nunca apresenta
+  // um total PARCIAL como se fosse a matrícula completa da escola.
+  // Precedência final: 1) total completo calculado por turma; 2)
+  // school_years.matriculaAtual como fallback; 3) null — "Não informado".
+  const coverage = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmasDaEscola);
+  const matriculaAtual = coverage.total ?? schoolYear?.matriculaAtual ?? null;
   const variacao = calculateEnrollmentVariation(matriculaInicial, matriculaAtual);
   const media = calculateAverageStudentsPerClass(matriculaAtual, turmasAtivas);
-  const ultimoMes = snapshots.length > 0 ? snapshots[snapshots.length - 1].mesReferencia : (schoolYear?.ultimaAtualizacao ? schoolYear.ultimaAtualizacao.slice(0, 7) : null);
+  const ultimaAtualizacao = calculateUltimaAtualizacao(schoolYear, snapshots, turmasDaEscola);
+  const coverageStatusLabel = COVERAGE_STATUS_LABELS[describeCoverageStatus(coverage.coveredClassCount, coverage.activeClassCount)];
 
   const calculoPreview = calculateMatriculaFimMes({
     matriculaInicioMes: Number(matriculaInicioMes) || 0,
@@ -275,15 +277,29 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
               <section>
                 <h4 className="text-xs font-black uppercase text-slate-700 mb-2">Resumo</h4>
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">Matrícula inicial</div>
+                    <div className="text-sm font-extrabold text-slate-900 mt-0.5">{naoInformado(matriculaInicial)}</div>
+                  </div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">Matrícula atual</div>
+                    <div className="text-sm font-extrabold text-slate-900 mt-0.5">{naoInformado(matriculaAtual)}</div>
+                    {/* Cobertura parcial nunca aparece como matrícula confirmada — só
+                        como informação auxiliar (seção 6 da revisão final PR #8). */}
+                    {!coverage.complete && coverage.coveredClassCount > 0 && (
+                      <div className="text-[9px] text-amber-600 font-bold mt-0.5">
+                        Parcial: {coverage.partialTotal} alunos em {coverage.coveredClassCount} de {coverage.activeClassCount} turmas
+                      </div>
+                    )}
+                  </div>
                   {[
-                    ['Matrícula inicial', naoInformado(matriculaInicial)],
-                    ['Matrícula atual', naoInformado(matriculaAtual)],
                     ['Variação', variacao == null ? 'Não informado' : (variacao >= 0 ? `+${variacao}` : String(variacao))],
                     ['Turmas ativas', String(turmasAtivas)],
                     ['Média por turma', media == null ? 'Não informado' : media.toFixed(1)],
                     ['Entradas acumuladas', String(totals.entradasAcumuladas)],
                     ['Saídas acumuladas', String(totals.saidasAcumuladas)],
-                    ['Último mês atualizado', ultimoMes ?? 'Não informado'],
+                    ['Turmas atualizadas', `${coverage.coveredClassCount} de ${coverage.activeClassCount} turmas — ${coverageStatusLabel}`],
+                    ['Última atualização', ultimaAtualizacao ? ultimaAtualizacao.slice(0, 10) : 'Não informado'],
                   ].map(([label, value]) => (
                     <div key={label} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
                       <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">{label}</div>

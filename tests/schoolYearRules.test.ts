@@ -138,6 +138,27 @@ function snapshotPayload(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function turmaPayload(overrides: Record<string, unknown> = {}) {
+  return {
+    schoolId: SCHOOL_A_ID,
+    escolaId: SCHOOL_A_ID,
+    escolaNome: ESCOLA_A,
+    codInep: '00000101',
+    anoLetivo: 2026,
+    nome: 'Turma Nova - Teste',
+    ano: '1º Ano',
+    periodo: 'Manhã',
+    alunosSinalizados: 0,
+    matriculaInicial: 0,
+    matriculaAtual: 0,
+    createdAt: '2026-01-05T00:00:00.000Z',
+    createdBy: ACTIVE_A_EMAIL,
+    updatedAt: '2026-01-05T00:00:00.000Z',
+    updatedBy: ACTIVE_A_EMAIL,
+    ...overrides,
+  };
+}
+
 function importPayload(overrides: Record<string, unknown> = {}) {
   return {
     id: `${SCHOOL_A_ID}_hash1`,
@@ -337,6 +358,145 @@ describe('Fase 2A — school_years', () => {
     });
     await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'school_years', `${SCHOOL_A_ID}_2026`)));
     await assertSucceeds(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+});
+
+describe('Correção final PR #8 — turmas (create/update/delete separados)', () => {
+  it('A. superintendente da Escola A não cria turma com o schoolId real da Escola B', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'turmas', 'turma-ataque-a'), turmaPayload({
+        schoolId: SCHOOL_B_ID, escolaId: SCHOOL_B_ID,
+      }))
+    );
+  });
+
+  it('B. usa nome/schoolId da Escola A e codInep da Escola B — rejeitado pela integridade canônica', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'turmas', 'turma-ataque-b'), turmaPayload({ codInep: '00000102' }))
+    );
+  });
+
+  it('C. schoolId diferente de escolaId é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'turmas', 'turma-ataque-c'), turmaPayload({ escolaId: 'algum-id-diferente' }))
+    );
+  });
+
+  it('D. update não pode mudar escolaNome da turma para outra escola', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(
+        doc(ctx.firestore(), 'turmas', 'turma-alvo-d'),
+        turmaPayload({ schoolId: SCHOOL_B_ID, escolaId: SCHOOL_B_ID, escolaNome: ESCOLA_B, codInep: '00000102' })
+      );
+    });
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'turmas', 'turma-alvo-d'), {
+        escolaNome: ESCOLA_A, updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_B_EMAIL,
+      })
+    );
+  });
+
+  it('E. update não move uma turma da Escola A para a Escola B (schoolId)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'turmas', 'turma-alvo-e'), turmaPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'turmas', 'turma-alvo-e'), {
+        schoolId: SCHOOL_B_ID, updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
+  });
+
+  it('F. update não pode alterar codInep de uma turma já canônica', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'turmas', 'turma-alvo-f'), turmaPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'turmas', 'turma-alvo-f'), {
+        codInep: '99999999', updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
+  });
+
+  it('G. update não pode reescrever createdAt/createdBy', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'turmas', 'turma-alvo-g'), turmaPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'turmas', 'turma-alvo-g'), {
+        createdAt: '2020-01-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
+    await assertFails(
+      updateDoc(doc(db, 'turmas', 'turma-alvo-g'), {
+        createdBy: 'outro@example.com', updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
+  });
+
+  it('H. superintendente comum não exclui turma', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'turmas', 'turma-alvo-h'), turmaPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(deleteDoc(doc(db, 'turmas', 'turma-alvo-h')));
+  });
+
+  it('I. criação canônica na própria escola é permitida', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(setDoc(doc(db, 'turmas', 'turma-canonica-i'), turmaPayload()));
+  });
+
+  it('J. edição de campos pedagógicos na própria escola é permitida', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'turmas', 'turma-alvo-j'), turmaPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(
+      updateDoc(doc(db, 'turmas', 'turma-alvo-j'), {
+        nome: 'Turma Renomeada', alunosSinalizados: 4,
+        updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
+  });
+
+  it('K. enriquecimento canônico de turma legada é permitido', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'turmas', 'turma-legada-k'), {
+        escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A, nome: 'Turma Legada K',
+        ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0,
+      });
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(
+      updateDoc(doc(db, 'turmas', 'turma-legada-k'), {
+        schoolId: SCHOOL_A_ID, codInep: '00000101', anoLetivo: 2026,
+        createdAt: '2026-02-01T00:00:00.000Z', createdBy: ACTIVE_A_EMAIL,
+        updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
+  });
+
+  it('L. enriquecimento de turma legada com schoolId de outra escola é rejeitado', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'turmas', 'turma-legada-l'), {
+        escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A, nome: 'Turma Legada L',
+        ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0,
+      });
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'turmas', 'turma-legada-l'), {
+        schoolId: SCHOOL_B_ID, updatedAt: '2026-02-01T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
   });
 });
 
@@ -544,6 +704,11 @@ describe('Fase 2A — imports', () => {
   it('import não pode nascer já confirmado', async () => {
     const db = ctxFor(ACTIVE_A_EMAIL).firestore();
     await assertFails(setDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), importPayload({ status: 'confirmado' })));
+  });
+
+  it('import com schoolId correto e codInep de outra escola é rejeitado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(setDoc(doc(db, 'imports', `${SCHOOL_A_ID}_hash1`), importPayload({ codInep: '00000102' })));
   });
 
   it('superintendente sem permissão não confirma import de outra escola', async () => {

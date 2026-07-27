@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { GraduationCap, PlusCircle, Search, MapPin, BarChart2, Plus, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { subscribeToCollection, addDocument, updateDocument, SEED_SCHOOLS } from '../lib/firebaseService';
-import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, addSchoolToLoggedInSuperintendent } from '../lib/superintendentService';
+import { isSchoolVisible, getActiveSuperintendentId, addSchoolToLoggedInSuperintendent, isCurrentUserAdmin } from '../lib/superintendentService';
 import { useSchoolEnrollmentSummaries } from '../hooks/useSchoolEnrollmentSummaries';
 import SchoolEnrollmentPanel from './SchoolEnrollmentPanel';
 import SchoolsTable from './SchoolsTable';
@@ -81,6 +81,7 @@ export default function EscolasView() {
   // Verification & Submission
   const handleSaveSchool = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError('');
     if (!nome.trim() || !codInep.trim() || !matriculas || !idebMedio || !metaIdeb) {
       setFormError('Por favor, preencha todos os campos obrigatórios.');
       return;
@@ -92,16 +93,24 @@ export default function EscolasView() {
       return;
     }
 
-    if (editingSchool) {
-      if (!hasSchoolWriteAccess(editingSchool.nome)) {
-        setFormError('Acesso Negado: Você não tem permissão para editar os dados desta escola.');
-        return;
-      }
+    // Cadastro mestre (criar e editar escola) é restrito a administrador —
+    // superintendente comum usa "Acompanhar matrículas", nunca este
+    // formulário (revisão final PR #8, seção 4).
+    if (!isCurrentUserAdmin()) {
+      setFormError('Acesso Negado: somente administradores podem cadastrar ou editar o registro mestre de uma escola.');
+      return;
+    }
 
+    if (editingSchool) {
+      // nome/codInep são imutáveis por update comum (ver firestore.rules) —
+      // sempre reenvia os valores originais do registro, nunca o que está
+      // no formulário (os campos ficam desabilitados na interface, mas
+      // isto garante que a regra nunca rejeite a edição dos indicadores
+      // por uma divergência acidental).
       const updatedSchool: School = {
         ...editingSchool,
-        nome,
-        codInep,
+        nome: editingSchool.nome,
+        codInep: editingSchool.codInep,
         cidade,
         matriculas: parseInt(matriculas),
         idebMedio: parseFloat(idebMedio),
@@ -119,8 +128,12 @@ export default function EscolasView() {
         setSchools(schools.map(s => s.id === editingSchool.id ? updatedSchool : s));
       }
     } else {
-      // If logged in, automatically assign newly created school to this user
-      addSchoolToLoggedInSuperintendent(nome);
+      // Duplicidade de codInep entre as escolas j\u00e1 carregadas \u2014 checado
+      // antes de gravar, nunca depois (revis\u00e3o final PR #8, se\u00e7\u00e3o 4).
+      if (schools.some(s => s.codInep === codInep)) {
+        setFormError('J\u00e1 existe uma escola cadastrada com este c\u00f3digo INEP.');
+        return;
+      }
 
       const generatedId = nome.toLowerCase()
         .normalize('NFD')
@@ -148,6 +161,10 @@ export default function EscolasView() {
       } else {
         setSchools([newSchool, ...schools]);
       }
+      // S\u00f3 depois da cria\u00e7\u00e3o bem-sucedida (Firestore, ou estado local em
+      // modo demonstra\u00e7\u00e3o) \u2014 nunca antes, sen\u00e3o a carteira local aponta
+      // para uma escola que pode n\u00e3o ter sido gravada de verdade.
+      addSchoolToLoggedInSuperintendent(nome);
     }
     
     setShowAddForm(false);
@@ -198,21 +215,23 @@ export default function EscolasView() {
           <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Escolas da Coordenadoria Regional</h2>
           <p className="text-xs text-slate-500 font-normal">Controle cadastral, matrículas ativas e monitoramento de desempenho do IDEB.</p>
         </div>
-        <button
-          onClick={() => {
-            setEditingSchool(null);
-            setNome('');
-            setCodInep('');
-            setCidade('Fortaleza');
-            setMatriculas('');
-            setIdebMedio('');
-            setMetaIdeb('');
-            setShowAddForm(true);
-          }}
-          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-sans transition flex items-center gap-1.5 shadow-sm"
-        >
-          <Plus size={16} /> Cadastrar Nova Escola
-        </button>
+        {isCurrentUserAdmin() && (
+          <button
+            onClick={() => {
+              setEditingSchool(null);
+              setNome('');
+              setCodInep('');
+              setCidade('Fortaleza');
+              setMatriculas('');
+              setIdebMedio('');
+              setMetaIdeb('');
+              setShowAddForm(true);
+            }}
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-sans transition flex items-center gap-1.5 shadow-sm"
+          >
+            <Plus size={16} /> Cadastrar Nova Escola
+          </button>
+        )}
       </div>
 
       {/* Grid summarizing core regional school markers */}
@@ -318,28 +337,34 @@ export default function EscolasView() {
               )}
 
               <div className="space-y-1">
-                <label className="text-[10px] font-black uppercase text-slate-700 block">Nome da Unidade Escolar *</label>
+                <label className="text-[10px] font-black uppercase text-slate-700 block">
+                  Nome da Unidade Escolar * {editingSchool && <span className="text-slate-400 font-normal normal-case">(identidade — não editável)</span>}
+                </label>
                 <input
                   type="text"
                   required
+                  disabled={!!editingSchool}
                   placeholder="Ex: EEMTI Cinderela de Nazaré"
                   value={nome}
                   onChange={(e) => setNome(e.target.value)}
-                  className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl"
+                  className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1">
-                  <label className="text-[10px] font-black uppercase text-slate-700 block">Código INEP (8 dígitos) *</label>
+                  <label className="text-[10px] font-black uppercase text-slate-700 block">
+                    Código INEP (8 dígitos) * {editingSchool && <span className="text-slate-400 font-normal normal-case">(não editável)</span>}
+                  </label>
                   <input
                     type="text"
                     required
+                    disabled={!!editingSchool}
                     maxLength={8}
                     placeholder="Ex: 23075841"
                     value={codInep}
                     onChange={(e) => setCodInep(e.target.value.replace(/\D/g, ''))}
-                    className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs font-mono rounded-xl"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs font-mono rounded-xl disabled:bg-slate-100 disabled:text-slate-500"
                   />
                 </div>
 

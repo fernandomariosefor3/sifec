@@ -320,10 +320,16 @@ service cloud.firestore {
         incoming().idebMedio is number &&
         incoming().metaIdeb is number &&
         incoming().status is string;
+      // nome/codInep travados no update comum (revisão pós-PR #8, seção 3):
+      // são a identidade CANÔNICA usada por school_years/turmas/snapshots/
+      // imports (ver isCanonicalSchoolMatch acima) — uma edição comum não
+      // pode alterá-los por baixo de todo o resto que depende deles, nem
+      // mesmo o admin. Correção de nome/INEP real, quando necessária, é um
+      // processo administrativo de migração controlada, fora desta regra.
       allow update: if isAuthorized() && isValidId(schoolId) &&
         canWriteEscola(resource.data.nome) &&
-        incoming().nome is string && incoming().nome.size() <= 150 &&
-        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().nome == resource.data.nome &&
+        incoming().codInep == resource.data.codInep &&
         incoming().cidade is string && incoming().cidade.size() <= 100 &&
         incoming().matriculas is number &&
         incoming().idebMedio is number &&
@@ -333,19 +339,94 @@ service cloud.firestore {
       allow delete: if isPlatformAdmin() && isValidId(schoolId);
     }
 
-    // --- Turmas ---
+    // --- Turmas (revisão pós-PR #8, correção final) ---
+    // create/update/delete SEPARADOS de propósito — a versão anterior usava
+    // a MESMA regra (canWriteEscola(incoming().escolaNome)) para create e
+    // update, o que permitia: (a) criar uma turma com um schoolId real de
+    // OUTRA escola desde que escolaNome fosse a própria (mesma lacuna já
+    // fechada em school_years/enrollment_snapshots); (b) mover uma turma de
+    // uma escola para outra por update, bastando reenviar escolaId/
+    // escolaNome/schoolId novos.
+
+    // Turma legada = documento anterior à Fase 2A, sem os campos novos
+    // (schoolId/codInep/anoLetivo/createdAt/createdBy). Enriquecimento só é
+    // aceito quando o valor introduzido é o CANÔNICO — nunca um valor
+    // arbitrário que "mudaria" a turma de escola por baixo dos panos.
+    function turmaSchoolIdRespected() {
+      return resource.data.get('schoolId', null) != null
+        ? incoming().get('schoolId', null) == resource.data.schoolId
+        : (!('schoolId' in incoming()) || incoming().schoolId == resource.data.escolaId);
+    }
+
+    function turmaCodInepRespected() {
+      return resource.data.get('codInep', null) != null
+        ? incoming().get('codInep', null) == resource.data.codInep
+        : (
+            !('codInep' in incoming()) ||
+            isCanonicalCodInepForSchool(incoming().get('schoolId', resource.data.escolaId), incoming().codInep)
+          );
+    }
+
+    // anoLetivo/createdAt/createdBy: mesma lógica de "trava quando já
+    // existe, senão pode ser preenchido pela primeira vez" — mas sem valor
+    // canônico externo para comparar (diferente de schoolId/codInep).
+    function turmaFieldRespectedOnceSet(fieldName) {
+      return resource.data.get(fieldName, null) != null
+        ? incoming().get(fieldName, null) == resource.data.get(fieldName, null)
+        : true;
+    }
+
     match /turmas/{turmaId} {
       allow read: if isAuthorized();
-      allow create, update: if isAuthorized() && isValidId(turmaId) &&
-        canWriteEscola(incoming().escolaNome) &&
+
+      // Ver seção 2.1 da revisão: acesso por schoolId (não por nome
+      // solto), schoolId obrigatoriamente igual a escolaId nas turmas
+      // novas, e schoolId/codInep/escolaNome precisam bater com o
+      // documento real de `schools` — nunca só por nome.
+      allow create: if isValidId(turmaId) &&
+        canWriteSchoolById(incoming().schoolId) &&
+        incoming().schoolId == incoming().escolaId &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        isNonNegInt(incoming().matriculaInicial) &&
+        isNonNegInt(incoming().matriculaAtual) &&
         incoming().escolaId is string && incoming().escolaId.size() <= 128 &&
         incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
         incoming().nome is string && incoming().nome.size() <= 100 &&
         incoming().ano is string && incoming().ano.size() <= 20 &&
         incoming().periodo is string && incoming().periodo.size() <= 50 &&
-        incoming().alunosSinalizados is number;
-      allow delete: if isAuthorized() && isValidId(turmaId) &&
-        canWriteEscola(resource.data.escolaNome);
+        incoming().alunosSinalizados is number &&
+        (!('modalidade' in incoming()) || incoming().modalidade in ['Regular', 'Tempo Integral', 'Educação Profissional', 'EJA', 'Educação Especial', 'Outra']) &&
+        (!('cargaHoraria' in incoming()) || isNonNegInt(incoming().cargaHoraria)) &&
+        (!('ativa' in incoming()) || incoming().ativa is bool) &&
+        incoming().createdAt is string && incoming().createdBy is string &&
+        incoming().updatedAt is string && incoming().updatedBy is string;
+
+      // Autorização pelo dono ANTERIOR (resource.data.escolaNome) — nunca
+      // pelo payload novo, senão um update vira uma forma de sequestrar a
+      // turma de outra escola. id/escolaId/escolaNome nunca mudam;
+      // schoolId/codInep/anoLetivo/createdAt/createdBy travam quando já
+      // existem, mas uma turma legada pode ganhá-los pela primeira vez
+      // (só com valor canônico — ver as funções acima).
+      allow update: if isValidId(turmaId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().escolaId == resource.data.escolaId &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        turmaSchoolIdRespected() &&
+        turmaCodInepRespected() &&
+        turmaFieldRespectedOnceSet('anoLetivo') &&
+        turmaFieldRespectedOnceSet('createdAt') &&
+        turmaFieldRespectedOnceSet('createdBy') &&
+        incoming().nome is string && incoming().nome.size() <= 100 &&
+        incoming().ano is string && incoming().ano.size() <= 20 &&
+        incoming().periodo is string && incoming().periodo.size() <= 50 &&
+        incoming().alunosSinalizados is number &&
+        incoming().updatedAt is string && incoming().updatedBy is string;
+
+      // Superintendente comum NUNCA exclui turma — o fluxo normal é
+      // ativa: false (Ativar/Inativar na interface, seção 7 do plano
+      // anterior). Só o admin raiz, mesmo padrão de schools/school_years.
+      allow delete: if isPlatformAdmin() && isValidId(turmaId);
     }
 
     // --- Grades (Opção C — mitigação temporária, ver Fase 0) ---
@@ -563,7 +644,13 @@ service cloud.firestore {
       // schoolId (ver canWriteSchoolById — imports não tem escolaNome).
       // .get() com default pelo mesmo motivo do comentário em school_years.
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
-      allow create: if isAuthorized() && isValidId(importId) &&
+      // isAuthorized() sai daqui de propósito (revisão pós-PR #8, mesmo
+      // motivo de school_years/enrollment_snapshots): canWriteSchoolById()
+      // já implica isAuthorized() quando bem-sucedido, e cada chamada extra
+      // a isAdmin()/isActiveSuperintendent() pesa no limite de 1000
+      // sub-expressões do emulador local — orçamento que ficou mais
+      // apertado depois de somar isCanonicalCodInepForSchool() aqui.
+      allow create: if isValidId(importId) &&
         incoming().schoolId is string &&
         // Checagem de integridade, independente de autorização: mesmo um
         // admin não pode criar um import apontando para um schoolId que não
@@ -571,6 +658,9 @@ service cloud.firestore {
         // válida rejeitada").
         exists(/databases/$(database)/documents/schools/$(incoming().schoolId)) &&
         canWriteSchoolById(incoming().schoolId) &&
+        // codInep canônico (revisão pós-PR #8, seção 8): mesmo schoolId
+        // correto, um import não pode declarar o codInep de OUTRA escola.
+        isCanonicalCodInepForSchool(incoming().schoolId, incoming().codInep) &&
         incoming().status in ['analisando', 'aguardando_confirmacao'] &&
         incoming().keys().hasOnly([
           'id', 'sourceSystem', 'reportType', 'reportTitle', 'fileName', 'fileHash',
