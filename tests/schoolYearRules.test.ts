@@ -687,6 +687,49 @@ describe('Fase 2A — enrollment_snapshots', () => {
     await assertFails(getDocs(query(collection(otherDb, 'enrollment_snapshots'), where('schoolId', '==', SCHOOL_A_ID))));
   });
 
+  // Hotfix — primeiro registro mensal não salvava: getEnrollmentSnapshot()
+  // passou de getDoc(id determinístico) para query(where schoolId, where
+  // turmaId, where mesReferencia). Mesmo motivo do hotfix equivalente em
+  // school_years (ver schoolYearQuery acima): getDoc direto num documento
+  // que ainda não existe força a regra a avaliar resource.data contra um
+  // resource nulo, o que sempre falha como "Missing or insufficient
+  // permissions" mesmo para quem tem acesso legítimo.
+  function snapshotQuery(
+    db: ReturnType<ReturnType<typeof ctxFor>['firestore']>,
+    schoolId: string,
+    turmaId: string,
+    mesReferencia: string
+  ) {
+    return query(
+      collection(db, 'enrollment_snapshots'),
+      where('schoolId', '==', schoolId),
+      where('turmaId', '==', turmaId),
+      where('mesReferencia', '==', mesReferencia)
+    );
+  }
+
+  it('A. administrador consulta snapshot inexistente por schoolId, turmaId e mês — permitido e vazio', async () => {
+    const db = ctxFor(ADMIN_EMAIL).firestore();
+    const snap = await assertSucceeds(getDocs(snapshotQuery(db, SCHOOL_A_ID, 'turma-a', '2026-07')));
+    expect(snap.empty).toBe(true);
+  });
+
+  it('B. superintendente vinculado consulta sua escola sem snapshot — permitido e vazio', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    const snap = await assertSucceeds(getDocs(snapshotQuery(db, SCHOOL_A_ID, 'turma-a', '2026-07')));
+    expect(snap.empty).toBe(true);
+  });
+
+  it('C. superintendente de outra escola — negado', async () => {
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(getDocs(snapshotQuery(db, SCHOOL_A_ID, 'turma-a', '2026-07')));
+  });
+
+  it('D. usuário inativo — negado', async () => {
+    const db = ctxFor(INACTIVE_EMAIL).firestore();
+    await assertFails(getDocs(snapshotQuery(db, SCHOOL_A_ID, 'turma-a', '2026-07')));
+  });
+
   it('exclusão de snapshot é sempre bloqueada para usuário comum', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), 'enrollment_snapshots', `${SCHOOL_A_ID}_turma-a_2026-03`), snapshotPayload());
