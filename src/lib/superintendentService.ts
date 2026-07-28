@@ -211,6 +211,19 @@ export function isCurrentUserAdmin(): boolean {
   return !!mine && mine.ativo === true && mine.role === 'admin';
 }
 
+// True for the root admin OR any active, registered superintendent record
+// (any role) matching the signed-in email — independent of a specific
+// school. Used to distinguish "not registered / inactive account" from a
+// real data-load failure when a signed-in user opens a school panel (ver
+// SchoolEnrollmentPanel.tsx — hotfix estabilização, seção 8.C).
+export function isCurrentUserAuthorized(): boolean {
+  const user = auth.currentUser;
+  if (!user?.email) return false;
+  if (isRootAdmin()) return true;
+  const mine = getSuperintendents().find(s => s.email?.toLowerCase() === user.email!.toLowerCase());
+  return !!mine && mine.ativo === true;
+}
+
 // isAuthenticated gates the role: 'admin' global-access shortcut so the
 // pre-login demo record (DEFAULT_SUPERINTENDENTS, also role: 'admin') keeps
 // showing only its own seeded school list — see superintendentRules.ts.

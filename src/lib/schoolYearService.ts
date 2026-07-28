@@ -3,7 +3,7 @@
 // nascem `null` ("não informado") e só passam a ter valor quando alguém
 // preenche o formulário ou uma importação confirmada os grava — nunca a
 // partir do campo legado `schools.matriculas` (ver seção 3 do plano).
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, query, setDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
 import type { SchoolYear, SchoolYearStatus } from '../types/schoolYear';
 import { buildSchoolYearId } from './deterministicIds';
@@ -69,9 +69,25 @@ export function buildSchoolYearPayload(
   };
 }
 
+// Consulta por schoolId+anoLetivo em vez de getDoc(id determinístico): a
+// regra de segurança (`allow read` em school_years) só consegue provar que
+// uma consulta é segura quando ela é filtrada pelo mesmo campo (schoolId)
+// usado na regra. Um getDoc direto por ID pede um documento específico —
+// quando ele ainda não existe, o Firestore precisa avaliar a regra contra um
+// resource nulo, o que sempre falha e aparece para o usuário como "Missing
+// or insufficient permissions", mesmo a escola tendo acesso legítimo. Uma
+// query que não bate com nenhum documento simplesmente retorna vazia, sem
+// erro de permissão.
 export async function getSchoolYear(schoolId: string, anoLetivo: number): Promise<SchoolYear | null> {
-  const snap = await getDoc(doc(db, COLLECTION, buildSchoolYearId(schoolId, anoLetivo)));
-  return snap.exists() ? (snap.data() as SchoolYear) : null;
+  const snap = await getDocs(
+    query(
+      collection(db, COLLECTION),
+      where('schoolId', '==', schoolId),
+      where('anoLetivo', '==', anoLetivo),
+      limit(1)
+    )
+  );
+  return snap.empty ? null : (snap.docs[0].data() as SchoolYear);
 }
 
 export async function saveSchoolYear(input: SaveSchoolYearInput): Promise<SchoolYear> {

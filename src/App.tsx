@@ -21,8 +21,12 @@ import {
   ChevronRight,
   ShieldCheck
 } from 'lucide-react';
-import { auth, loginWithGoogle, logout } from './lib/firebase';
+import { auth, loginWithGoogle, logout, EXPECTED_FIREBASE_PROJECT_ID } from './lib/firebase';
+import { mapAuthErrorCodeToMessage, extractAuthErrorCode, buildSafeAuthDiagnostic } from './lib/authErrorMessages';
+import { CANONICAL_SIFEC_URL, isGithubPagesHostname } from './lib/canonicalHost';
 import ErrorBoundary from './components/ErrorBoundary';
+import CanonicalHostNotice from './components/CanonicalHostNotice';
+import AuthSessionBlock from './components/AuthSessionBlock';
 // Subcomponents
 import EscolasView from './components/EscolasView';
 import FluxoView from './components/FluxoView';
@@ -62,20 +66,89 @@ type TabType = 'escolas' | 'fluxo' | 'notas' | 'cdg' | 'busca' | 'recomposicao' 
 // DevPanel não é só escondido, ele não vai para o bundle de produção.
 const isDevBuild = import.meta.env.DEV;
 
+// GitHub Pages ainda publica (ver .github/workflows/deploy.yml) mas não deve
+// mais rodar o app duplicado — só mostra um aviso apontando para o endereço
+// oficial (ver seção 7 do hotfix de estabilização). Lida fora do componente
+// porque o hostname não muda durante a sessão.
+const shouldShowCanonicalHostNotice = isGithubPagesHostname(window.location.hostname);
+
 export default function App() {
   const [activeTab, setActiveTab] = React.useState<TabType>('escolas');
   const [isDevOpen, setIsDevOpen] = useState(false);
-  
+
   const [activeSuperId, setActiveSuperId] = useState('all');
   const [superintendents, setSuperintendents] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [adminScope, setAdminScopeState] = useState<AdminSchoolScope>(getAdminSchoolScope());
 
+  // Estados explícitos de autenticação (hotfix estabilização, seção 3) — o
+  // login Google falhava/ficava inconsistente e os erros só apareciam no
+  // console. authLoading cobre o popup do Google; authSyncing cobre a
+  // sincronização do cadastro do superintendente logo depois; authReady só
+  // fica true depois que essa sincronização termina (sucesso ou falha) —
+  // nunca antes, para não mostrar "não cadastrado" cedo demais para um
+  // usuário legítimo cujo registro ainda não chegou do Firestore.
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authSyncing, setAuthSyncing] = useState(false);
+  const [authReady, setAuthReady] = useState(false);
+  const [authError, setAuthError] = useState<{ code?: string; message: string } | null>(null);
+
+  const handleLogin = React.useCallback(async () => {
+    // Seção 4: nunca abrir uma segunda janela enquanto a primeira tentativa
+    // ainda está em andamento.
+    if (authLoading) return;
+    setAuthLoading(true);
+    setAuthError(null);
+    try {
+      await loginWithGoogle();
+      // onAuthStateChanged (abaixo) cuida da sincronização a partir daqui.
+    } catch (err) {
+      const code = extractAuthErrorCode(err);
+      console.error(
+        'Falha no login com Google',
+        buildSafeAuthDiagnostic({
+          error: err,
+          hostname: window.location.hostname,
+          expectedProjectId: EXPECTED_FIREBASE_PROJECT_ID,
+          hasAuthenticatedUser: !!auth.currentUser,
+        })
+      );
+      setAuthError({ code, message: mapAuthErrorCodeToMessage(code) });
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [authLoading]);
+
   React.useEffect(() => {
     const unsubAuth = auth.onAuthStateChanged(async (user) => {
       setCurrentUser(user);
-      if (user) {
+      setAuthError(null);
+      if (!user) {
+        setAuthSyncing(false);
+        setAuthReady(true);
+        return;
+      }
+      setAuthSyncing(true);
+      setAuthReady(false);
+      try {
         await syncSuperintendentsFromFirestore();
+      } catch (err) {
+        console.error(
+          'Falha ao sincronizar cadastro do superintendente após login',
+          buildSafeAuthDiagnostic({
+            error: err,
+            hostname: window.location.hostname,
+            expectedProjectId: EXPECTED_FIREBASE_PROJECT_ID,
+            hasAuthenticatedUser: true,
+          })
+        );
+        setAuthError({
+          code: extractAuthErrorCode(err),
+          message: 'Não foi possível concluir a sincronização do seu acesso. Tente novamente.',
+        });
+      } finally {
+        setAuthSyncing(false);
+        setAuthReady(true);
       }
     });
     return () => unsubAuth();
@@ -209,6 +282,13 @@ export default function App() {
     }
   };
 
+  // Seção 7 do hotfix de estabilização: GitHub Pages continua publicado,
+  // mas não roda mais o app — só aponta para o endereço oficial. Depois de
+  // todos os hooks (regra dos hooks), antes do JSX principal.
+  if (shouldShowCanonicalHostNotice) {
+    return <CanonicalHostNotice />;
+  }
+
   return (
     <div className="min-h-screen bg-white text-slate-800 font-sans selection:bg-brand-turquoise selection:text-white flex flex-col justify-between">
       {/* 1. Header Area with Portal Brand & Layout styling */}
@@ -244,58 +324,20 @@ export default function App() {
               </div>
 
               {/* Real Google Auth / Session Info Block */}
-              <div className="bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl flex items-center min-h-[48px]">
-                {!currentUser ? (
-                  <button
-                    onClick={async () => {
-                      try {
-                        await loginWithGoogle();
-                      } catch (err) {
-                        console.error("Auth error", err);
-                      }
-                    }}
-                    className="flex items-center gap-2 px-3 py-1 bg-white border border-slate-250 hover:border-brand-turquoise hover:bg-slate-50 rounded-lg text-xs font-bold text-slate-700 shadow-sm transition-all"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>
-                    Entrar com Google
-                  </button>
-                ) : (
-                  <div className="flex items-center gap-2.5">
-                    {currentUser.photoURL ? (
-                      <img 
-                        src={currentUser.photoURL} 
-                        alt="Avatar" 
-                        className="w-7 h-7 rounded-full border border-brand-green/30" 
-                        referrerPolicy="no-referrer" 
-                      />
-                    ) : (
-                      <div className="w-7 h-7 rounded-full bg-brand-green/10 text-brand-green font-bold text-xs flex items-center justify-center border border-brand-green/20">
-                        {currentUser.displayName ? currentUser.displayName.charAt(0) : 'U'}
-                      </div>
-                    )}
-                    <div className="text-left">
-                      <span className="font-extrabold text-[11px] text-slate-900 block truncate max-w-[130px]" title={currentUser.displayName}>
-                        {currentUser.displayName || 'Superintendente'}
-                      </span>
-                      <span className="text-[9px] text-slate-500 font-mono block truncate max-w-[130px]" title={currentUser.email}>
-                        {currentUser.email}
-                      </span>
-                    </div>
-                    <button
-                      onClick={async () => {
-                        try {
-                          await logout();
-                        } catch (err) {
-                          console.error("Logout error", err);
-                        }
-                      }}
-                      className="text-[10px] text-rose-500 hover:text-rose-700 font-bold ml-1.5 underline transition-colors"
-                    >
-                      Sair
-                    </button>
-                  </div>
-                )}
-              </div>
+              <AuthSessionBlock
+                currentUser={currentUser}
+                authLoading={authLoading}
+                authSyncing={authSyncing}
+                authError={authError}
+                onLogin={handleLogin}
+                onLogout={async () => {
+                  try {
+                    await logout();
+                  } catch (err) {
+                    console.error("Logout error", err);
+                  }
+                }}
+              />
             </div>
           </div>
         </header>
@@ -342,13 +384,23 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-              ) : loggedInSuper ? (
+              ) : loggedInSuper && loggedInSuper.ativo === true ? (
                 <div className="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-slate-800 text-[11px]">
                   {loggedInSuper.nome.split(' - ')[0]} ({getSchoolScopeLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser, adminScope })})
                 </div>
-              ) : currentUser ? (
+              ) : currentUser && authReady ? (
+                // Seção 5/8.C: distingue "não cadastrado" de "cadastrado mas
+                // inativo" só depois que a sincronização termina — nunca
+                // antes, para não acusar um usuário legítimo cujo registro
+                // ainda está a caminho do Firestore.
                 <div className="w-full py-1.5 px-2 text-[11px] text-rose-500 font-bold">
-                  Não autorizado — contate o administrador
+                  {loggedInSuper
+                    ? 'Sua conta está inativa no SIFEC — contate o administrador.'
+                    : 'Sua conta não está cadastrada no SIFEC — contate o administrador.'}
+                </div>
+              ) : currentUser ? (
+                <div className="w-full py-1.5 px-2 text-[11px] text-slate-400">
+                  Validando seu acesso...
                 </div>
               ) : (
                 <div className="w-full py-1.5 px-2 text-[11px] text-slate-400">
@@ -389,7 +441,7 @@ export default function App() {
                 </div>
               )}
 
-              {loggedInSuper && (
+              {loggedInSuper && loggedInSuper.ativo === true && (
                 <div className="mt-2 flex flex-col gap-1">
                   <div className="flex items-center gap-1.5 py-1 px-2 bg-brand-green/10 border border-brand-green/20 rounded-lg">
                     <ShieldCheck size={12} className="text-brand-green shrink-0 text-emerald-600" />
