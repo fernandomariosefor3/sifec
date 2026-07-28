@@ -202,7 +202,7 @@ service cloud.firestore {
     // schoolId/codInep válidos e acesso à escola; logs de outras coleções
     // (ex.: superintendentes) não são "escolares" e não exigem escola.
     function isSchoolScopedAuditCollection(collectionName) {
-      return collectionName in ['school_years', 'enrollment_snapshots', 'turmas', 'schools', 'imports'];
+      return collectionName in ['school_years', 'enrollment_snapshots', 'turmas', 'schools', 'imports', 'school_flow_results'];
     }
 
     // codInep do audit_log precisa bater com o codInep REAL da escola —
@@ -647,6 +647,92 @@ service cloud.firestore {
         isValidEnrollmentSnapshotShape(snapshotId);
 
       allow delete: if isPlatformAdmin() && isValidId(snapshotId);
+    }
+
+    // Shape do documento, comum a create e update — mesma separação de
+    // responsabilidade de isValidSchoolYearShape()/isValidEnrollmentSnapshotShape()
+    // acima. Percentuais nunca fazem parte do schema (seção 3 do plano —
+    // são sempre calculados na aplicação a partir de aprovados/reprovados/
+    // abandono, nunca persistidos).
+    function isValidSchoolFlowResultShape(resultId) {
+      return incoming().keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo',
+          'aprovados', 'reprovados', 'abandono', 'status', 'observacao',
+          'sourceSystem', 'sourceReportTitle', 'sourceFileName', 'sourceFileHash', 'importBatchId',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        incoming().id == resultId &&
+        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        // ID determinístico validado contra os campos internos (seção 3 do
+        // plano: schoolId_anoLetivo) — mesmo princípio de school_years.
+        resultId == incoming().schoolId + '_' + string(incoming().anoLetivo) &&
+        isNonNegInt(incoming().aprovados) &&
+        isNonNegInt(incoming().reprovados) &&
+        isNonNegInt(incoming().abandono) &&
+        incoming().status in ['rascunho', 'confirmado'] &&
+        // Confirmado exige total > 0; rascunho pode ter total zero (seção 5
+        // do plano) — nunca inventa quantitativo ausente.
+        (incoming().status == 'rascunho' ||
+          (incoming().aprovados + incoming().reprovados + incoming().abandono) > 0) &&
+        (!('observacao' in incoming()) || (incoming().observacao is string && incoming().observacao.size() <= 500)) &&
+        (!('sourceSystem' in incoming()) || incoming().sourceSystem in ['Manual', 'SIGE Escola', 'Importação administrativa']) &&
+        (!('sourceReportTitle' in incoming()) || (incoming().sourceReportTitle is string && incoming().sourceReportTitle.size() <= 200)) &&
+        (!('sourceFileName' in incoming()) || (incoming().sourceFileName is string && incoming().sourceFileName.size() <= 200)) &&
+        (!('sourceFileHash' in incoming()) || (incoming().sourceFileHash is string && incoming().sourceFileHash.size() <= 200)) &&
+        (!('importBatchId' in incoming()) || (incoming().importBatchId is string && incoming().importBatchId.size() <= 200)) &&
+        incoming().createdAt is string && incoming().updatedAt is string &&
+        incoming().createdBy is string && incoming().updatedBy is string;
+    }
+
+    // --- Fase 2B: school_flow_results ---
+    // Resultado anual agregado de fluxo escolar (aprovados/reprovados/
+    // abandono) por escola+ano letivo. Só dados agregados — nunca nome ou
+    // identificador de estudante (ver types/schoolFlow.ts). Mesmo modelo de
+    // autorização e mesma proteção de integridade canônica de school_years
+    // (não há turma envolvida aqui, então não precisa de
+    // isCanonicalTurmaOfSchool).
+    match /school_flow_results/{resultId} {
+      // Baseado em schoolId (canWriteSchoolById), não em escolaNome — mesmo
+      // motivo de school_years/enrollment_snapshots: SchoolFlowService
+      // sempre consulta por schoolId (ver getSchoolFlowResult), e o
+      // Firestore só consegue provar a segurança de uma consulta (list)
+      // quando a regra depende do MESMO campo usado no where().
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+
+      // isCanonicalSchoolMatch (mesmo princípio de school_years/
+      // enrollment_snapshots): prova que schoolId/codInep/escolaNome do
+      // payload realmente descrevem a MESMA escola em `schools` — sem isso,
+      // a Escola A podia criar um resultado com o schoolId real da Escola B
+      // só preenchendo escolaNome com o próprio nome (que ela tem permissão
+      // de escrever). isAuthorized() sai daqui de propósito: canWriteEscola()
+      // já implica isAuthorized().
+      allow create: if isValidId(resultId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isValidSchoolFlowResultShape(resultId);
+
+      // Update = correção do MESMO ano/escola (nunca uma forma de mudar de
+      // escola/ano mantendo o ID) — mesma estrutura de school_years: um só
+      // canWriteEscola() sobre o dono ANTIGO do documento, id/schoolId/
+      // codInep/escolaNome/anoLetivo travados como imutáveis, createdAt/
+      // createdBy também travados, isAuthorized() removido por já estar
+      // implícito em canWriteEscola().
+      allow update: if isValidId(resultId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidSchoolFlowResultShape(resultId);
+
+      // Sem exclusão livre — mesmo padrão de school_years/enrollment_snapshots,
+      // só o admin raiz exclui.
+      allow delete: if isPlatformAdmin() && isValidId(resultId);
     }
 
     // --- Fase 2A: imports ---

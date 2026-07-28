@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildEnrollmentSnapshotId,
+  buildSchoolFlowResultId,
   buildSchoolYearId,
   parseSchoolYearId,
 } from '../src/lib/deterministicIds';
@@ -59,5 +60,27 @@ describe('buildEnrollmentSnapshotId', () => {
     const turmaA = buildEnrollmentSnapshotId('diva-cabral', 'turma-3a-diva', '2026-03');
     const turmaB = buildEnrollmentSnapshotId('diva-cabral', 'turma-3b-diva', '2026-03');
     expect(turmaA).not.toBe(turmaB);
+  });
+});
+
+describe('buildSchoolFlowResultId', () => {
+  it('gera o ID no formato schoolId_anoLetivo', () => {
+    expect(buildSchoolFlowResultId('diva-cabral', 2025)).toBe('diva-cabral_2025');
+  });
+
+  it('escolas diferentes no mesmo ano geram IDs diferentes', () => {
+    expect(buildSchoolFlowResultId('diva-cabral', 2025)).not.toBe(buildSchoolFlowResultId('figueiredo-correia', 2025));
+  });
+
+  it('a mesma escola em anos diferentes gera IDs diferentes (histórico nunca colide)', () => {
+    expect(buildSchoolFlowResultId('diva-cabral', 2025)).not.toBe(buildSchoolFlowResultId('diva-cabral', 2026));
+  });
+
+  it('não depende de nenhuma identidade de superintendente — troca de responsável nunca afeta o ID', () => {
+    // Mesma garantia estrutural de buildSchoolYearId/buildEnrollmentSnapshotId
+    // (ver tests/schoolYearOwnershipTransfer.test.ts): o ID é função pura de
+    // schoolId/anoLetivo, então o histórico nunca se perde numa troca de
+    // vínculo em superintendentes/{email}.escolas.
+    expect(buildSchoolFlowResultId('diva-cabral', 2025)).toBe('diva-cabral_2025');
   });
 });

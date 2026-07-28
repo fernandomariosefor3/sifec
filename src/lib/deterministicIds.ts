@@ -34,3 +34,11 @@ export function buildEnrollmentSnapshotId(
 ): string {
   return `${schoolId}_${turmaId}_${mesReferencia}`;
 }
+
+// `school_flow_results/{schoolId_anoLetivo}` — ex.: "diva-cabral_2025".
+// Mesmo formato de buildSchoolYearId, mas mantida como função própria
+// (Fase 2B) porque as duas coleções são independentes — escola+ano letivo é
+// só coincidentemente a mesma chave composta para ambas.
+export function buildSchoolFlowResultId(schoolId: string, anoLetivo: number): string {
+  return `${schoolId}_${anoLetivo}`;
+}
