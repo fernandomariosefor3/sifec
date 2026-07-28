@@ -23,15 +23,16 @@ import {
   Lock
 } from 'lucide-react';
 import { auth, loginWithGoogle, logout } from '../lib/firebase';
-import { 
-  seedFirestoreDatabase, 
-  subscribeToCollection, 
-  updateDocument, 
+import firebaseConfig from '../../firebase-applet-config.json';
+import {
+  seedFirestoreDatabase,
+  subscribeToCollection,
+  updateDocument,
   addDocument,
   deleteDocument,
-  SEED_GRADES, 
-  SEED_TURMAS, 
-  SEED_SCHOOLS 
+  SEED_GRADES,
+  SEED_TURMAS,
+  SEED_SCHOOLS
 } from '../lib/firebaseService';
 import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, schoolNamesMatch } from '../lib/superintendentService';
 
@@ -489,7 +490,10 @@ export default function NotasView() {
         </div>
       </div>
 
-      {/* 2. Top Banner: Firebase Integration Center */}
+      {/* 2. Top Banner: Firebase Integration Center — apenas em desenvolvimento.
+          Login/logout de produção são feitos pelo fluxo central em App.tsx;
+          este painel manual (com seed) nunca deve existir no bundle publicado. */}
+      {import.meta.env.DEV && (
       <div className="bg-slate-50 border border-slate-200/80 rounded-2xl p-5 shadow-sm">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
           <div className="flex items-start gap-3.5">
@@ -500,7 +504,7 @@ export default function NotasView() {
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h3 className="text-xs font-black text-slate-900 uppercase tracking-tight">Ativar Conexão com Firebase</h3>
+                <h3 className="text-xs font-black text-slate-900 uppercase tracking-tight">Ativar Conexão com Firebase (dev)</h3>
                 <span className={`text-[9px] font-black font-mono px-1.5 py-0.5 rounded border uppercase ${
                   isFirebaseMode ? 'bg-brand-green/10 border-brand-green/20 text-brand-green' : 'bg-brand-orange/10 border-brand-orange/20 text-brand-orange'
                 }`}>
@@ -508,8 +512,8 @@ export default function NotasView() {
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 font-normal leading-normal mt-1 max-w-2xl">
-                {isFirebaseMode 
-                  ? `Conectado ao ID: emdiafinanceiro-13483. Carregando dados de auditoria em tempo real sem latência ou simulações temporárias.` 
+                {isFirebaseMode
+                  ? `Conectado ao projeto Firebase "${firebaseConfig.projectId}" (ambiente de desenvolvimento local).`
                   : `Em modo offline demonstrativo. Para puxar as informações reais do Firebase e registrar alterações no Firestore, ative o canal de dados abaixo.`}
               </p>
             </div>
@@ -552,6 +556,7 @@ export default function NotasView() {
           </div>
         )}
       </div>
+      )}
 
       {subTab === 'monitoring' ? (
         /* ==================== MONITORING SUB-TAB ==================== */

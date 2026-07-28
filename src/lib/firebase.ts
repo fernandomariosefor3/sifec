@@ -4,6 +4,23 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, signOut } from 'firebase/
 import { getFirestore, collection, getDocs, doc, setDoc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 
+// O SIFEC deve conectar exclusivamente ao projeto sifec-sefor3. Falha rápida
+// e explícita evita que uma reconfiguração acidental (ou config copiada de
+// outro sistema) conecte a produção a um projeto Firebase incorreto. Extraída
+// como função pura (em vez de um if solto) para poder ser testada sem
+// inicializar o SDK do Firebase de verdade.
+export const EXPECTED_FIREBASE_PROJECT_ID = 'sifec-sefor3';
+
+export function assertExpectedFirebaseProjectId(projectId: string): void {
+  if (projectId !== EXPECTED_FIREBASE_PROJECT_ID) {
+    throw new Error(
+      `Firebase mal configurado: projectId esperado "${EXPECTED_FIREBASE_PROJECT_ID}", mas firebase-applet-config.json aponta para "${projectId}". Inicialização interrompida para evitar conexão com projeto Firebase incorreto.`
+    );
+  }
+}
+
+assertExpectedFirebaseProjectId(firebaseConfig.projectId);
+
 // Initialize Firebase
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);

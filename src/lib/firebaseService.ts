@@ -162,6 +162,14 @@ export const SEED_VISITAS = [
 
 // Helper to seed Firestore database with initial mock structure
 export async function seedFirestoreDatabase() {
+  // Bloqueio duplo contra seed em produção — a UI que chama esta função já
+  // some do bundle de produção (ver NotasView.tsx), mas a função também se
+  // recusa a rodar caso seja invocada por qualquer outro caminho.
+  if (import.meta.env.PROD) {
+    console.error('seedFirestoreDatabase: execução bloqueada em produção.');
+    return false;
+  }
+
   const path = 'schools';
   try {
     const schoolsSnap = await getDocs(collection(db, 'schools'));
