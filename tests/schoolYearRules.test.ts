@@ -2,7 +2,7 @@
 // audit_logs, usando o Firebase Emulator (100% local, mesmo padrão de
 // tests/firestore.rules.test.ts). Nenhum nome ou dado real de aluno é usado
 // — tudo aqui é sintético, só para este teste.
-import { afterAll, beforeAll, beforeEach, describe, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails,
   assertSucceeds,
@@ -358,6 +358,56 @@ describe('Fase 2A — school_years', () => {
     });
     await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'school_years', `${SCHOOL_A_ID}_2026`)));
     await assertSucceeds(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'school_years', `${SCHOOL_A_ID}_2026`)));
+  });
+
+  // Hotfix estabilização — getSchoolYear() passou de getDoc(id determinístico)
+  // para query(where schoolId, where anoLetivo). getDoc direto num documento
+  // que ainda não existe força a regra a avaliar resource.data contra um
+  // resource nulo, o que sempre falha e aparece como "Missing or
+  // insufficient permissions" mesmo para uma escola com acesso legítimo. Uma
+  // query sem documentos correspondentes simplesmente retorna vazia.
+  function schoolYearQuery(
+    db: ReturnType<ReturnType<typeof ctxFor>['firestore']>,
+    schoolId: string,
+    anoLetivo: number
+  ) {
+    return query(
+      collection(db, 'school_years'),
+      where('schoolId', '==', schoolId),
+      where('anoLetivo', '==', anoLetivo)
+    );
+  }
+
+  it('consulta por schoolId+anoLetivo sem nenhum documento retorna vazia, sem erro de permissão (escola autorizada)', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    const snap = await assertSucceeds(getDocs(schoolYearQuery(db, SCHOOL_A_ID, 2026)));
+    expect(snap.empty).toBe(true);
+  });
+
+  it('consulta por schoolId+anoLetivo com documento existente retorna o documento (escola autorizada)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'school_years', `${SCHOOL_A_ID}_2026`), schoolYearPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    const snap = await assertSucceeds(getDocs(schoolYearQuery(db, SCHOOL_A_ID, 2026)));
+    expect(snap.empty).toBe(false);
+    expect(snap.docs[0].data().schoolId).toBe(SCHOOL_A_ID);
+  });
+
+  it('consulta por schoolId de outra escola continua bloqueada, mesmo sem documento', async () => {
+    const db = ctxFor(ACTIVE_B_EMAIL).firestore();
+    await assertFails(getDocs(schoolYearQuery(db, SCHOOL_A_ID, 2026)));
+  });
+
+  it('usuário inativo continua bloqueado na consulta, mesmo sem documento', async () => {
+    const db = ctxFor(INACTIVE_EMAIL).firestore();
+    await assertFails(getDocs(schoolYearQuery(db, SCHOOL_A_ID, 2026)));
+  });
+
+  it('administrador consulta school_year de qualquer escola, mesmo sem documento', async () => {
+    const db = ctxFor(ADMIN_EMAIL).firestore();
+    const snap = await assertSucceeds(getDocs(schoolYearQuery(db, SCHOOL_A_ID, 2026)));
+    expect(snap.empty).toBe(true);
   });
 });
 

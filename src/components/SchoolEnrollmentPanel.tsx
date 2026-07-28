@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { X, AlertTriangle, Settings } from 'lucide-react';
 import { auth } from '../lib/firebase';
-import { hasSchoolWriteAccess } from '../lib/superintendentService';
+import { hasSchoolWriteAccess, isCurrentUserAuthorized } from '../lib/superintendentService';
 import { getSchoolYear } from '../lib/schoolYearService';
 import {
   listEnrollmentSnapshotsForSchool,
@@ -78,6 +78,9 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
   const [snapshots, setSnapshots] = useState<EnrollmentSnapshot[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
+  // Incrementado pelo botão "Tentar novamente" (seção 8.B do hotfix de
+  // estabilização) para reexecutar o carregamento sem fechar o painel.
+  const [reloadTick, setReloadTick] = useState(0);
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
   const [turmaActionError, setTurmaActionError] = useState('');
@@ -89,6 +92,10 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
     [turmas, school]
   );
   const canWrite = hasSchoolWriteAccess(school.nome);
+  // Seção 8.C do hotfix de estabilização: distingue "conta não cadastrada ou
+  // inativa" de uma falha real de carregamento — só se aplica com Firebase
+  // real conectado e alguém autenticado; nunca aparece no modo demonstração.
+  const notAuthorized = isFirebaseMode && !!auth.currentUser && !isCurrentUserAuthorized();
 
   const [mesReferencia, setMesReferencia] = useState('');
   const [turmaId, setTurmaId] = useState('');
@@ -143,7 +150,7 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reloadSchoolData depende só de school.id/ANO_LETIVO, já cobertos abaixo
-  }, [school.id, isFirebaseMode]);
+  }, [school.id, isFirebaseMode, reloadTick]);
 
   // Continuidade mensal (seção 9 do plano): ao trocar turma OU mês, sugere
   // matriculaFimMes do mês anterior mais recente DAQUELA turma como
@@ -291,7 +298,7 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
           {/* Orientação de preenchimento (correção de usabilidade) — atalhos
               sempre visíveis no topo do painel, rolam até a seção
               correspondente. Não altera nenhuma lógica de gravação. */}
-          {!loading && !loadError && (
+          {!loading && !loadError && !notAuthorized && (
             <PanelFillGuidance
               onScrollToSchoolYearConfig={() => scrollToSection(SECTION_IDS.schoolYearConfig)}
               onScrollToClassrooms={() => scrollToSection(SECTION_IDS.classrooms)}
@@ -304,13 +311,32 @@ export default function SchoolEnrollmentPanel({ school, turmas, isFirebaseMode, 
         </div>
 
         <div className="overflow-y-auto p-6 space-y-6">
-          {loading ? (
+          {notAuthorized ? (
+            // C. Usuário não autorizado (seção 8.C) — conta não cadastrada ou
+            // inativa no SIFEC. Nunca mostra formulário nesse estado.
+            <div className="py-10 text-center text-rose-600 text-xs flex flex-col items-center gap-2">
+              <AlertTriangle size={18} />
+              <span className="font-bold">Sua conta não está cadastrada ou está inativa no SIFEC.</span>
+              <span className="text-slate-500 font-normal">Contate o administrador para liberar seu acesso.</span>
+            </div>
+          ) : loading ? (
             <div className="py-10 text-center text-slate-400 text-xs">Carregando dados da escola...</div>
           ) : loadError ? (
+            // B. Falha real de permissão/carregamento (seção 8.B) — nunca
+            // deixa o usuário gravar enquanto o acesso não estiver validado
+            // (nenhum formulário é renderizado neste ramo) e sempre oferece
+            // uma forma de tentar de novo sem fechar o painel.
             <div className="py-10 text-center text-rose-600 text-xs flex flex-col items-center gap-2">
               <AlertTriangle size={18} />
               <span className="font-bold">Não foi possível carregar os dados desta escola.</span>
               <span className="text-slate-500 font-normal">{loadError}</span>
+              <button
+                type="button"
+                onClick={() => setReloadTick(tick => tick + 1)}
+                className="mt-1 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition"
+              >
+                Tentar novamente
+              </button>
             </div>
           ) : (
             <>
