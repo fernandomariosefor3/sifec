@@ -77,6 +77,7 @@ describe('Fluxo local completo (E2E com mocks) — login, Gestão de Escolas, pa
         authError={null}
         onLogin={onLogin}
         onLogout={vi.fn()}
+        onRetrySync={vi.fn()}
       />
     );
 
@@ -95,6 +96,7 @@ describe('Fluxo local completo (E2E com mocks) — login, Gestão de Escolas, pa
         authError={null}
         onLogin={onLogin}
         onLogout={vi.fn()}
+        onRetrySync={vi.fn()}
       />
     );
     expect(screen.getByText('Validando seu acesso ao SIFEC...')).toBeInTheDocument();
@@ -107,6 +109,7 @@ describe('Fluxo local completo (E2E com mocks) — login, Gestão de Escolas, pa
         authError={null}
         onLogin={onLogin}
         onLogout={vi.fn()}
+        onRetrySync={vi.fn()}
       />
     );
     expect(screen.queryByText('Validando seu acesso ao SIFEC...')).not.toBeInTheDocument();

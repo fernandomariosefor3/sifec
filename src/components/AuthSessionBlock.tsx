@@ -8,7 +8,12 @@ interface AuthUser {
   email?: string | null;
 }
 
+// type distingue a origem do erro (hotfix de estabilização, seção 2): 'login'
+// veio do popup do Google (loginWithGoogle), 'sync' veio da sincronização do
+// cadastro do superintendente já logado (syncSuperintendentsFromFirestore).
+// "Tentar novamente" precisa repetir só a etapa que falhou.
 interface AuthErrorInfo {
+  type: 'login' | 'sync';
   code?: string;
   message: string;
 }
@@ -20,11 +25,15 @@ interface AuthSessionBlockProps {
   authError: AuthErrorInfo | null;
   onLogin: () => void;
   onLogout: () => void;
+  onRetrySync: () => void;
 }
 
 export default function AuthSessionBlock({
-  currentUser, authLoading, authSyncing, authError, onLogin, onLogout,
+  currentUser, authLoading, authSyncing, authError, onLogin, onLogout, onRetrySync,
 }: AuthSessionBlockProps) {
+  const isSyncError = authError?.type === 'sync';
+  const handleRetry = isSyncError ? onRetrySync : onLogin;
+  const retryDisabled = isSyncError ? authSyncing : authLoading;
   return (
     <div className="flex flex-col items-end gap-1.5">
       <div className="bg-slate-50 border border-slate-200 px-4 py-2 rounded-xl flex items-center min-h-[48px]">
@@ -91,8 +100,8 @@ export default function AuthSessionBlock({
           )}
           <button
             type="button"
-            onClick={onLogin}
-            disabled={authLoading}
+            onClick={handleRetry}
+            disabled={retryDisabled}
             className="mt-0.5 px-2 py-1 bg-rose-100 hover:bg-rose-200 rounded-lg text-[10px] font-bold text-rose-700 transition disabled:opacity-50"
           >
             Tentar novamente

@@ -18,6 +18,7 @@ function baseProps(overrides: Partial<Parameters<typeof AuthSessionBlock>[0]> = 
     authError: null,
     onLogin: vi.fn(),
     onLogout: vi.fn(),
+    onRetrySync: vi.fn(),
     ...overrides,
   };
 }
@@ -73,7 +74,7 @@ describe('AuthSessionBlock', () => {
     render(
       <AuthSessionBlock
         {...baseProps({
-          authError: { code: 'auth/unauthorized-domain', message: 'Este endereço ainda não está autorizado no Firebase.' },
+          authError: { type: 'login', code: 'auth/unauthorized-domain', message: 'Este endereço ainda não está autorizado no Firebase.' },
         })}
       />
     );
@@ -86,7 +87,7 @@ describe('AuthSessionBlock', () => {
     render(
       <AuthSessionBlock
         {...baseProps({
-          authError: { code: 'auth/popup-blocked', message: 'O navegador bloqueou a janela de login. Permita pop-ups para este site.' },
+          authError: { type: 'login', code: 'auth/popup-blocked', message: 'O navegador bloqueou a janela de login. Permita pop-ups para este site.' },
         })}
       />
     );
@@ -97,7 +98,7 @@ describe('AuthSessionBlock', () => {
     render(
       <AuthSessionBlock
         {...baseProps({
-          authError: { code: 'auth/popup-closed-by-user', message: 'A janela de login foi fechada antes da conclusão.' },
+          authError: { type: 'login', code: 'auth/popup-closed-by-user', message: 'A janela de login foi fechada antes da conclusão.' },
         })}
       />
     );
@@ -108,7 +109,7 @@ describe('AuthSessionBlock', () => {
     render(
       <AuthSessionBlock
         {...baseProps({
-          authError: { code: 'auth/network-request-failed', message: 'Não foi possível conectar ao serviço de autenticação.' },
+          authError: { type: 'login', code: 'auth/network-request-failed', message: 'Não foi possível conectar ao serviço de autenticação.' },
         })}
       />
     );
@@ -119,7 +120,7 @@ describe('AuthSessionBlock', () => {
     render(
       <AuthSessionBlock
         {...baseProps({
-          authError: { code: 'auth/algo-nunca-visto', message: 'Não foi possível concluir o acesso com Google.' },
+          authError: { type: 'login', code: 'auth/algo-nunca-visto', message: 'Não foi possível concluir o acesso com Google.' },
         })}
       />
     );
@@ -127,17 +128,51 @@ describe('AuthSessionBlock', () => {
     expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument();
   });
 
-  it('clique em "Tentar novamente" chama onLogin de novo', () => {
+  it('erro type: login — "Tentar novamente" chama onLogin, nunca onRetrySync', () => {
     const onLogin = vi.fn();
+    const onRetrySync = vi.fn();
     render(
       <AuthSessionBlock
         {...baseProps({
           onLogin,
-          authError: { code: 'auth/network-request-failed', message: 'Não foi possível conectar ao serviço de autenticação.' },
+          onRetrySync,
+          authError: { type: 'login', code: 'auth/network-request-failed', message: 'Não foi possível conectar ao serviço de autenticação.' },
         })}
       />
     );
     fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
     expect(onLogin).toHaveBeenCalledTimes(1);
+    expect(onRetrySync).not.toHaveBeenCalled();
+  });
+
+  it('erro type: sync — "Tentar novamente" chama onRetrySync, nunca onLogin (não reabre popup do Google)', () => {
+    const onLogin = vi.fn();
+    const onRetrySync = vi.fn();
+    render(
+      <AuthSessionBlock
+        {...baseProps({
+          currentUser: { email: 'super.a@example.com', displayName: 'Super A' },
+          onLogin,
+          onRetrySync,
+          authError: { type: 'sync', message: 'Não foi possível concluir a sincronização do seu acesso. Tente novamente.' },
+        })}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    expect(onRetrySync).toHaveBeenCalledTimes(1);
+    expect(onLogin).not.toHaveBeenCalled();
+  });
+
+  it('erro type: sync — botão "Tentar novamente" fica desabilitado durante authSyncing (não durante authLoading)', () => {
+    render(
+      <AuthSessionBlock
+        {...baseProps({
+          currentUser: { email: 'super.a@example.com', displayName: 'Super A' },
+          authSyncing: true,
+          authError: { type: 'sync', message: 'Não foi possível concluir a sincronização do seu acesso. Tente novamente.' },
+        })}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeDisabled();
   });
 });

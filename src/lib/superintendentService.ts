@@ -85,27 +85,29 @@ function docToSuperintendent(id: string, data: Record<string, unknown>): Superin
   });
 }
 
-// Load all superintendent records (admin only — non-admins use getCurrentUserSuperRecord)
+// Load all superintendent records (admin only — non-admins use getCurrentUserSuperRecord).
+// Does not catch: a technical failure here (permission-denied, unavailable,
+// network error) must reach the caller as a real error, never as an empty
+// list — an empty list is indistinguishable from "no superintendents exist"
+// and would let syncSuperintendentsFromFirestore silently wipe the local
+// cache instead of surfacing the failure (hotfix estabilização, seção 1).
 export async function loadSuperintendentsFromFirestore(): Promise<Superintendent[]> {
-  try {
-    const snap = await getDocs(collection(db, 'superintendentes'));
-    return snap.docs.map(d => docToSuperintendent(d.id, d.data()));
-  } catch {
-    return [];
-  }
+  const snap = await getDocs(collection(db, 'superintendentes'));
+  return snap.docs.map(d => docToSuperintendent(d.id, d.data()));
 }
 
-// Get only the currently logged-in user's record from Firestore
+// Get only the currently logged-in user's record from Firestore. Returns
+// null ONLY when the document genuinely does not exist (snap.exists() is
+// false) — a real Firestore failure (permission-denied, unavailable,
+// network error, ...) must propagate to the caller instead of being
+// swallowed into null, which upstream code would otherwise read as "account
+// not registered" (hotfix estabilização, seção 1).
 export async function getCurrentUserSuperRecord(): Promise<Superintendent | null> {
   const user = auth.currentUser;
   if (!user?.email) return null;
-  try {
-    const snap = await getDoc(doc(db, 'superintendentes', user.email.toLowerCase()));
-    if (!snap.exists()) return null;
-    return docToSuperintendent(snap.id, snap.data());
-  } catch {
-    return null;
-  }
+  const snap = await getDoc(doc(db, 'superintendentes', user.email.toLowerCase()));
+  if (!snap.exists()) return null;
+  return docToSuperintendent(snap.id, snap.data());
 }
 
 // Sync from Firestore into localStorage cache. Admins (root or role: admin)
@@ -114,6 +116,11 @@ export async function getCurrentUserSuperRecord(): Promise<Superintendent | null
 // and never ends up duplicated alongside it. Non-admins only have
 // Firestore read access to their own document (see firestore.rules),
 // so their sync merges just that one record into the local cache.
+// Deliberately has no try/catch: a technical failure in
+// getCurrentUserSuperRecord/loadSuperintendentsFromFirestore must propagate
+// to the caller (App.tsx) so it can be shown as a real sync error instead of
+// being reinterpreted as "account not registered" (hotfix estabilização,
+// seção 1).
 export async function syncSuperintendentsFromFirestore(): Promise<void> {
   const user = auth.currentUser;
   if (!user?.email) return;

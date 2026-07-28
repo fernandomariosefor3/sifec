@@ -6,7 +6,7 @@
 // o fluxo de autenticação/sincronização importa aqui.
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, act, fireEvent } from '@testing-library/react';
 import App from '../src/App';
 
 afterEach(() => {
@@ -14,7 +14,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const { authStateListeners, mockAuth, mockSync } = vi.hoisted(() => {
+const { authStateListeners, mockAuth, mockSync, mockLogin } = vi.hoisted(() => {
   const listeners: Array<(user: unknown) => void> = [];
   return {
     authStateListeners: listeners,
@@ -29,12 +29,13 @@ const { authStateListeners, mockAuth, mockSync } = vi.hoisted(() => {
       },
     },
     mockSync: vi.fn(),
+    mockLogin: vi.fn(),
   };
 });
 
 vi.mock('../src/lib/firebase', () => ({
   auth: mockAuth,
-  loginWithGoogle: vi.fn(),
+  loginWithGoogle: mockLogin,
   logout: vi.fn(),
   EXPECTED_FIREBASE_PROJECT_ID: 'sifec-sefor3',
 }));
@@ -106,6 +107,79 @@ describe('App — sincronização pós-login', () => {
     await waitFor(() => expect(mockSync).toHaveBeenCalledTimes(1));
     expect(
       screen.queryByText('Não foi possível concluir a sincronização do seu acesso. Tente novamente.')
+    ).not.toBeInTheDocument();
+  });
+
+  it('retry de erro de sincronização repete somente a sincronização — nunca chama loginWithGoogle (hotfix estabilização, seção 2)', async () => {
+    mockSync.mockRejectedValueOnce(new Error('permission-denied'));
+    mockSync.mockResolvedValueOnce(undefined);
+    render(<App />);
+
+    await act(async () => {
+      mockAuth.currentUser = { email: 'fernandomariodasmartins@gmail.com' };
+      authStateListeners[0]({ email: 'fernandomariodasmartins@gmail.com' });
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Não foi possível concluir a sincronização do seu acesso. Tente novamente.')
+      ).toBeInTheDocument()
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    });
+
+    await waitFor(() => expect(mockSync).toHaveBeenCalledTimes(2));
+    expect(mockLogin).not.toHaveBeenCalled();
+  });
+
+  it('retry de sincronização bem-sucedido limpa o erro e libera o sistema', async () => {
+    mockSync.mockRejectedValueOnce(new Error('unavailable'));
+    mockSync.mockResolvedValueOnce(undefined);
+    render(<App />);
+
+    await act(async () => {
+      mockAuth.currentUser = { email: 'fernandomariodasmartins@gmail.com' };
+      authStateListeners[0]({ email: 'fernandomariodasmartins@gmail.com' });
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Não foi possível concluir a sincronização do seu acesso. Tente novamente.')
+      ).toBeInTheDocument()
+    );
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText('Não foi possível concluir a sincronização do seu acesso. Tente novamente.')
+      ).not.toBeInTheDocument()
+    );
+  });
+
+  it('falha técnica de sincronização não mostra "conta não cadastrada" nem "conta inativa"', async () => {
+    mockSync.mockRejectedValue(new Error('permission-denied'));
+    render(<App />);
+
+    await act(async () => {
+      mockAuth.currentUser = { email: 'super.tecnico@example.com' };
+      authStateListeners[0]({ email: 'super.tecnico@example.com' });
+    });
+
+    await waitFor(() =>
+      expect(
+        screen.getByText('Não foi possível concluir a sincronização do seu acesso. Tente novamente.')
+      ).toBeInTheDocument()
+    );
+    expect(
+      screen.queryByText('Sua conta não está cadastrada no SIFEC — contate o administrador.')
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Sua conta está inativa no SIFEC — contate o administrador.')
     ).not.toBeInTheDocument();
   });
 });

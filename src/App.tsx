@@ -91,7 +91,7 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(false);
   const [authSyncing, setAuthSyncing] = useState(false);
   const [authReady, setAuthReady] = useState(false);
-  const [authError, setAuthError] = useState<{ code?: string; message: string } | null>(null);
+  const [authError, setAuthError] = useState<{ type: 'login' | 'sync'; code?: string; message: string } | null>(null);
 
   const handleLogin = React.useCallback(async () => {
     // Seção 4: nunca abrir uma segunda janela enquanto a primeira tentativa
@@ -113,11 +113,51 @@ export default function App() {
           hasAuthenticatedUser: !!auth.currentUser,
         })
       );
-      setAuthError({ code, message: mapAuthErrorCodeToMessage(code) });
+      setAuthError({ type: 'login', code, message: mapAuthErrorCodeToMessage(code) });
     } finally {
       setAuthLoading(false);
     }
   }, [authLoading]);
+
+  // Sincronização do cadastro do superintendente logado — extraída para ser
+  // reutilizável tanto pelo listener de login (abaixo) quanto pelo retry de
+  // "Tentar novamente" quando o erro é de sincronização, não de login
+  // (hotfix estabilização, seção 2). Usa um ref (não estado) para o guard de
+  // "já em andamento" para que a função tenha identidade estável — colocá-la
+  // nas deps do useEffect de auth.onAuthStateChanged sem isso ressubscreveria
+  // o listener a cada mudança de authSyncing.
+  const authSyncInFlightRef = React.useRef(false);
+  const runSync = React.useCallback(async () => {
+    if (authSyncInFlightRef.current) return;
+    authSyncInFlightRef.current = true;
+    setAuthSyncing(true);
+    setAuthReady(false);
+    try {
+      await syncSuperintendentsFromFirestore();
+      setSuperintendents(getSuperintendents());
+      setActiveSuperId(getActiveSuperintendentId());
+      setAuthError(null);
+    } catch (err) {
+      console.error(
+        'Falha ao sincronizar cadastro do superintendente',
+        buildSafeAuthDiagnostic({
+          error: err,
+          hostname: window.location.hostname,
+          expectedProjectId: EXPECTED_FIREBASE_PROJECT_ID,
+          hasAuthenticatedUser: true,
+        })
+      );
+      setAuthError({
+        type: 'sync',
+        code: extractAuthErrorCode(err),
+        message: 'Não foi possível concluir a sincronização do seu acesso. Tente novamente.',
+      });
+    } finally {
+      setAuthSyncing(false);
+      setAuthReady(true);
+      authSyncInFlightRef.current = false;
+    }
+  }, []);
 
   React.useEffect(() => {
     const unsubAuth = auth.onAuthStateChanged(async (user) => {
@@ -128,31 +168,10 @@ export default function App() {
         setAuthReady(true);
         return;
       }
-      setAuthSyncing(true);
-      setAuthReady(false);
-      try {
-        await syncSuperintendentsFromFirestore();
-      } catch (err) {
-        console.error(
-          'Falha ao sincronizar cadastro do superintendente após login',
-          buildSafeAuthDiagnostic({
-            error: err,
-            hostname: window.location.hostname,
-            expectedProjectId: EXPECTED_FIREBASE_PROJECT_ID,
-            hasAuthenticatedUser: true,
-          })
-        );
-        setAuthError({
-          code: extractAuthErrorCode(err),
-          message: 'Não foi possível concluir a sincronização do seu acesso. Tente novamente.',
-        });
-      } finally {
-        setAuthSyncing(false);
-        setAuthReady(true);
-      }
+      await runSync();
     });
     return () => unsubAuth();
-  }, []);
+  }, [runSync]);
 
   React.useEffect(() => {
     // Initial load
@@ -330,6 +349,7 @@ export default function App() {
                 authSyncing={authSyncing}
                 authError={authError}
                 onLogin={handleLogin}
+                onRetrySync={runSync}
                 onLogout={async () => {
                   try {
                     await logout();
@@ -387,6 +407,15 @@ export default function App() {
               ) : loggedInSuper && loggedInSuper.ativo === true ? (
                 <div className="w-full py-1.5 px-2 bg-slate-50 border border-slate-200 rounded-lg font-bold text-slate-800 text-[11px]">
                   {loggedInSuper.nome.split(' - ')[0]} ({getSchoolScopeLabel({ superintendent: loggedInSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: !!currentUser, adminScope })})
+                </div>
+              ) : currentUser && authError?.type === 'sync' ? (
+                // Seção 1/2 do hotfix de estabilização: uma falha técnica de
+                // sincronização (permission-denied, unavailable, rede) nunca
+                // pode virar "conta não cadastrada"/"conta inativa" — o erro
+                // real já está visível no AuthSessionBlock, com o botão
+                // "Tentar novamente" que repete só a sincronização.
+                <div className="w-full py-1.5 px-2 text-[11px] text-amber-600 font-bold">
+                  Não foi possível validar seu acesso — veja o erro acima.
                 </div>
               ) : currentUser && authReady ? (
                 // Seção 5/8.C: distingue "não cadastrado" de "cadastrado mas
