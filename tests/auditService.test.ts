@@ -1,6 +1,13 @@
 // Fase 2A — núcleo puro do AuditService.
+// Hotfix Fase 2B — "Function setDoc() called with invalid data. Unsupported
+// field value: undefined (found in field importBatchId...)": buildAuditLogEntry
+// incluía schoolId/codInep/anoLetivo/importBatchId diretamente, então um
+// campo opcional ausente virava `campo: undefined` no payload — o Firestore
+// rejeita undefined em qualquer profundidade. stripUndefinedDeep (usada
+// internamente por buildAuditLogEntry) e o conditional spread dos campos
+// opcionais de nível raiz eliminam isso pela raiz.
 import { describe, expect, it } from 'vitest';
-import { AuditPayloadError, buildAuditLogEntry, type RecordAuditLogInput } from '../src/lib/auditService';
+import { AuditPayloadError, buildAuditLogEntry, stripUndefinedDeep, type RecordAuditLogInput } from '../src/lib/auditService';
 
 function baseInput(overrides: Partial<RecordAuditLogInput> = {}): RecordAuditLogInput {
   return {
@@ -83,5 +90,98 @@ describe('buildAuditLogEntry', () => {
     expect(() =>
       buildAuditLogEntry(baseInput({ newValue: { turmaNome: '3º Ano A', escolaNome: 'EEM Diva Cabral' } }), 'log-12')
     ).not.toThrow();
+  });
+
+  it('importBatchId ausente não aparece no payload (nunca `importBatchId: undefined`)', () => {
+    const entry = buildAuditLogEntry(baseInput({ importBatchId: undefined }), 'log-13') as unknown as Record<string, unknown>;
+    expect('importBatchId' in entry).toBe(false);
+  });
+
+  it('schoolId ausente não aparece no payload', () => {
+    const entry = buildAuditLogEntry(baseInput({ schoolId: undefined }), 'log-14') as unknown as Record<string, unknown>;
+    expect('schoolId' in entry).toBe(false);
+  });
+
+  it('codInep ausente não aparece no payload', () => {
+    const entry = buildAuditLogEntry(baseInput({ codInep: undefined }), 'log-15') as unknown as Record<string, unknown>;
+    expect('codInep' in entry).toBe(false);
+  });
+
+  it('anoLetivo ausente não aparece no payload', () => {
+    const entry = buildAuditLogEntry(baseInput({ anoLetivo: undefined }), 'log-16') as unknown as Record<string, unknown>;
+    expect('anoLetivo' in entry).toBe(false);
+  });
+
+  it('undefined aninhado em previousValue é removido do payload final', () => {
+    const entry = buildAuditLogEntry(
+      baseInput({ previousValue: { matriculaAtual: 800, observacao: undefined } }),
+      'log-17'
+    );
+    expect(entry.previousValue).toEqual({ matriculaAtual: 800 });
+  });
+
+  it('undefined aninhado em newValue é removido do payload final', () => {
+    const entry = buildAuditLogEntry(
+      baseInput({ newValue: { matriculaAtual: 812, sourceSystem: undefined } }),
+      'log-18'
+    );
+    expect(entry.newValue).toEqual({ matriculaAtual: 812 });
+  });
+});
+
+describe('stripUndefinedDeep', () => {
+  it('remove propriedades undefined de um objeto simples', () => {
+    expect(stripUndefinedDeep({ a: 1, b: undefined, c: 'x' })).toEqual({ a: 1, c: 'x' });
+  });
+
+  it('remove undefined recursivamente em objetos aninhados', () => {
+    expect(stripUndefinedDeep({ a: { b: undefined, c: 2 }, d: undefined })).toEqual({ a: { c: 2 } });
+  });
+
+  it('arrays com objetos e undefined são tratados corretamente — elementos válidos preservados, undefined removido, objetos limpos internamente', () => {
+    const result = stripUndefinedDeep([
+      { nome: 'Turma A', observacao: undefined },
+      undefined,
+      { nome: 'Turma B' },
+    ]);
+    expect(result).toEqual([{ nome: 'Turma A' }, { nome: 'Turma B' }]);
+  });
+
+  it('preserva null (nunca remove nem converte)', () => {
+    expect(stripUndefinedDeep({ a: null })).toEqual({ a: null });
+  });
+
+  it('preserva zero', () => {
+    expect(stripUndefinedDeep({ a: 0 })).toEqual({ a: 0 });
+  });
+
+  it('preserva false', () => {
+    expect(stripUndefinedDeep({ a: false })).toEqual({ a: false });
+  });
+
+  it('preserva string vazia', () => {
+    expect(stripUndefinedDeep({ a: '' })).toEqual({ a: '' });
+  });
+
+  it('nunca converte undefined em null — a chave some, não vira null', () => {
+    const result = stripUndefinedDeep({ a: undefined }) as Record<string, unknown>;
+    expect('a' in result).toBe(false);
+    expect(result.a).not.toBe(null);
+  });
+
+  it('preserva objetos especiais (ex.: Date) sem recursão, mesmo aninhados', () => {
+    const date = new Date('2026-03-10T10:00:00.000Z');
+    const result = stripUndefinedDeep({ criadoEm: date }) as { criadoEm: Date };
+    expect(result.criadoEm).toBe(date);
+    expect(result.criadoEm instanceof Date).toBe(true);
+  });
+
+  it('não modifica o objeto original (retorna uma cópia nova)', () => {
+    const original = { a: 1, b: undefined, c: { d: undefined, e: 2 } };
+    const result = stripUndefinedDeep(original);
+    expect(result).not.toBe(original);
+    expect(result.c).not.toBe(original.c);
+    expect('b' in original).toBe(true);
+    expect('d' in original.c).toBe(true);
   });
 });

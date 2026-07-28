@@ -3,13 +3,13 @@
 // (validação + montagem do payload) fica em funções exportadas sem nenhuma
 // chamada ao Firestore, testável sem emulador — as funções assíncronas no
 // fim do arquivo só orquestram a leitura/escrita.
-import { collection, doc, getDocs, limit, query, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, query, where, writeBatch } from 'firebase/firestore';
 import { db } from './firebase';
 import type { SchoolFlowResult, SchoolFlowStatus, SchoolFlowSourceSystem } from '../types/schoolFlow';
 import { buildSchoolFlowResultId } from './deterministicIds';
 import { calculateTotalResultados, type SchoolFlowCounts } from './schoolFlowCalculations';
 import { isNonNegativeInteger } from './enrollmentCalculations';
-import { recordAuditLog } from './auditService';
+import { queueAuditLog } from './auditService';
 
 const COLLECTION = 'school_flow_results';
 const MAX_OBSERVACAO_LENGTH = 500;
@@ -147,15 +147,18 @@ export async function listSchoolFlowResultsForSchools(
 
 // Grava o resultado do ano informado. Como o ID é determinístico por ano,
 // isto nunca sobrescreve o resultado de outro ano — só corrige o mesmo ano
-// quando chamado de novo com o mesmo anoLetivo. Registra um resumo agregado
-// em audit_logs (seção 10 do plano) — nunca nome de estudante ou outro dado
-// pessoal, só {anoLetivo, aprovados, reprovados, abandono, status}.
+// quando chamado de novo com o mesmo anoLetivo. O documento principal e o
+// audit_log (resumo agregado — seção 10 do plano, nunca nome de estudante
+// ou outro dado pessoal, só {anoLetivo, aprovados, reprovados, abandono,
+// status}) são gravados no MESMO WriteBatch: ou os dois existem, ou nenhum
+// existe — nunca mais o caso de o resultado já ter sido salvo e o usuário
+// ver erro só porque a auditoria falhou depois (hotfix: antes, setDoc do
+// resultado e recordAuditLog da auditoria eram duas escritas separadas).
 export async function saveSchoolFlowResult(
   input: SaveSchoolFlowResultInput
 ): Promise<SchoolFlowResult> {
   const existing = await getSchoolFlowResult(input.schoolId, input.anoLetivo);
   const payload = buildSchoolFlowResultPayload(input, existing ?? undefined);
-  await setDoc(doc(db, COLLECTION, payload.id), payload);
 
   const summary = (r: SchoolFlowResult) => ({
     anoLetivo: r.anoLetivo,
@@ -164,7 +167,10 @@ export async function saveSchoolFlowResult(
     abandono: r.abandono,
     status: r.status,
   });
-  await recordAuditLog({
+
+  const batch = writeBatch(db);
+  batch.set(doc(db, COLLECTION, payload.id), payload);
+  queueAuditLog(batch, {
     collectionName: COLLECTION,
     documentId: payload.id,
     schoolId: payload.schoolId,
@@ -178,6 +184,7 @@ export async function saveSchoolFlowResult(
     userEmail: input.actingUserEmail,
     now: input.now,
   });
+  await batch.commit();
 
   return payload;
 }
