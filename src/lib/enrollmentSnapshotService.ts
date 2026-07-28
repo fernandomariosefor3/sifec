@@ -8,7 +8,7 @@
 // schoolId+turmaId+mesReferencia (buildEnrollmentSnapshotId). Não existe
 // função de exclusão aqui de propósito — snapshots não podem ser excluídos
 // por usuários comuns.
-import { collection, doc, getDoc, getDocs, query, setDoc, where } from 'firebase/firestore';
+import { collection, doc, getDocs, limit, query, setDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
 import type { EnrollmentSnapshot, EnrollmentReviewStatus } from '../types/enrollment';
 import { buildEnrollmentSnapshotId } from './deterministicIds';
@@ -106,14 +106,33 @@ export function buildEnrollmentSnapshotPayload(
   };
 }
 
+// Consulta por schoolId+turmaId+mesReferencia em vez de getDoc(id
+// determinístico): mesmo padrão já corrigido em getSchoolYear()
+// (schoolYearService.ts). A regra de segurança (`allow read` em
+// enrollment_snapshots) só consegue provar que uma consulta é segura quando
+// ela é filtrada pelo mesmo campo (schoolId) usado na regra. Um getDoc
+// direto por ID pede um documento específico — quando o primeiro registro
+// mensal daquela turma/mês ainda não existe, o Firestore precisa avaliar a
+// regra contra um resource nulo, o que sempre falha e aparece para o
+// usuário como "Missing or insufficient permissions" mesmo com acesso
+// legítimo, e o setDoc em saveEnrollmentSnapshot nunca é alcançado. Uma
+// query que não bate com nenhum documento simplesmente retorna vazia, sem
+// erro de permissão.
 export async function getEnrollmentSnapshot(
   schoolId: string,
   turmaId: string,
   mesReferencia: string
 ): Promise<EnrollmentSnapshot | null> {
-  const id = buildEnrollmentSnapshotId(schoolId, turmaId, mesReferencia);
-  const snap = await getDoc(doc(db, COLLECTION, id));
-  return snap.exists() ? (snap.data() as EnrollmentSnapshot) : null;
+  const snap = await getDocs(
+    query(
+      collection(db, COLLECTION),
+      where('schoolId', '==', schoolId),
+      where('turmaId', '==', turmaId),
+      where('mesReferencia', '==', mesReferencia),
+      limit(1)
+    )
+  );
+  return snap.empty ? null : (snap.docs[0].data() as EnrollmentSnapshot);
 }
 
 // Grava o snapshot do mês informado. Como o ID é determinístico por mês,
