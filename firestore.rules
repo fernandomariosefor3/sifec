@@ -254,6 +254,21 @@ service cloud.firestore {
       return turma.get('schoolId', '') == schoolId || turma.get('escolaId', '') == schoolId;
     }
 
+    // Mesma integridade de isCanonicalTurmaOfSchool, mais o ano letivo
+    // (revisão do PR #15, Fase 2C): student_rosters é a única coleção onde
+    // uma turma de OUTRO ano letivo não pode "colar" silenciosamente só
+    // porque pertence à escola certa — sem isso, um roster de 2026 podia
+    // acabar apontando para uma turma de 2025. turma.get('anoLetivo', null)
+    // sem default numérico de propósito: uma turma legada, ainda sem o
+    // campo (Fase 2A nunca migrou todo o histórico), nunca é aceita
+    // silenciosamente — precisa ser completada em Gestão de Escolas antes
+    // de existir para o módulo de notas.
+    function isCanonicalTurmaOfSchoolYear(turmaId, schoolId, anoLetivo) {
+      let turma = get(/databases/$(database)/documents/turmas/$(turmaId)).data;
+      return (turma.get('schoolId', '') == schoolId || turma.get('escolaId', '') == schoolId) &&
+        turma.get('anoLetivo', null) == anoLetivo;
+    }
+
     // --- Superintendentes ---
     // Hierarquia: admin raiz > admin cadastrado > superintendente comum.
     // Get: o próprio usuário lê seu registro, ou qualquer admin lê qualquer um.
@@ -790,24 +805,27 @@ service cloud.firestore {
       allow create: if isValidId(rosterId) &&
         canWriteEscola(incoming().escolaNome) &&
         isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
-        isCanonicalTurmaOfSchool(incoming().turmaId, incoming().schoolId) &&
+        isCanonicalTurmaOfSchoolYear(incoming().turmaId, incoming().schoolId, incoming().anoLetivo) &&
         isValidStudentRosterShape(rosterId);
 
       // Update = correção do cadastro OU inativação/reativação — nunca uma
       // forma de mudar de escola/turma/ano/estudante mantendo o ID.
-      // studentName e active são os únicos campos alteráveis (seção 17 do
-      // plano); createdAt/createdBy travados como imutáveis.
+      // studentName/active/updatedAt/updatedBy são os ÚNICOS campos
+      // alteráveis (seção 17 do plano) — todo o resto, incluindo os
+      // metadados de origem sourceSystem/sourceStudentHash/sourceFileHash/
+      // importBatchId (revisão do PR #15), é imutável. Checado com UMA
+      // única chamada .diff().affectedKeys().hasOnly([...]) em vez de ~13
+      // comparações par-a-par (schoolId/codInep/escolaNome/turmaId/
+      // turmaNome/anoLetivo/createdAt/createdBy/studentKey + 4 metadados) —
+      // essencial para caber no orçamento de 1000 sub-expressões do
+      // emulador local: cada `incoming().campo == resource.data.campo`
+      // conta como sub-expressões próprias, e o create desta mesma coleção
+      // (isCanonicalSchoolMatch + isCanonicalTurmaOfSchoolYear +
+      // isValidStudentRosterShape) já usa praticamente todo o orçamento
+      // disponível.
       allow update: if isValidId(rosterId) &&
         canWriteEscola(resource.data.escolaNome) &&
-        incoming().studentKey == resource.data.studentKey &&
-        incoming().schoolId == resource.data.schoolId &&
-        incoming().codInep == resource.data.codInep &&
-        incoming().escolaNome == resource.data.escolaNome &&
-        incoming().turmaId == resource.data.turmaId &&
-        incoming().turmaNome == resource.data.turmaNome &&
-        incoming().anoLetivo == resource.data.anoLetivo &&
-        incoming().createdAt == resource.data.createdAt &&
-        incoming().createdBy == resource.data.createdBy &&
+        resource.data.diff(incoming()).affectedKeys().hasOnly(['studentName', 'active', 'updatedAt', 'updatedBy']) &&
         isValidStudentRosterShape(rosterId);
 
       // Sem exclusão comum — só inativação (active: false). Admin raiz
@@ -827,7 +845,7 @@ service cloud.firestore {
     // orçamento usado por enrollment_snapshots/school_flow_results. Sem
     // exists() antes de propósito: um get() num rosterId inexistente só faz
     // esta cláusula falhar (nega a criação), não derruba a requisição.
-    function isValidRosterForGradeCreation(rosterId, schoolId, codInep, escolaNome, turmaId, turmaNome, anoLetivo) {
+    function isValidRosterForGradeWrite(rosterId, schoolId, codInep, escolaNome, turmaId, turmaNome, anoLetivo) {
       let roster = get(/databases/$(database)/documents/student_rosters/$(rosterId)).data;
       return roster.active == true &&
         roster.schoolId == schoolId &&
@@ -842,20 +860,35 @@ service cloud.firestore {
     // "vazio" é um valor válido, não uma chave ausente): scores.size() == 4
     // combinado com hasOnly() garante que não falta nenhuma disciplina e
     // que nenhuma chave extra (ex.: um campo de disciplina inventado) entra.
-    // Validação de cada nota inlined (sem uma função isValidBimesterScoreValue
-    // separada chamada 4x) — o emulador local soma o custo de CADA chamada de
-    // função aninhada para o limite de 1000 sub-expressões, e este helper já
-    // soma com canWriteEscola() + isValidRosterForGradeCreation() no mesmo
-    // `allow create`/`allow update` (ver comentário em
-    // isValidRosterForGradeCreation).
+    // Validação de cada nota inlined (sem uma função separada chamada 4x) —
+    // o emulador local soma o custo de CADA chamada de função aninhada para
+    // o limite de 1000 sub-expressões, e este helper já soma com
+    // canWriteEscola() + isValidRosterForGradeWrite() no mesmo `allow
+    // create`/`allow update`. Cada nota (não-null) precisa estar em [0, 10]
+    // E ter no máximo duas casas decimais (revisão do PR #15: o formulário
+    // validava isso, mas as regras aceitavam qualquer number no intervalo).
+    // string(n).matches(...) em vez de aritmética com math.round/math.abs
+    // (n*100, diferença, tolerância): confirmado no emulador que string()
+    // usa a mesma formatação "menor decimal que arredonda de volta ao
+    // mesmo double" que JS — string(0.29) é exatamente "0.29", nunca
+    // "28.999999999999996" (esse erro de ponto flutuante só aparece depois
+    // de multiplicar por 100, nunca na formatação do valor original). Isso
+    // resolve o mesmo problema de precisão SEM nenhuma aritmética — bem
+    // mais barato no orçamento de 1000 sub-expressões do emulador local.
+    // O próprio regex também cobre o intervalo [0, 10] (branch "10" só
+    // aceita 10/10.0/10.00; branch "[0-9]" cobre 0 a 9 com até duas
+    // casas), eliminando as comparações >= 0/<= 10 separadas — essencial
+    // porque canWriteEscola() + isValidRosterForGradeWrite() já usam
+    // praticamente todo o orçamento disponível no mesmo `allow create`/
+    // `allow update`.
     function isValidBimesterScores(scores) {
       return scores is map &&
         scores.keys().hasOnly(['linguaPortuguesa', 'matematica', 'cienciasNatureza', 'cienciasHumanas']) &&
         scores.size() == 4 &&
-        (scores.linguaPortuguesa == null || (scores.linguaPortuguesa is number && scores.linguaPortuguesa >= 0 && scores.linguaPortuguesa <= 10)) &&
-        (scores.matematica == null || (scores.matematica is number && scores.matematica >= 0 && scores.matematica <= 10)) &&
-        (scores.cienciasNatureza == null || (scores.cienciasNatureza is number && scores.cienciasNatureza >= 0 && scores.cienciasNatureza <= 10)) &&
-        (scores.cienciasHumanas == null || (scores.cienciasHumanas is number && scores.cienciasHumanas >= 0 && scores.cienciasHumanas <= 10));
+        (scores.linguaPortuguesa == null || (scores.linguaPortuguesa is number && string(scores.linguaPortuguesa).matches('^(10(\\.0{1,2})?|[0-9](\\.[0-9]{1,2})?)$'))) &&
+        (scores.matematica == null || (scores.matematica is number && string(scores.matematica).matches('^(10(\\.0{1,2})?|[0-9](\\.[0-9]{1,2})?)$'))) &&
+        (scores.cienciasNatureza == null || (scores.cienciasNatureza is number && string(scores.cienciasNatureza).matches('^(10(\\.0{1,2})?|[0-9](\\.[0-9]{1,2})?)$'))) &&
+        (scores.cienciasHumanas == null || (scores.cienciasHumanas is number && string(scores.cienciasHumanas).matches('^(10(\\.0{1,2})?|[0-9](\\.[0-9]{1,2})?)$')));
     }
 
     // Shape do documento, comum a create e update. Nunca inclui studentName
@@ -864,7 +897,7 @@ service cloud.firestore {
     // brutos (scores), sempre recalculados na aplicação. `let data = incoming()`
     // uma única vez (em vez de ~24 chamadas repetidas de incoming() — cada
     // uma é sua própria sub-expressão) para caber no orçamento do emulador
-    // local somado a canWriteEscola() + isValidRosterForGradeCreation() no
+    // local somado a canWriteEscola() + isValidRosterForGradeWrite() no
     // mesmo `allow create`/`allow update`.
     function isValidStudentBimesterGradeShape(gradeId) {
       let data = incoming();
@@ -902,13 +935,13 @@ service cloud.firestore {
 
     // `let data = incoming()` uma única vez (em vez de ~7 chamadas repetidas)
     // pelo mesmo motivo do orçamento de sub-expressões do emulador local —
-    // ver comentário em isValidRosterForGradeCreation/isValidStudentBimesterGradeShape.
+    // ver comentário em isValidRosterForGradeWrite/isValidStudentBimesterGradeShape.
     // `let` só é válido como statement dentro do corpo de uma função (não
     // inline dentro de `allow`), por isso esta lógica vive numa função
     // separada chamada pelo `allow create`.
     function isValidStudentBimesterGradeCreate(gradeId) {
       let data = incoming();
-      return isValidRosterForGradeCreation(
+      return isValidRosterForGradeWrite(
           data.rosterId, data.schoolId, data.codInep,
           data.escolaNome, data.turmaId, data.turmaNome, data.anoLetivo
         ) &&
@@ -917,24 +950,38 @@ service cloud.firestore {
 
     // Update = correção do MESMO estudante/turma/ano/bimestre — nunca uma
     // forma de mudar de estudante/turma/ano/bimestre mantendo o ID.
-    // scores/observacao são os únicos campos alteráveis (seção 18 do
-    // plano); createdAt/createdBy travados. `let data`/`let old` (em vez de
-    // ~11 chamadas repetidas de incoming()/resource.data) pelo mesmo motivo
-    // do orçamento de sub-expressões do emulador local.
+    // scores/observacao/updatedAt/updatedBy são os ÚNICOS campos
+    // alteráveis (seção 18 do plano) — todo o resto, incluindo
+    // createdAt/createdBy e os metadados de origem (sourceSystem/
+    // sourceReportTitle/sourceFileName/sourceFileHash/importBatchId —
+    // revisão do PR #15), é imutável. Checado com UMA única chamada
+    // .diff().affectedKeys().hasOnly([...]) em vez de ~11 comparações
+    // par-a-par (rosterId/studentKey/schoolId/codInep/escolaNome/turmaId/
+    // turmaNome/anoLetivo/bimestre/createdAt/createdBy + 5 metadados) —
+    // essencial para caber no orçamento de 1000 sub-expressões do
+    // emulador local, já apertado pelo create desta mesma coleção
+    // (isValidRosterForGradeWrite + isValidStudentBimesterGradeShape,
+    // incluindo a validação de casas decimais dos scores). `let data`/
+    // `let old` pelo mesmo motivo (evita repetir incoming()/resource.data).
+    //
+    // isValidRosterForGradeWrite() também é chamado aqui, não só no create
+    // (revisão do PR #15): o `allow update` anterior só validava que os
+    // campos denormalizados do payload continuavam iguais aos do
+    // documento antigo, mas nunca reconsultava o roster em si — um roster
+    // inativado (ou excluído pelo admin raiz) DEPOIS da nota já existir
+    // não impedia uma correção posterior da mesma nota. Isso reabre a
+    // mesma pergunta feita no create ("este roster ainda existe, está
+    // ativo, e ainda é da mesma escola/turma/turno/ano?") a cada update.
+    // rosterId/schoolId/etc. continuam vindo de `data` com segurança: o
+    // hasOnly() acima já garante que não mudaram em relação a `old`.
     function isValidStudentBimesterGradeUpdate(gradeId) {
       let data = incoming();
       let old = resource.data;
-      return data.rosterId == old.rosterId &&
-        data.studentKey == old.studentKey &&
-        data.schoolId == old.schoolId &&
-        data.codInep == old.codInep &&
-        data.escolaNome == old.escolaNome &&
-        data.turmaId == old.turmaId &&
-        data.turmaNome == old.turmaNome &&
-        data.anoLetivo == old.anoLetivo &&
-        data.bimestre == old.bimestre &&
-        data.createdAt == old.createdAt &&
-        data.createdBy == old.createdBy &&
+      return old.diff(data).affectedKeys().hasOnly(['scores', 'observacao', 'updatedAt', 'updatedBy']) &&
+        isValidRosterForGradeWrite(
+          data.rosterId, data.schoolId, data.codInep,
+          data.escolaNome, data.turmaId, data.turmaNome, data.anoLetivo
+        ) &&
         isValidStudentBimesterGradeShape(gradeId);
     }
 
@@ -946,14 +993,15 @@ service cloud.firestore {
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
 
       // Exige o roster referenciado existir, estar ATIVO, e pertencer à
-      // MESMA escola/turma/ano do payload (isValidRosterForGradeCreation)
+      // MESMA escola/turma/ano do payload (isValidRosterForGradeWrite)
       // — nunca aceita nota para um cadastro inexistente, inativo, ou de
       // outra escola/turma/ano "emprestado" via rosterId adulterado. A
       // integridade canônica de schoolId/codInep/escolaNome/turmaId/
       // turmaNome vem do próprio roster (já canonicamente validado na sua
       // criação) em vez de isCanonicalSchoolMatch/isCanonicalTurmaOfSchool
-      // separados — ver comentário em isValidRosterForGradeCreation sobre o
-      // orçamento de sub-expressões do emulador.
+      // separados — ver comentário em isValidRosterForGradeWrite sobre o
+      // orçamento de sub-expressões do emulador. update também reconsulta o
+      // roster (revisão do PR #15) — não só o create.
       allow create: if isValidId(gradeId) &&
         canWriteEscola(incoming().escolaNome) &&
         isValidStudentBimesterGradeCreate(gradeId);

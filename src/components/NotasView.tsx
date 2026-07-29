@@ -25,10 +25,11 @@ import {
   getSchoolScopeLabel,
   hasSchoolWriteAccess,
 } from '../lib/superintendentService';
-import { getClassroomsForSchool } from '../lib/classService';
+import { getClassroomsForSchoolYear } from '../lib/classService';
 import { activateStudentRosterEntry, deactivateStudentRosterEntry } from '../lib/studentRosterService';
 import { useStudentRosterAndGrades } from '../hooks/useStudentRosterAndGrades';
 import { consolidateStudentFill, type StudentFillEntry } from '../lib/studentGradeCalculations';
+import { buildAnoLetivoOptions } from '../lib/anoLetivoOptions';
 import NotasSummaryCards from './notas/NotasSummaryCards';
 import ClassGradeCoverageTable, { type ClassCoverageRow } from './notas/ClassGradeCoverageTable';
 import StudentGradeTable, { type StudentGradeRow, type FillFilter } from './notas/StudentGradeTable';
@@ -37,7 +38,6 @@ import StudentBimesterGradeFormModal from './notas/StudentBimesterGradeFormModal
 import type { Turma } from '../types/classroom';
 import type { Bimestre } from '../types/studentBimesterGrade';
 
-const ANO_LETIVO_ATUAL = 2026;
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
 
 interface SchoolLike {
@@ -51,7 +51,15 @@ export default function NotasView() {
   const [activeSuperId, setActiveSuperId] = useState('all');
   const [adminScope, setAdminScope] = useState(getAdminSchoolScope());
   const [turmas, setTurmas] = useState<Turma[]>(SEED_TURMAS as unknown as Turma[]);
-  const [anoLetivo] = useState(ANO_LETIVO_ATUAL);
+  // Ano corrente de verdade (revisão do PR #15) — nunca mais um valor fixo
+  // no código-fonte. anoLetivoOptions vem de uma função pura testável
+  // (buildAnoLetivoOptions) para o módulo nunca ficar "preso" num ano
+  // específico conforme o tempo passa.
+  const [anoLetivo, setAnoLetivo] = useState(() => new Date().getFullYear());
+  // Âncora sempre no ano corrente REAL (nunca no ano atualmente
+  // selecionado) — o conjunto de opções não "desliza" conforme o usuário
+  // navega entre anos, sempre os mesmos três: anterior/corrente/seguinte.
+  const anoLetivoOptions = buildAnoLetivoOptions();
   const [bimestre, setBimestre] = useState<Bimestre>(1);
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
   const [drillTurmaId, setDrillTurmaId] = useState<string | null>(null);
@@ -59,6 +67,22 @@ export default function NotasView() {
   const [search, setSearch] = useState('');
   const [registrationOpen, setRegistrationOpen] = useState(false);
   const [gradeModalRow, setGradeModalRow] = useState<StudentGradeRow | null>(null);
+  const [pendingToggleKeys, setPendingToggleKeys] = useState<ReadonlySet<string>>(new Set());
+  const [toggleError, setToggleError] = useState('');
+
+  // Trocar de ano letivo é trocar de conjunto de dados inteiro (seção de
+  // revisão do PR #15): turma selecionada, modais abertos e filtros/busca
+  // da tabela de estudantes nunca sobrevivem à troca — só roster/notas/
+  // turmas do ano recém-selecionado são carregados (useStudentRosterAndGrades
+  // já reage à mudança de `anoLetivo` na dependência do seu efeito).
+  function handleAnoLetivoChange(nextAnoLetivo: number) {
+    setAnoLetivo(nextAnoLetivo);
+    setDrillTurmaId(null);
+    setRegistrationOpen(false);
+    setGradeModalRow(null);
+    setFilter('todos');
+    setSearch('');
+  }
 
   useEffect(() => {
     const unsubscribe = auth.onAuthStateChanged(user => setIsFirebaseMode(!!user));
@@ -117,8 +141,8 @@ export default function NotasView() {
   // por texto, nunca a primeira turma da lista como fallback quando a
   // busca falha). Sem escola selecionada, nenhuma turma é resolvida.
   const turmasDaEscola = useMemo(
-    () => (selectedSchool ? getClassroomsForSchool(turmas, selectedSchool) : []),
-    [turmas, selectedSchool]
+    () => (selectedSchool ? getClassroomsForSchoolYear(turmas, selectedSchool, anoLetivo) : []),
+    [turmas, selectedSchool, anoLetivo]
   );
 
   const { roster, grades, loading, loadError, refresh } = useStudentRosterAndGrades(
@@ -153,6 +177,7 @@ export default function NotasView() {
     turmaNome: r.turmaNome,
     active: r.active,
     scores: gradesByRosterId.get(r.id)?.scores ?? null,
+    observacao: gradesByRosterId.get(r.id)?.observacao,
   }));
   const scopedStudentRows = drillTurmaId ? studentRows.filter(r => r.turmaId === drillTurmaId) : studentRows;
 
@@ -165,9 +190,18 @@ export default function NotasView() {
 
   const canWrite = selectedSchool ? hasSchoolWriteAccess(selectedSchool.nome) : false;
 
+  // Impede cliques repetidos no mesmo estudante enquanto a ativação/
+  // inativação anterior ainda está em andamento (revisão do PR #15) — não
+  // bloqueia outras linhas, só a que já tem uma chamada pendente. Erros
+  // reais (ex.: falha de permissão) ficam visíveis na interface em vez de
+  // desaparecerem como uma rejeição de Promise não tratada.
   async function handleToggleActive(row: StudentGradeRow) {
     const email = auth.currentUser?.email;
     if (!selectedSchool || !email) return;
+    if (pendingToggleKeys.has(row.studentKey)) return;
+
+    setToggleError('');
+    setPendingToggleKeys(prev => new Set(prev).add(row.studentKey));
     const input = {
       schoolId: selectedSchool.id,
       anoLetivo,
@@ -176,12 +210,24 @@ export default function NotasView() {
       actingUserEmail: email,
       now: new Date().toISOString(),
     };
-    if (row.active) {
-      await deactivateStudentRosterEntry(input);
-    } else {
-      await activateStudentRosterEntry(input);
+    try {
+      if (row.active) {
+        await deactivateStudentRosterEntry(input);
+      } else {
+        await activateStudentRosterEntry(input);
+      }
+      refresh();
+    } catch (err) {
+      setToggleError(
+        err instanceof Error ? err.message : 'Erro ao atualizar a situação do estudante.'
+      );
+    } finally {
+      setPendingToggleKeys(prev => {
+        const next = new Set(prev);
+        next.delete(row.studentKey);
+        return next;
+      });
     }
-    refresh();
   }
 
   return (
@@ -213,8 +259,13 @@ export default function NotasView() {
             <option value="">Selecione a escola</option>
             {visibleSchools.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
           </select>
-          <select value={anoLetivo} disabled aria-label="Ano letivo" className="py-1.5 px-3 bg-slate-100 border border-slate-250 text-xs font-bold rounded-xl text-slate-500">
-            <option value={ANO_LETIVO_ATUAL}>{ANO_LETIVO_ATUAL}</option>
+          <select
+            value={anoLetivo}
+            onChange={e => handleAnoLetivoChange(Number(e.target.value))}
+            aria-label="Ano letivo"
+            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-xl"
+          >
+            {anoLetivoOptions.map(ano => <option key={ano} value={ano}>{ano}</option>)}
           </select>
           <select
             value={bimestre}
@@ -255,6 +306,12 @@ export default function NotasView() {
             </div>
           )}
 
+          {toggleError && (
+            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold">
+              {toggleError}
+            </div>
+          )}
+
           {!drillTurmaId ? (
             <ClassGradeCoverageTable rows={classCoverageRows} loading={loading} onVerEstudantes={setDrillTurmaId} />
           ) : (
@@ -271,6 +328,7 @@ export default function NotasView() {
               onPreencherNotas={setGradeModalRow}
               onToggleActive={handleToggleActive}
               onCadastrarEstudante={() => setRegistrationOpen(true)}
+              pendingToggleKeys={pendingToggleKeys}
             />
           )}
         </>
@@ -297,6 +355,7 @@ export default function NotasView() {
           studentKey={gradeModalRow.studentKey}
           studentName={gradeModalRow.studentName}
           existingScores={gradeModalRow.scores}
+          existingObservacao={gradeModalRow.observacao}
           onClose={() => setGradeModalRow(null)}
           onSaved={refresh}
         />

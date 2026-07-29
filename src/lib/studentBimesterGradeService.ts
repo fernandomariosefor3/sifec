@@ -30,7 +30,12 @@ export interface SaveStudentBimesterGradeInput {
   studentKey: string;
   bimestre: Bimestre;
   scores: BimesterScores;
-  observacao?: string;
+  // undefined: campo não fornecido por este chamador — preserva o valor
+  // existente (ex.: um futuro fluxo de importação que nunca toca
+  // observacao). null: remoção EXPLÍCITA — usado pelo formulário sempre
+  // que o campo é enviado vazio, para nunca deixar `undefined` ambíguo
+  // entre "não mencionado" e "apagado de propósito" (revisão do PR #15).
+  observacao?: string | null;
   sourceSystem?: StudentBimesterGradeSourceSystem;
   sourceReportTitle?: string;
   sourceFileName?: string;
@@ -85,7 +90,13 @@ export function buildStudentBimesterGradePayload(
   validateStudentBimesterGradeInput(input);
   const rosterId = buildStudentRosterId(input.schoolId, input.anoLetivo, input.turmaId, input.studentKey);
 
-  const observacao = input.observacao !== undefined ? input.observacao : existing?.observacao;
+  // undefined preserva o valor existente; null remove explicitamente (vira
+  // undefined aqui, que o spread abaixo já omite do payload por completo —
+  // nunca `observacao: null` gravado no Firestore, e nunca o valor antigo
+  // "voltando" quando o formulário limpa o campo).
+  const observacao = input.observacao === undefined
+    ? existing?.observacao
+    : (input.observacao === null ? undefined : input.observacao);
   const sourceSystem = input.sourceSystem !== undefined ? input.sourceSystem : existing?.sourceSystem;
   const sourceReportTitle = input.sourceReportTitle !== undefined ? input.sourceReportTitle : existing?.sourceReportTitle;
   const sourceFileName = input.sourceFileName !== undefined ? input.sourceFileName : existing?.sourceFileName;

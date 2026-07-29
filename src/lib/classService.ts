@@ -44,6 +44,24 @@ export function getClassroomsForSchool(turmas: readonly Turma[], school: SchoolR
   return turmas.filter(t => classroomBelongsToSchool(t, school));
 }
 
+// Fase 2C — revisão do PR #15: NotasView nunca pode resolver uma turma de
+// OUTRO ano letivo só porque pertence à escola certa (mesma lacuna já
+// fechada em firestore.rules via isCanonicalTurmaOfSchoolYear) — sem isso,
+// um student_roster de 2026 podia acabar exibindo/gravando contra uma
+// turma de 2025. Turma legada sem `anoLetivo` nunca "cola" silenciosamente
+// aqui: precisa ser completada em Gestão de Escolas antes de aparecer no
+// módulo de notas. Função própria (em vez de um parâmetro opcional em
+// getClassroomsForSchool) para não alterar o comportamento dos outros
+// consumidores existentes (SchoolEnrollmentPanel/useSchoolEnrollmentSummaries),
+// que continuam listando turmas por escola em qualquer ano.
+export function getClassroomsForSchoolYear(
+  turmas: readonly Turma[],
+  school: SchoolRef,
+  anoLetivo: number
+): Turma[] {
+  return getClassroomsForSchool(turmas, school).filter(t => t.anoLetivo === anoLetivo);
+}
+
 export interface ClassYearFieldsInput {
   schoolId: string;
   codInep: string;

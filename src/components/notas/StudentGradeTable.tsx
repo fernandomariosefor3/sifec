@@ -16,6 +16,7 @@ export interface StudentGradeRow {
   turmaNome: string;
   active: boolean;
   scores: BimesterScores | null;
+  observacao?: string;
 }
 
 export type FillFilter = 'todos' | 'sem_notas' | 'parcial' | 'completo' | 'abaixo_referencia';
@@ -53,11 +54,16 @@ interface StudentGradeTableProps {
   onPreencherNotas: (row: StudentGradeRow) => void;
   onToggleActive: (row: StudentGradeRow) => void;
   onCadastrarEstudante: () => void;
+  // Estudantes cuja ativação/inativação está em andamento — usado só para
+  // desabilitar o botão da própria linha e evitar cliques repetidos
+  // (revisão do PR #15), nunca bloqueia outras linhas.
+  pendingToggleKeys: ReadonlySet<string>;
 }
 
 export default function StudentGradeTable({
   students, loading, canWrite, filter, onFilterChange, search, onSearchChange,
   turmaFilterName, onClearTurmaFilter, onPreencherNotas, onToggleActive, onCadastrarEstudante,
+  pendingToggleKeys,
 }: StudentGradeTableProps) {
   const filtered = students.filter(row => {
     if (!row.studentName.toLowerCase().includes(search.toLowerCase())) return false;
@@ -136,7 +142,9 @@ export default function StudentGradeTable({
               ) : filtered.length === 0 ? (
                 <tr>
                   <td colSpan={10} className="py-8 text-center text-slate-400">
-                    Nenhum estudante cadastrado para esta escola, turma e ano letivo.
+                    {students.length === 0
+                      ? 'Nenhum estudante cadastrado para esta escola, turma e ano letivo.'
+                      : 'Nenhum estudante encontrado com os filtros ou a busca atuais.'}
                   </td>
                 </tr>
               ) : (
@@ -146,6 +154,7 @@ export default function StudentGradeTable({
                   const average = calculatePartialAverage(scores);
                   const belowReference = row.scores != null && isBelowReferenceAverage(scores);
                   const fmt = (v: number | null) => (v == null ? '—' : v.toFixed(1));
+                  const togglePending = pendingToggleKeys.has(row.studentKey);
                   return (
                     <tr key={row.studentKey} className={`hover:bg-slate-50/30 transition ${row.active ? '' : 'opacity-50'}`}>
                       <td className="py-4 px-6 font-extrabold text-slate-900 text-sm">
@@ -177,15 +186,18 @@ export default function StudentGradeTable({
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               onClick={() => onPreencherNotas(row)}
-                              className="px-2.5 py-1.5 bg-brand-turquoise hover:bg-brand-turquoise/90 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition shadow-sm whitespace-nowrap"
+                              disabled={!row.active}
+                              title={row.active ? undefined : 'Reative o estudante para preencher notas'}
+                              className="px-2.5 py-1.5 bg-brand-turquoise hover:bg-brand-turquoise/90 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 transition shadow-sm whitespace-nowrap disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-brand-turquoise"
                             >
                               <ClipboardEdit size={12} />
                               Preencher notas
                             </button>
                             <button
                               onClick={() => onToggleActive(row)}
+                              disabled={togglePending}
                               title={row.active ? 'Inativar' : 'Ativar'}
-                              className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition"
+                              className="p-1.5 hover:bg-slate-100 text-slate-400 hover:text-slate-700 rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed"
                             >
                               {row.active ? <PowerOff size={13} /> : <Power size={13} />}
                             </button>

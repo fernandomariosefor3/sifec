@@ -28,7 +28,12 @@ export default function StudentRegistrationModal({
   school, turmas, anoLetivo, defaultTurmaId, onClose, onSaved,
 }: StudentRegistrationModalProps) {
   const [studentName, setStudentName] = useState('');
-  const [turmaId, setTurmaId] = useState(defaultTurmaId ?? (turmas[0]?.id ?? ''));
+  // Nunca escolhe a primeira turma da lista automaticamente (revisão do
+  // PR #15) — só usa defaultTurmaId quando ele de fato existe na lista
+  // recebida; caso contrário, começa vazio e exige seleção explícita.
+  const [turmaId, setTurmaId] = useState(
+    defaultTurmaId && turmas.some(t => t.id === defaultTurmaId) ? defaultTurmaId : ''
+  );
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -108,9 +113,14 @@ export default function StudentRegistrationModal({
 
           <div className="space-y-1">
             <label htmlFor="student-registration-turma" className="text-[9px] font-black uppercase text-slate-600 block">Turma *</label>
+            {/* Sem `required`: a validação de "turma selecionada" já é
+                explícita no handleSubmit ("Selecione uma turma.") — a
+                validação nativa do navegador bloqueia o submit ANTES do
+                handler rodar, escondendo essa mensagem própria do app
+                atrás de um tooltip nativo inconsistente entre navegadores. */}
             <select
               id="student-registration-turma"
-              required value={turmaId} onChange={e => setTurmaId(e.target.value)}
+              value={turmaId} onChange={e => setTurmaId(e.target.value)}
               className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs rounded-lg"
             >
               <option value="">Selecione</option>

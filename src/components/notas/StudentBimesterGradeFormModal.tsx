@@ -37,13 +37,21 @@ interface StudentBimesterGradeFormModalProps {
   onSaved: () => void;
 }
 
-// Vírgula ou ponto decimal; vazio vira null; inválido vira NaN (bloqueado
-// no submit, nunca enviado ao serviço). Arredonda para até duas casas.
+// Vírgula ou ponto decimal, com no máximo duas casas; vazio vira null;
+// qualquer outro formato (mais de duas casas como "7,123", notação
+// científica como "1e1", texto) vira NaN — bloqueado no submit, nunca
+// enviado ao serviço. Nunca arredonda silenciosamente: o regex já garante
+// no máximo duas casas antes de converter para número, em vez de aceitar
+// qualquer texto numérico e arredondar depois (o que escondia do usuário
+// que "7,123" virou "7,12" sem aviso).
+const GRADE_INPUT_PATTERN = /^\d+([.,]\d{1,2})?$/;
+
 function parseGradeInput(raw: string): number | null {
   const trimmed = raw.trim();
   if (trimmed === '') return null;
+  if (!GRADE_INPUT_PATTERN.test(trimmed)) return NaN;
   const parsed = Number(trimmed.replace(',', '.'));
-  return Number.isFinite(parsed) ? Math.round(parsed * 100) / 100 : NaN;
+  return Number.isFinite(parsed) ? parsed : NaN;
 }
 
 function formatGradeInput(value: number | null | undefined): string {
@@ -102,9 +110,20 @@ export default function StudentBimesterGradeFormModal({
 
     const invalidField = SUBJECT_FIELDS.find(f => Number.isNaN(parsedByField[f.key]));
     if (invalidField) {
-      setFormError(`Nota de ${invalidField.label} inválida — use um número entre 0 e 10, ou deixe em branco.`);
+      setFormError(
+        `Nota de ${invalidField.label} inválida — use um número entre 0 e 10, com até duas casas decimais, ou deixe em branco.`
+      );
       return;
     }
+
+    // O formulário é sempre o dono explícito da observação: o valor atual
+    // da caixa de texto (mesmo vazio) É a observação a partir de agora —
+    // nunca `undefined` aqui, porque buildStudentBimesterGradePayload trata
+    // `undefined` como "não fornecido, preservar o valor existente" (uso
+    // reservado a um futuro fluxo de importação que não toca observacao).
+    // `null` sinaliza remoção explícita, para limpar o campo não reviver o
+    // texto antigo quando setDoc substitui o documento inteiro.
+    const trimmedObservacao = observacao.trim();
 
     setSaving(true);
     try {
@@ -118,7 +137,7 @@ export default function StudentBimesterGradeFormModal({
         studentKey,
         bimestre,
         scores: previewScores,
-        observacao: observacao.trim() || undefined,
+        observacao: trimmedObservacao === '' ? null : trimmedObservacao,
         actingUserEmail: email,
         now: new Date().toISOString(),
       });

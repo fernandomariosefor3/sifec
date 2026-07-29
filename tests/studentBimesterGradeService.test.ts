@@ -140,6 +140,24 @@ describe('buildStudentBimesterGradePayload', () => {
     expect(b1.rosterId).toBe(b2.rosterId); // mesmo estudante, mesmo roster
   });
 
+  it('observacao ausente (undefined) preserva o valor existente na atualização', () => {
+    const original = buildStudentBimesterGradePayload(baseInput({ observacao: 'Observação original' }));
+    const corrigido = buildStudentBimesterGradePayload(baseInput({ observacao: undefined }), original);
+    expect(corrigido.observacao).toBe('Observação original');
+  });
+
+  it('observacao explicitamente null remove o valor existente (nunca preserva o antigo)', () => {
+    const original = buildStudentBimesterGradePayload(baseInput({ observacao: 'Observação original' }));
+    const corrigido = buildStudentBimesterGradePayload(baseInput({ observacao: null }), original) as unknown as Record<string, unknown>;
+    expect('observacao' in corrigido).toBe(false);
+  });
+
+  it('observacao com novo texto substitui o valor existente', () => {
+    const original = buildStudentBimesterGradePayload(baseInput({ observacao: 'Observação original' }));
+    const corrigido = buildStudentBimesterGradePayload(baseInput({ observacao: 'Nova observação' }), original);
+    expect(corrigido.observacao).toBe('Nova observação');
+  });
+
   it('atualização preserva createdAt/createdBy do registro existente', () => {
     const original: StudentBimesterGrade = buildStudentBimesterGradePayload(baseInput());
     const corrigido = buildStudentBimesterGradePayload(

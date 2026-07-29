@@ -10,7 +10,7 @@ import {
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'node:fs';
-import { collection, deleteDoc, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, deleteField, doc, getDoc, getDocs, query, setDoc, updateDoc, where, writeBatch } from 'firebase/firestore';
 
 const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
 const CADASTRO_ADMIN_EMAIL = 'admin.cadastrado.2c@example.com';
@@ -25,6 +25,8 @@ const SCHOOL_A_ID = 'escola-a-2c';
 const SCHOOL_B_ID = 'escola-b-2c';
 const TURMA_A_ID = 'turma-a-2c';
 const TURMA_B_ID = 'turma-b-2c';
+const TURMA_ANO_ANTERIOR_ID = 'turma-a-ano-anterior-2c';
+const TURMA_SEM_ANO_ID = 'turma-a-sem-ano-2c';
 const ANO_LETIVO = 2026;
 const STUDENT_KEY = 'aaaa1111-uuid';
 const ROSTER_ID = `${SCHOOL_A_ID}_${ANO_LETIVO}_${TURMA_A_ID}_${STUDENT_KEY}`;
@@ -83,11 +85,25 @@ beforeEach(async () => {
 
     await setDoc(doc(db, 'turmas', TURMA_A_ID), {
       schoolId: SCHOOL_A_ID, escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A,
-      nome: 'Turma A - Teste', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0,
+      nome: 'Turma A - Teste', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0, anoLetivo: ANO_LETIVO,
     });
     await setDoc(doc(db, 'turmas', TURMA_B_ID), {
       schoolId: SCHOOL_B_ID, escolaId: SCHOOL_B_ID, escolaNome: ESCOLA_B,
-      nome: 'Turma B - Teste', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0,
+      nome: 'Turma B - Teste', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0, anoLetivo: ANO_LETIVO,
+    });
+    // Turma da MESMA escola, mas de um ano letivo anterior — usada para
+    // confirmar que um roster do ano corrente nunca pode apontar para ela
+    // (revisão do PR #15, item 1: turma × ano letivo).
+    await setDoc(doc(db, 'turmas', TURMA_ANO_ANTERIOR_ID), {
+      schoolId: SCHOOL_A_ID, escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A,
+      nome: 'Turma A - Ano Anterior', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0, anoLetivo: ANO_LETIVO - 1,
+    });
+    // Turma legada da MESMA escola, ainda sem `anoLetivo` (Fase 2A nunca
+    // migrou todo o histórico) — nunca pode ser usada silenciosamente pelo
+    // módulo de notas.
+    await setDoc(doc(db, 'turmas', TURMA_SEM_ANO_ID), {
+      schoolId: SCHOOL_A_ID, escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A,
+      nome: 'Turma A - Sem Ano Letivo', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0,
     });
 
     // Documento legado de `grades` — nunca alterado por este teste, só
@@ -208,6 +224,30 @@ describe('Fase 2C — student_rosters', () => {
     );
   });
 
+  // Revisão do PR #15, item 1: roster do ano corrente (2026) nunca pode
+  // apontar para uma turma de outro ano letivo, mesmo da MESMA escola.
+  it('roster do ano corrente com turma de ano letivo anterior é bloqueado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    const badId = `${SCHOOL_A_ID}_${ANO_LETIVO}_${TURMA_ANO_ANTERIOR_ID}_${STUDENT_KEY}`;
+    await assertFails(
+      setDoc(
+        doc(db, 'student_rosters', badId),
+        rosterPayload({ id: badId, turmaId: TURMA_ANO_ANTERIOR_ID, turmaNome: 'Turma A - Ano Anterior' })
+      )
+    );
+  });
+
+  it('turma sem anoLetivo cadastrado nunca é aceita silenciosamente', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    const badId = `${SCHOOL_A_ID}_${ANO_LETIVO}_${TURMA_SEM_ANO_ID}_${STUDENT_KEY}`;
+    await assertFails(
+      setDoc(
+        doc(db, 'student_rosters', badId),
+        rosterPayload({ id: badId, turmaId: TURMA_SEM_ANO_ID, turmaNome: 'Turma A - Sem Ano Letivo' })
+      )
+    );
+  });
+
   it('campo pessoal extra (ex.: CPF) é bloqueado', async () => {
     const db = ctxFor(ACTIVE_A_EMAIL).firestore();
     await assertFails(setDoc(doc(db, 'student_rosters', ROSTER_ID), rosterPayload({ cpf: '000.000.000-00' })));
@@ -237,6 +277,85 @@ describe('Fase 2C — student_rosters', () => {
     });
     const db = ctxFor(ACTIVE_A_EMAIL).firestore();
     await assertFails(updateDoc(doc(db, 'student_rosters', ROSTER_ID), rosterPayload({ studentKey: 'outro-key' })));
+  });
+
+  // Revisão do PR #15, item 3: metadados de origem são imutáveis depois da
+  // criação — nenhum deles pode ser inserido, removido ou trocado num
+  // update, mesmo mantendo todo o resto do payload igual.
+  describe('metadados de origem são imutáveis no update', () => {
+    it('inserir sourceSystem após a criação (documento sem nenhum metadado) é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), rosterPayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_rosters', ROSTER_ID), rosterPayload({ sourceSystem: 'Manual' }))
+      );
+    });
+
+    it('trocar sourceSystem existente é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), rosterPayload({ sourceSystem: 'Manual' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_rosters', ROSTER_ID), rosterPayload({ sourceSystem: 'SIGE Escola' }))
+      );
+    });
+
+    it('remover sourceSystem existente é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), rosterPayload({ sourceSystem: 'Manual' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      // updateDoc faz merge parcial — reenviar rosterPayload() sem
+      // sourceSystem NÃO o remove (o SDK só mexe nos campos presentes no
+      // payload). deleteField() é o sentinel real de remoção.
+      await assertFails(updateDoc(doc(db, 'student_rosters', ROSTER_ID), { sourceSystem: deleteField() }));
+    });
+
+    it('trocar sourceStudentHash é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), rosterPayload({ sourceStudentHash: 'hash-original' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_rosters', ROSTER_ID), rosterPayload({ sourceStudentHash: 'hash-novo' }))
+      );
+    });
+
+    it('trocar sourceFileHash é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), rosterPayload({ sourceFileHash: 'hash-arquivo-original' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_rosters', ROSTER_ID), rosterPayload({ sourceFileHash: 'hash-arquivo-novo' }))
+      );
+    });
+
+    it('trocar importBatchId é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), rosterPayload({ importBatchId: 'lote-original' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_rosters', ROSTER_ID), rosterPayload({ importBatchId: 'lote-novo' }))
+      );
+    });
+
+    it('atualização legítima (studentName/active, metadados de origem intocados) continua permitida', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), rosterPayload({ sourceSystem: 'Manual', importBatchId: 'lote-1' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        updateDoc(
+          doc(db, 'student_rosters', ROSTER_ID),
+          rosterPayload({ sourceSystem: 'Manual', importBatchId: 'lote-1', studentName: 'Nome Corrigido' })
+        )
+      );
+    });
   });
 
   it('inativação legítima (active: false, resto igual) é permitida', async () => {
@@ -338,6 +457,51 @@ describe('Fase 2C — student_bimester_grades', () => {
     );
   });
 
+  // Revisão do PR #15, item 5: nota*100 precisa ser um inteiro — no máximo
+  // duas casas decimais, com tolerância só para erro de ponto flutuante
+  // binário (ver comentário de isValidBimesterScoreValue em firestore.rules).
+  describe('nota com no máximo duas casas decimais', () => {
+    it('nota com três casas decimais é bloqueada', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        setDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: 7.123, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 } })
+        )
+      );
+    });
+
+    it('nota com duas casas decimais é permitida', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        setDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: 7.12, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 } })
+        )
+      );
+    });
+
+    it('notas sujeitas a erro de ponto flutuante binário (ex.: 0.29, 1.11) continuam permitidas', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        setDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: 0.29, matematica: 1.11, cienciasNatureza: 2.22, cienciasHumanas: 6 } })
+        )
+      );
+    });
+
+    it('nota null (em branco) continua válida', async () => {
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        setDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: null, matematica: null, cienciasNatureza: null, cienciasHumanas: null } })
+        )
+      );
+    });
+  });
+
   it('atualização legítima (mesmos estudante/turma/ano/bimestre) é permitida', async () => {
     await testEnv.withSecurityRulesDisabled(async (ctx) => {
       await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload());
@@ -349,6 +513,143 @@ describe('Fase 2C — student_bimester_grades', () => {
         gradePayload({ scores: { linguaPortuguesa: 9, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 }, updatedAt: '2026-04-01T00:00:00.000Z' })
       )
     );
+  });
+
+  // Revisão do PR #15, item 4: o `allow update` de student_bimester_grades
+  // agora reconsulta o roster referenciado a cada correção — não só no
+  // create. isValidRosterForGradeWrite() é chamado nos dois.
+  describe('revalidação do roster no update', () => {
+    it('atualizar nota com roster ativo continua permitido', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        updateDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: 10, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 } })
+        )
+      );
+    });
+
+    it('atualizar nota depois de o roster ser inativado é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload());
+        await updateDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), { active: false });
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: 10, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 } })
+        )
+      );
+    });
+
+    it('atualizar nota depois de o roster deixar de existir é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload());
+        await deleteDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: 10, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 } })
+        )
+      );
+    });
+
+    it('atualizar nota depois de o roster "migrar" para outra turma/ano é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload());
+        // Simula o roster sendo desviado de escopo por fora da aplicação
+        // (ex.: correção manual/migração) — a nota nunca deveria continuar
+        // gravável contra um roster que não bate mais com seus próprios
+        // campos denormalizados de turma/ano.
+        await updateDoc(doc(ctx.firestore(), 'student_rosters', ROSTER_ID), { turmaId: TURMA_B_ID, turmaNome: 'Turma B - Teste' });
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ scores: { linguaPortuguesa: 10, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 } })
+        )
+      );
+    });
+  });
+
+  // Revisão do PR #15, item 3: metadados de origem imutáveis no update de
+  // student_bimester_grades, mesmo princípio de student_rosters.
+  describe('metadados de origem são imutáveis no update', () => {
+    it('inserir sourceSystem após a criação é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload());
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ sourceSystem: 'Manual' }))
+      );
+    });
+
+    it('trocar sourceReportTitle é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ sourceReportTitle: 'Boletim Original' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ sourceReportTitle: 'Boletim Novo' }))
+      );
+    });
+
+    it('trocar sourceFileName é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ sourceFileName: 'arquivo-original.csv' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ sourceFileName: 'arquivo-novo.csv' }))
+      );
+    });
+
+    it('trocar sourceFileHash é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ sourceFileHash: 'hash-original' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ sourceFileHash: 'hash-novo' }))
+      );
+    });
+
+    it('trocar importBatchId é bloqueado', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ importBatchId: 'lote-original' }));
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertFails(
+        updateDoc(doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`), gradePayload({ importBatchId: 'lote-novo' }))
+      );
+    });
+
+    it('atualização legítima (scores/observacao, metadados de origem intocados) continua permitida', async () => {
+      await testEnv.withSecurityRulesDisabled(async (ctx) => {
+        await setDoc(
+          doc(ctx.firestore(), 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({ sourceSystem: 'Manual', importBatchId: 'lote-1' })
+        );
+      });
+      const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+      await assertSucceeds(
+        updateDoc(
+          doc(db, 'student_bimester_grades', `${ROSTER_ID}_b1`),
+          gradePayload({
+            sourceSystem: 'Manual', importBatchId: 'lote-1',
+            scores: { linguaPortuguesa: 9, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 },
+          })
+        )
+      );
+    });
   });
 
   it('mudança de estudante (studentKey/rosterId) é bloqueada', async () => {

@@ -17,9 +17,18 @@ import { getSuperintendents, saveSuperintendents, setActiveSuperintendentId, set
 import type { StudentRosterEntry } from '../src/types/studentRoster';
 import type { StudentBimesterGrade } from '../src/types/studentBimesterGrade';
 
+// Só `Date` é congelado (toFake: ['Date']) — setTimeout/setInterval
+// continuam reais, então waitFor()/fireEvent seguem funcionando
+// normalmente. Ancora o "ano corrente" em 2026 para bater com
+// SEED_TURMAS/DEMO_ANO_LETIVO nos testes que não mexem no seletor de ano
+// letivo, sem depender do relógio real da máquina (revisão do PR #15,
+// item 2 — ver também tests/anoLetivoOptions.test.ts para o gerador puro).
+const FIXED_NOW = new Date('2026-03-15T12:00:00.000Z');
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  vi.useRealTimers();
 });
 
 const { authStateListeners, mockAuth, mockListRoster, mockListGrades, mockDeactivate, mockActivate } = vi.hoisted(() => {
@@ -75,9 +84,10 @@ vi.mock('../src/components/notas/StudentRegistrationModal', () => ({
 }));
 
 vi.mock('../src/components/notas/StudentBimesterGradeFormModal', () => ({
-  default: (props: { studentName: string; onSaved: () => void; onClose: () => void }) => (
+  default: (props: { studentName: string; existingObservacao?: string; onSaved: () => void; onClose: () => void }) => (
     <div data-testid="grade-modal">
       <span>Notas de {props.studentName}</span>
+      <span data-testid="grade-modal-observacao">{props.existingObservacao ?? '(sem observação)'}</span>
       <button onClick={() => { props.onSaved(); props.onClose(); }}>Simular notas salvas</button>
       <button onClick={props.onClose}>Fechar notas</button>
     </div>
@@ -166,6 +176,8 @@ function getSchoolIdByName(name: string): string {
 
 describe('NotasView', () => {
   beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(FIXED_NOW);
     localStorage.clear();
     authStateListeners.length = 0;
     mockAuth.currentUser = null;
@@ -214,11 +226,10 @@ describe('NotasView', () => {
     await loginAs(SUPER_A_EMAIL);
     await selectSchool('EEM Diva Cabral');
 
-    await waitFor(() => expect(mockListRoster).toHaveBeenCalled());
-    expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
     expect(screen.getAllByText('0').length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ver estudantes' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
     expect(screen.getByText('Nenhum estudante cadastrado para esta escola, turma e ano letivo.')).toBeInTheDocument();
   });
 
@@ -239,7 +250,7 @@ describe('NotasView', () => {
     await selectSchool('EEM Diva Cabral');
     await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ver estudantes' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
     await waitFor(() => expect(screen.getByText('Estudante Um')).toBeInTheDocument());
     expect(screen.getByText('8.0')).toBeInTheDocument();
 
@@ -251,6 +262,126 @@ describe('NotasView', () => {
     // dos indicadores correntes porque active passa a false.
     await waitFor(() => expect(screen.getByText(/Estudante Um/).textContent).toContain('(Inativo)'));
     expect(screen.getByText('8.0')).toBeInTheDocument();
+  });
+
+  // Revisão do PR #15, item 8: erro real de ativação/inativação precisa
+  // ficar visível — nunca uma rejeição de Promise silenciosa.
+  it('erro de inativação (ex.: falha de permissão) fica visível na interface', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    const roster = rosterEntry();
+    mockListRoster.mockResolvedValue([roster]);
+    mockListGrades.mockResolvedValue([]);
+    mockDeactivate.mockRejectedValueOnce(new Error('Missing or insufficient permissions.'));
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+    await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
+    await waitFor(() => expect(screen.getByText('Estudante Um')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTitle('Inativar'));
+    await waitFor(() => expect(screen.getByText('Missing or insufficient permissions.')).toBeInTheDocument());
+  });
+
+  // Revisão do PR #15, item 8: enquanto a chamada anterior está em
+  // andamento, um segundo clique no mesmo estudante não dispara outra
+  // chamada ao serviço.
+  it('cliques repetidos durante a inativação do mesmo estudante não disparam chamadas duplicadas', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    const roster = rosterEntry();
+    mockListRoster.mockResolvedValue([roster]);
+    mockListGrades.mockResolvedValue([]);
+    let resolveDeactivate: () => void = () => {};
+    mockDeactivate.mockReturnValue(new Promise<void>(resolve => { resolveDeactivate = resolve; }));
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+    await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
+    await waitFor(() => expect(screen.getByText('Estudante Um')).toBeInTheDocument());
+
+    const toggleButton = screen.getByTitle('Inativar');
+    fireEvent.click(toggleButton);
+    fireEvent.click(toggleButton);
+    fireEvent.click(toggleButton);
+    await waitFor(() => expect(mockDeactivate).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      resolveDeactivate();
+    });
+  });
+
+  // Revisão do PR #15, item 8: estudante inativo nunca pode receber a ação
+  // "Preencher notas" habilitada.
+  it('estudante inativo não recebe a ação "Preencher notas" habilitada', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    mockListRoster.mockResolvedValue([rosterEntry({ active: false })]);
+    mockListGrades.mockResolvedValue([]);
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+    await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
+    await waitFor(() => expect(screen.getByText(/Estudante Um/)).toBeInTheDocument());
+
+    expect(screen.getByRole('button', { name: /Preencher notas/ })).toBeDisabled();
+  });
+
+  // Revisão do PR #15, item 8: estado vazio por FILTRO/busca precisa ser
+  // diferente de "nenhum estudante cadastrado" (o cadastro existe, só não
+  // bate com o filtro atual).
+  it('estado vazio causado por busca é diferente de "nenhum estudante cadastrado"', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    mockListRoster.mockResolvedValue([rosterEntry()]);
+    mockListGrades.mockResolvedValue([]);
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+    await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
+    await waitFor(() => expect(screen.getByText('Estudante Um')).toBeInTheDocument());
+
+    fireEvent.change(screen.getByPlaceholderText('Buscar estudante pelo nome...'), { target: { value: 'nome que não existe' } });
+
+    await waitFor(() =>
+      expect(screen.getByText('Nenhum estudante encontrado com os filtros ou a busca atuais.')).toBeInTheDocument()
+    );
+    expect(screen.queryByText('Nenhum estudante cadastrado para esta escola, turma e ano letivo.')).not.toBeInTheDocument();
+  });
+
+  // Revisão do PR #15, item 6: NotasView precisa carregar a observação já
+  // registrada e repassá-la ao modal de notas (o próprio modal já sabe
+  // exibir/editar/apagar — coberto em tests/notasModals.component.test.tsx).
+  it('observação existente na nota é repassada ao modal de preenchimento', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    const roster = rosterEntry();
+    mockListRoster.mockResolvedValue([roster]);
+    mockListGrades.mockResolvedValue([
+      gradeEntry(roster.id, { linguaPortuguesa: 8, matematica: null, cienciasNatureza: null, cienciasHumanas: null }, {
+        observacao: 'Precisa de acompanhamento em leitura.',
+      }),
+    ]);
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+    await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
+    await waitFor(() => expect(screen.getByText('Estudante Um')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /Preencher notas/ }));
+    await waitFor(() =>
+      expect(screen.getByTestId('grade-modal-observacao').textContent).toBe('Precisa de acompanhamento em leitura.')
+    );
   });
 
   it('estados de preenchimento (sem notas / parcial / completo) aparecem corretamente na tabela', async () => {
@@ -269,7 +400,7 @@ describe('NotasView', () => {
     await loginAs(SUPER_A_EMAIL);
     await selectSchool('EEM Diva Cabral');
     await waitFor(() => expect(mockListRoster).toHaveBeenCalled());
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ver estudantes' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
 
     await waitFor(() => expect(screen.getByText('Estudante Sem Notas')).toBeInTheDocument());
     expect(screen.getByText(/Sem notas \(0%\)/)).toBeInTheDocument();
@@ -306,7 +437,7 @@ describe('NotasView', () => {
     await loginAs(SUPER_A_EMAIL);
     await selectSchool('EEM Diva Cabral');
     await waitFor(() => expect(mockListRoster).toHaveBeenCalled());
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ver estudantes' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
     await waitFor(() => expect(screen.getByText('Estudante Sem Notas')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: 'Sem notas' }));
@@ -342,7 +473,7 @@ describe('NotasView', () => {
     await selectSchool('EEM Diva Cabral');
     await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
 
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ver estudantes' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
     fireEvent.click(screen.getByRole('button', { name: 'Cadastrar estudante' }));
     expect(screen.getByTestId('registration-modal')).toBeInTheDocument();
 
@@ -404,7 +535,7 @@ describe('NotasView', () => {
     await waitFor(() =>
       expect(screen.getByText('Modo demonstração — faça login para ver e registrar dados reais')).toBeInTheDocument()
     );
-    fireEvent.click(screen.getAllByRole('button', { name: 'Ver estudantes' })[0]);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
     await waitFor(() => expect(screen.getByText(/Estudante Demonstração 01/)).toBeInTheDocument());
 
     mockListRoster.mockResolvedValue([]);
@@ -416,5 +547,49 @@ describe('NotasView', () => {
     );
     await waitFor(() => expect(mockListRoster).toHaveBeenCalled());
     expect(screen.queryByText(/Estudante Demonstração/)).not.toBeInTheDocument();
+  });
+
+  // Revisão do PR #15, item 2: seletor de ano letivo real (não mais um
+  // <select disabled> travado em 2026).
+  describe('Ano letivo', () => {
+    it('seletor mostra anterior/corrente/seguinte ancorados no ano real do sistema — nunca preso em 2026', async () => {
+      vi.setSystemTime(new Date('2031-06-01T00:00:00.000Z'));
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+
+      const select = screen.getByLabelText('Ano letivo') as HTMLSelectElement;
+      const optionValues = Array.from(select.options).map(o => o.value);
+      expect(optionValues).toEqual(['2030', '2031', '2032']);
+      expect(select.value).toBe('2031');
+    });
+
+    it('trocar o ano letivo limpa a turma selecionada, fecha modais abertos e recarrega roster/notas do novo ano', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListRoster.mockResolvedValue([rosterEntry()]);
+      mockListGrades.mockResolvedValue([]);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(mockListRoster).toHaveBeenCalledTimes(1));
+      expect(mockListRoster).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2026);
+
+      fireEvent.click((await screen.findAllByRole('button', { name: 'Ver estudantes' }))[0]);
+      await waitFor(() => expect(screen.getByText('Estudante Um')).toBeInTheDocument());
+      fireEvent.click(screen.getByRole('button', { name: 'Cadastrar estudante' }));
+      expect(screen.getByTestId('registration-modal')).toBeInTheDocument();
+
+      fireEvent.change(screen.getByLabelText('Ano letivo'), { target: { value: '2025' } });
+
+      // Modal fechado e turma desmarcada (volta para a tabela de turmas por
+      // escola) — nunca sobrevivem à troca de ano letivo.
+      expect(screen.queryByTestId('registration-modal')).not.toBeInTheDocument();
+      expect(screen.queryByText('Estudante Um')).not.toBeInTheDocument();
+      await waitFor(() => expect(mockListRoster).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2025));
+    });
   });
 });
