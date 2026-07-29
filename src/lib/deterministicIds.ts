@@ -42,3 +42,23 @@ export function buildEnrollmentSnapshotId(
 export function buildSchoolFlowResultId(schoolId: string, anoLetivo: number): string {
   return `${schoolId}_${anoLetivo}`;
 }
+
+// `student_rosters/{schoolId_anoLetivo_turmaId_studentKey}` — studentKey é
+// um identificador interno opaco (crypto.randomUUID() no cadastro manual),
+// nunca derivado do nome do estudante (Fase 2C).
+export function buildStudentRosterId(
+  schoolId: string,
+  anoLetivo: number,
+  turmaId: string,
+  studentKey: string
+): string {
+  return `${schoolId}_${anoLetivo}_${turmaId}_${studentKey}`;
+}
+
+// `student_bimester_grades/{rosterId_bBimestre}` — ex.:
+// "diva-cabral_2026_turma-3a-diva_9c3b...-uuid_b1". Como rosterId já
+// contém schoolId/anoLetivo/turmaId/studentKey, a nota herda o mesmo
+// isolamento sem precisar repeti-lo no ID.
+export function buildStudentBimesterGradeId(rosterId: string, bimestre: number): string {
+  return `${rosterId}_b${bimestre}`;
+}

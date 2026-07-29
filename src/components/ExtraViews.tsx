@@ -25,14 +25,13 @@ import {
   Clock,
   Lock
 } from 'lucide-react';
-import { 
-  subscribeToCollection, 
-  updateDocument, 
-  addDocument, 
+import {
+  subscribeToCollection,
+  updateDocument,
+  addDocument,
   deleteDocument,
-  SEED_SCHOOLS, 
-  SEED_TURMAS,
-  SEED_GRADES 
+  SEED_SCHOOLS,
+  SEED_TURMAS
 } from '../lib/firebaseService';
 import { auth } from '../lib/firebase';
 import { isSchoolVisible, getActiveSuperintendentId, hasSchoolWriteAccess, schoolNamesMatch } from '../lib/superintendentService';
@@ -359,7 +358,12 @@ export function BuscaAtivaView() {
 
   // Core structured data holder
   const [students, setStudents] = useState<BuscaAtivaStudent[]>(INITIAL_BUSCA_ATIVA);
-  const [grades, setGrades] = useState<any[]>(SEED_GRADES);
+  // Fase 2C: `grades` (coleção legado) passou a ter leitura restrita ao
+  // admin raiz (ver firestore.rules e docs/plano-migracao-grades-legado.md)
+  // — o cruzamento com o lançamento oficial de notas abaixo do crítico fica
+  // sempre vazio (nunca gravado, nunca subscrito), degradando com segurança
+  // para "nenhum aluno cruzado" em vez de gerar erro de permissão.
+  const [grades] = useState<any[]>([]);
 
   const [showForm, setShowForm] = useState(false);
   const [editingStudent, setEditingStudent] = useState<BuscaAtivaStudent | null>(null);
@@ -430,17 +434,8 @@ export function BuscaAtivaView() {
       }
     });
 
-    const unsubGrades = subscribeToCollection('grades', (loaded) => {
-      if (loaded.length > 0) {
-        setGrades(loaded);
-      } else {
-        setGrades(SEED_GRADES);
-      }
-    });
-
     return () => {
       unsubSt();
-      unsubGrades();
     };
   }, [isFirebaseMode]);
 
@@ -614,7 +609,8 @@ export function BuscaAtivaView() {
     return isEscolaMatch && isTurmaMatch && isBimestreMatch;
   }).sort((a, b) => b.faltasConsecutivas - a.faltasConsecutivas);
 
-  // Cross-reference data: Find students from SEED_GRADES that belong to the current filtered view and have failing grades but are NOT in current alignment
+  // Cross-reference data: find students in the legacy grades launch that belong to the current filtered view and have failing grades but are NOT in current alignment.
+  // Fase 2C: `grades` (legado) tem leitura restrita ao admin raiz — `grades` acima fica sempre vazio, então este cruzamento nunca encontra nada (degrada com segurança, sem erro de permissão).
   const lowPerformanceStudentsNotFlagged = grades.filter(g => {
     // Determine if grade belongs to this school
     // Fase 1G: só a identidade da ESCOLA (lado esquerdo) é normalizada aqui
@@ -1676,8 +1672,12 @@ export function RecomposicaoView() {
   // Core structured recomposição data holder
   const [recomposicaos, setRecomposicaos] = useState<RecomposicaoItem[]>(INITIAL_RECOMPOSICAO);
   
-  // States to read grades and active busca ativa student count for alerts of cohesive tabs
-  const [grades, setGrades] = useState<any[]>(SEED_GRADES);
+  // States to read grades and active busca ativa student count for alerts of cohesive tabs.
+  // Fase 2C: `grades` (legado) tem leitura restrita ao admin raiz — fica
+  // sempre vazio aqui, degradando com segurança para os valores de
+  // referência fixos abaixo (avgPortuguesValue/avgMatematicaValue) em vez
+  // de erro de permissão.
+  const [grades] = useState<any[]>([]);
   const [baStudents, setBaStudents] = useState<BuscaAtivaStudent[]>(INITIAL_BUSCA_ATIVA);
 
   // Editor states
@@ -1751,14 +1751,9 @@ export function RecomposicaoView() {
       if (loaded.length > 0) setBaStudents(loaded);
     });
 
-    const unsubGrades = subscribeToCollection('grades', (loaded) => {
-      if (loaded.length > 0) setGrades(loaded);
-    });
-
     return () => {
       unsubRec();
       unsubBa();
-      unsubGrades();
     };
   }, [isFirebaseMode]);
 
@@ -1863,7 +1858,7 @@ export function RecomposicaoView() {
     s => schoolNamesMatch(s.escola, filterEscola) && s.turma === targetTurmaForChecks && s.bimestre === filterBimestre && (s.risco === 'Crítico' || s.risco === 'Alto')
   );
 
-  // Cohesive feature: Fetch average grades from same selected class/bimester (from SEED_GRADES fallback/grades)
+  // Cohesive feature: fetch average grades from the same selected class/bimester (legacy grades launch, restricted to root admin — see Fase 2C, always empty here, degrades to the fixed fallback averages below).
   const activeClassGrades = grades.filter(g => {
     // Fase 1G: só a identidade da ESCOLA (lado esquerdo) é normalizada aqui
     // — o substring hack por TURMA (g.turma.includes(...)) é uma mitigação

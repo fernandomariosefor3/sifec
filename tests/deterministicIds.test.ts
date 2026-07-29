@@ -5,6 +5,8 @@ import {
   buildEnrollmentSnapshotId,
   buildSchoolFlowResultId,
   buildSchoolYearId,
+  buildStudentBimesterGradeId,
+  buildStudentRosterId,
   parseSchoolYearId,
 } from '../src/lib/deterministicIds';
 
@@ -82,5 +84,58 @@ describe('buildSchoolFlowResultId', () => {
     // schoolId/anoLetivo, então o histórico nunca se perde numa troca de
     // vínculo em superintendentes/{email}.escolas.
     expect(buildSchoolFlowResultId('diva-cabral', 2025)).toBe('diva-cabral_2025');
+  });
+});
+
+describe('buildStudentRosterId', () => {
+  it('gera o ID no formato schoolId_anoLetivo_turmaId_studentKey', () => {
+    expect(buildStudentRosterId('diva-cabral', 2026, 'turma-3a-diva', 'abc-123')).toBe(
+      'diva-cabral_2026_turma-3a-diva_abc-123'
+    );
+  });
+
+  it('studentKeys diferentes na mesma turma geram IDs diferentes', () => {
+    const a = buildStudentRosterId('diva-cabral', 2026, 'turma-3a-diva', 'key-a');
+    const b = buildStudentRosterId('diva-cabral', 2026, 'turma-3a-diva', 'key-b');
+    expect(a).not.toBe(b);
+  });
+
+  it('turmas diferentes na mesma escola/ano geram IDs diferentes para o mesmo studentKey', () => {
+    const a = buildStudentRosterId('diva-cabral', 2026, 'turma-3a-diva', 'key-a');
+    const b = buildStudentRosterId('diva-cabral', 2026, 'turma-3b-diva', 'key-a');
+    expect(a).not.toBe(b);
+  });
+
+  it('anos letivos diferentes geram IDs diferentes (histórico nunca colide entre anos)', () => {
+    const a = buildStudentRosterId('diva-cabral', 2026, 'turma-3a-diva', 'key-a');
+    const b = buildStudentRosterId('diva-cabral', 2027, 'turma-3a-diva', 'key-a');
+    expect(a).not.toBe(b);
+  });
+
+  it('não depende de nenhuma identidade de superintendente', () => {
+    expect(buildStudentRosterId('diva-cabral', 2026, 'turma-3a-diva', 'key-a')).toBe(
+      'diva-cabral_2026_turma-3a-diva_key-a'
+    );
+  });
+});
+
+describe('buildStudentBimesterGradeId', () => {
+  it('gera o ID no formato rosterId_bBimestre', () => {
+    expect(buildStudentBimesterGradeId('diva-cabral_2026_turma-3a-diva_key-a', 1)).toBe(
+      'diva-cabral_2026_turma-3a-diva_key-a_b1'
+    );
+  });
+
+  it('bimestres diferentes do mesmo estudante geram IDs diferentes (histórico nunca colide)', () => {
+    const rosterId = 'diva-cabral_2026_turma-3a-diva_key-a';
+    const b1 = buildStudentBimesterGradeId(rosterId, 1);
+    const b2 = buildStudentBimesterGradeId(rosterId, 2);
+    expect(b1).not.toBe(b2);
+  });
+
+  it('estudantes diferentes (rosterId diferente) no mesmo bimestre geram IDs diferentes', () => {
+    const a = buildStudentBimesterGradeId('diva-cabral_2026_turma-3a-diva_key-a', 1);
+    const b = buildStudentBimesterGradeId('diva-cabral_2026_turma-3a-diva_key-b', 1);
+    expect(a).not.toBe(b);
   });
 });

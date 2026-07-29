@@ -202,7 +202,10 @@ service cloud.firestore {
     // schoolId/codInep válidos e acesso à escola; logs de outras coleções
     // (ex.: superintendentes) não são "escolares" e não exigem escola.
     function isSchoolScopedAuditCollection(collectionName) {
-      return collectionName in ['school_years', 'enrollment_snapshots', 'turmas', 'schools', 'imports', 'school_flow_results'];
+      return collectionName in [
+        'school_years', 'enrollment_snapshots', 'turmas', 'schools', 'imports',
+        'school_flow_results', 'student_rosters', 'student_bimester_grades'
+      ];
     }
 
     // codInep do audit_log precisa bater com o codInep REAL da escola —
@@ -444,21 +447,23 @@ service cloud.firestore {
       allow delete: if isPlatformAdmin() && isValidId(turmaId);
     }
 
-    // --- Grades (Opção C — mitigação temporária, ver Fase 0) ---
-    // grades ainda não tem schoolId; isolamento por escola fica para uma
-    // migração posterior (docs/plano-migracao-grades-schoolId.md). Até lá,
-    // isAuthorized() (superintendente ativo ou admin) é a mitigação — evita
-    // leitura/escrita por conta não cadastrada, mas não isola por escola.
+    // --- Grades (LEGADO — Fase 2C: substituída por student_rosters +
+    // student_bimester_grades, ver docs/fase-2c-inventario-notas-legadas.md
+    // e docs/plano-migracao-grades-legado.md) ---
+    // grades nunca teve schoolId (Opção C da Fase 0 nunca foi migrada —
+    // isAuthorized() sozinho não isolava por escola, qualquer
+    // superintendente ativo lia/editava boletins de qualquer escola). A
+    // Fase 2C não corrige isso com uma migração real (fora de escopo,
+    // exigiria resolver ambiguidade de nome de turma entre escolas — ver
+    // plano de migração); em vez disso, preserva os documentos existentes
+    // e fecha a coleção: só o admin raiz lê (para eventual auditoria/
+    // exportação manual), e create/update/delete ficam bloqueados para
+    // TODOS pela aplicação, inclusive admin raiz — a nova interface
+    // (NotasView.tsx) não lê grades, nem mesmo para o admin raiz. Reservada
+    // só para uma futura migração controlada.
     match /grades/{gradeId} {
-      allow read: if isAuthorized();
-      allow create, update: if isAuthorized() && isValidId(gradeId) &&
-        incoming().nome is string && incoming().nome.size() <= 150 &&
-        incoming().turma is string && incoming().turma.size() <= 100 &&
-        incoming().portugues is number &&
-        incoming().matematica is number &&
-        incoming().ciencias is number &&
-        incoming().bimestre is string;
-      allow delete: if isAdmin() && isValidId(gradeId);
+      allow read: if isPlatformAdmin();
+      allow create, update, delete: if false;
     }
 
     // --- Visitas ---
@@ -733,6 +738,234 @@ service cloud.firestore {
       // Sem exclusão livre — mesmo padrão de school_years/enrollment_snapshots,
       // só o admin raiz exclui.
       allow delete: if isPlatformAdmin() && isValidId(resultId);
+    }
+
+    // Shape do documento, comum a create e update. Único dado nominal
+    // permitido é studentName — dados pessoais extras (CPF, telefone,
+    // matrícula SIGE etc.) nunca fazem parte do schema, então já são
+    // rejeitados por hasOnly() sozinho, sem precisar de uma lista de
+    // bloqueio.
+    function isValidStudentRosterShape(rosterId) {
+      return incoming().keys().hasOnly([
+          'id', 'studentKey', 'schoolId', 'codInep', 'escolaNome',
+          'turmaId', 'turmaNome', 'anoLetivo', 'studentName', 'active',
+          'sourceSystem', 'sourceStudentHash', 'sourceFileHash', 'importBatchId',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        incoming().id == rosterId &&
+        incoming().studentKey is string && incoming().studentKey.size() > 0 && incoming().studentKey.size() <= 100 &&
+        incoming().schoolId is string && incoming().schoolId.size() <= 128 &&
+        incoming().codInep is string && incoming().codInep.size() <= 50 &&
+        incoming().escolaNome is string && incoming().escolaNome.size() <= 150 &&
+        incoming().turmaId is string && incoming().turmaId.size() <= 128 &&
+        incoming().turmaNome is string && incoming().turmaNome.size() <= 150 &&
+        isValidAnoLetivo(incoming().anoLetivo) &&
+        // ID determinístico validado contra os campos internos (seção 4 do
+        // plano: schoolId_anoLetivo_turmaId_studentKey).
+        rosterId == incoming().schoolId + '_' + string(incoming().anoLetivo) + '_' + incoming().turmaId + '_' + incoming().studentKey &&
+        incoming().studentName is string && incoming().studentName.size() >= 2 && incoming().studentName.size() <= 150 &&
+        incoming().active is bool &&
+        (!('sourceSystem' in incoming()) || incoming().sourceSystem in ['Manual', 'SIGE Escola', 'Importação administrativa']) &&
+        (!('sourceStudentHash' in incoming()) || (incoming().sourceStudentHash is string && incoming().sourceStudentHash.size() <= 200)) &&
+        (!('sourceFileHash' in incoming()) || (incoming().sourceFileHash is string && incoming().sourceFileHash.size() <= 200)) &&
+        (!('importBatchId' in incoming()) || (incoming().importBatchId is string && incoming().importBatchId.size() <= 200)) &&
+        incoming().createdAt is string && incoming().updatedAt is string &&
+        incoming().createdBy is string && incoming().updatedBy is string;
+    }
+
+    // --- Fase 2C: student_rosters ---
+    // Cadastro mínimo de estudante por turma+ano letivo. Só dado nominal
+    // permitido: studentName (ver docs/fase-2c-inventario-notas-legadas.md).
+    // Mesmo modelo de autorização e integridade canônica de school_years/
+    // school_flow_results, mais isCanonicalTurmaOfSchool (a turma precisa
+    // existir e pertencer à MESMA escola — mesmo princípio de
+    // enrollment_snapshots).
+    match /student_rosters/{rosterId} {
+      // Baseado em schoolId (canWriteSchoolById) — StudentRosterService
+      // sempre consulta por schoolId (nunca a coleção completa), e o
+      // Firestore só prova a segurança de uma consulta quando a regra
+      // depende do MESMO campo usado no where().
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+
+      allow create: if isValidId(rosterId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isCanonicalTurmaOfSchool(incoming().turmaId, incoming().schoolId) &&
+        isValidStudentRosterShape(rosterId);
+
+      // Update = correção do cadastro OU inativação/reativação — nunca uma
+      // forma de mudar de escola/turma/ano/estudante mantendo o ID.
+      // studentName e active são os únicos campos alteráveis (seção 17 do
+      // plano); createdAt/createdBy travados como imutáveis.
+      allow update: if isValidId(rosterId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().studentKey == resource.data.studentKey &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().turmaId == resource.data.turmaId &&
+        incoming().turmaNome == resource.data.turmaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidStudentRosterShape(rosterId);
+
+      // Sem exclusão comum — só inativação (active: false). Admin raiz
+      // mantém exclusão só para manutenção excepcional (seção 17 do plano).
+      allow delete: if isPlatformAdmin() && isValidId(rosterId);
+    }
+
+    // Um só get() no roster referenciado (let, não repetido) — o roster já
+    // foi canonicamente validado (isCanonicalSchoolMatch/isCanonicalTurmaOfSchool)
+    // no momento em que foi criado, então uma nota só precisa bater EXATAMENTE
+    // com os campos denormalizados do roster (escolaNome/codInep/turmaNome
+    // incluídos) em vez de repetir os mesmos dois get()s extras em `schools`/
+    // `turmas`. Isso evita empilhar 3 helpers baseados em get() no mesmo
+    // `allow create` (canWriteEscola + isCanonicalSchoolMatch +
+    // isCanonicalTurmaOfSchool + este) e estourar o limite de 1000
+    // sub-expressões do emulador local — só 1 helper extra aqui, mesmo
+    // orçamento usado por enrollment_snapshots/school_flow_results. Sem
+    // exists() antes de propósito: um get() num rosterId inexistente só faz
+    // esta cláusula falhar (nega a criação), não derruba a requisição.
+    function isValidRosterForGradeCreation(rosterId, schoolId, codInep, escolaNome, turmaId, turmaNome, anoLetivo) {
+      let roster = get(/databases/$(database)/documents/student_rosters/$(rosterId)).data;
+      return roster.active == true &&
+        roster.schoolId == schoolId &&
+        roster.codInep == codInep &&
+        roster.escolaNome == escolaNome &&
+        roster.turmaId == turmaId &&
+        roster.turmaNome == turmaNome &&
+        roster.anoLetivo == anoLetivo;
+    }
+
+    // As QUATRO chaves são sempre exigidas (mesmo quando o valor é null —
+    // "vazio" é um valor válido, não uma chave ausente): scores.size() == 4
+    // combinado com hasOnly() garante que não falta nenhuma disciplina e
+    // que nenhuma chave extra (ex.: um campo de disciplina inventado) entra.
+    // Validação de cada nota inlined (sem uma função isValidBimesterScoreValue
+    // separada chamada 4x) — o emulador local soma o custo de CADA chamada de
+    // função aninhada para o limite de 1000 sub-expressões, e este helper já
+    // soma com canWriteEscola() + isValidRosterForGradeCreation() no mesmo
+    // `allow create`/`allow update` (ver comentário em
+    // isValidRosterForGradeCreation).
+    function isValidBimesterScores(scores) {
+      return scores is map &&
+        scores.keys().hasOnly(['linguaPortuguesa', 'matematica', 'cienciasNatureza', 'cienciasHumanas']) &&
+        scores.size() == 4 &&
+        (scores.linguaPortuguesa == null || (scores.linguaPortuguesa is number && scores.linguaPortuguesa >= 0 && scores.linguaPortuguesa <= 10)) &&
+        (scores.matematica == null || (scores.matematica is number && scores.matematica >= 0 && scores.matematica <= 10)) &&
+        (scores.cienciasNatureza == null || (scores.cienciasNatureza is number && scores.cienciasNatureza >= 0 && scores.cienciasNatureza <= 10)) &&
+        (scores.cienciasHumanas == null || (scores.cienciasHumanas is number && scores.cienciasHumanas >= 0 && scores.cienciasHumanas <= 10));
+    }
+
+    // Shape do documento, comum a create e update. Nunca inclui studentName
+    // (o nome vem só do vínculo com student_rosters via studentKey/
+    // rosterId) nem média/percentual/classificação — só os quantitativos
+    // brutos (scores), sempre recalculados na aplicação. `let data = incoming()`
+    // uma única vez (em vez de ~24 chamadas repetidas de incoming() — cada
+    // uma é sua própria sub-expressão) para caber no orçamento do emulador
+    // local somado a canWriteEscola() + isValidRosterForGradeCreation() no
+    // mesmo `allow create`/`allow update`.
+    function isValidStudentBimesterGradeShape(gradeId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'rosterId', 'studentKey', 'schoolId', 'codInep', 'escolaNome',
+          'turmaId', 'turmaNome', 'anoLetivo', 'bimestre', 'scores', 'observacao',
+          'sourceSystem', 'sourceReportTitle', 'sourceFileName', 'sourceFileHash', 'importBatchId',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == gradeId &&
+        data.rosterId is string && data.rosterId.size() <= 350 &&
+        data.studentKey is string && data.studentKey.size() <= 100 &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        data.turmaId is string && data.turmaId.size() <= 128 &&
+        data.turmaNome is string && data.turmaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.bimestre in [1, 2, 3, 4] &&
+        // ID e rosterId determinísticos validados contra os campos internos
+        // (seção 5 do plano: rosterId = schoolId_anoLetivo_turmaId_studentKey,
+        // id = rosterId_bBimestre).
+        gradeId == data.rosterId + '_b' + string(data.bimestre) &&
+        data.rosterId == data.schoolId + '_' + string(data.anoLetivo) + '_' + data.turmaId + '_' + data.studentKey &&
+        isValidBimesterScores(data.scores) &&
+        (!('observacao' in data) || (data.observacao is string && data.observacao.size() <= 500)) &&
+        (!('sourceSystem' in data) || data.sourceSystem in ['Manual', 'SIGE Escola', 'Importação administrativa']) &&
+        (!('sourceReportTitle' in data) || (data.sourceReportTitle is string && data.sourceReportTitle.size() <= 200)) &&
+        (!('sourceFileName' in data) || (data.sourceFileName is string && data.sourceFileName.size() <= 200)) &&
+        (!('sourceFileHash' in data) || (data.sourceFileHash is string && data.sourceFileHash.size() <= 200)) &&
+        (!('importBatchId' in data) || (data.importBatchId is string && data.importBatchId.size() <= 200)) &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    // `let data = incoming()` uma única vez (em vez de ~7 chamadas repetidas)
+    // pelo mesmo motivo do orçamento de sub-expressões do emulador local —
+    // ver comentário em isValidRosterForGradeCreation/isValidStudentBimesterGradeShape.
+    // `let` só é válido como statement dentro do corpo de uma função (não
+    // inline dentro de `allow`), por isso esta lógica vive numa função
+    // separada chamada pelo `allow create`.
+    function isValidStudentBimesterGradeCreate(gradeId) {
+      let data = incoming();
+      return isValidRosterForGradeCreation(
+          data.rosterId, data.schoolId, data.codInep,
+          data.escolaNome, data.turmaId, data.turmaNome, data.anoLetivo
+        ) &&
+        isValidStudentBimesterGradeShape(gradeId);
+    }
+
+    // Update = correção do MESMO estudante/turma/ano/bimestre — nunca uma
+    // forma de mudar de estudante/turma/ano/bimestre mantendo o ID.
+    // scores/observacao são os únicos campos alteráveis (seção 18 do
+    // plano); createdAt/createdBy travados. `let data`/`let old` (em vez de
+    // ~11 chamadas repetidas de incoming()/resource.data) pelo mesmo motivo
+    // do orçamento de sub-expressões do emulador local.
+    function isValidStudentBimesterGradeUpdate(gradeId) {
+      let data = incoming();
+      let old = resource.data;
+      return data.rosterId == old.rosterId &&
+        data.studentKey == old.studentKey &&
+        data.schoolId == old.schoolId &&
+        data.codInep == old.codInep &&
+        data.escolaNome == old.escolaNome &&
+        data.turmaId == old.turmaId &&
+        data.turmaNome == old.turmaNome &&
+        data.anoLetivo == old.anoLetivo &&
+        data.bimestre == old.bimestre &&
+        data.createdAt == old.createdAt &&
+        data.createdBy == old.createdBy &&
+        isValidStudentBimesterGradeShape(gradeId);
+    }
+
+    // --- Fase 2C: student_bimester_grades ---
+    // Nota bimestral por estudante. Nunca persiste média/percentual/
+    // classificação/situação pedagógica (ver
+    // src/lib/studentGradeCalculations.ts — tudo calculado na aplicação).
+    match /student_bimester_grades/{gradeId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+
+      // Exige o roster referenciado existir, estar ATIVO, e pertencer à
+      // MESMA escola/turma/ano do payload (isValidRosterForGradeCreation)
+      // — nunca aceita nota para um cadastro inexistente, inativo, ou de
+      // outra escola/turma/ano "emprestado" via rosterId adulterado. A
+      // integridade canônica de schoolId/codInep/escolaNome/turmaId/
+      // turmaNome vem do próprio roster (já canonicamente validado na sua
+      // criação) em vez de isCanonicalSchoolMatch/isCanonicalTurmaOfSchool
+      // separados — ver comentário em isValidRosterForGradeCreation sobre o
+      // orçamento de sub-expressões do emulador.
+      allow create: if isValidId(gradeId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isValidStudentBimesterGradeCreate(gradeId);
+
+      allow update: if isValidId(gradeId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        isValidStudentBimesterGradeUpdate(gradeId);
+
+      // Sem exclusão comum — não há botão de exclusão na interface (seção
+      // 14 do plano). Admin raiz mantém exclusão só para manutenção
+      // excepcional.
+      allow delete: if isPlatformAdmin() && isValidId(gradeId);
     }
 
     // --- Fase 2A: imports ---
