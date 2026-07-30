@@ -19,7 +19,8 @@ import {
   BookOpen,
   Wrench,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  Radar
 } from 'lucide-react';
 import { auth, loginWithGoogle, logout, EXPECTED_FIREBASE_PROJECT_ID } from './lib/firebase';
 import { mapAuthErrorCodeToMessage, extractAuthErrorCode, buildSafeAuthDiagnostic } from './lib/authErrorMessages';
@@ -32,6 +33,7 @@ import EscolasView from './components/EscolasView';
 import FluxoView from './components/FluxoView';
 import NotasView from './components/NotasView';
 import CdgView from './components/CdgView';
+import SalaDeSituacaoView from './components/SalaDeSituacaoView';
 import { BuscaAtivaView, PpdtView, RecomposicaoView } from './components/ExtraViews';
 import SuperintendentesView from './components/SuperintendentesView';
 import DevPanel from './components/DevPanel';
@@ -58,7 +60,7 @@ import { SEED_SCHOOLS } from './lib/firebaseService';
 // count against the true total instead of their own empty list.
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
 
-type TabType = 'escolas' | 'fluxo' | 'notas' | 'cdg' | 'busca' | 'recomposicao' | 'ppdt' | 'superintendentes';
+type TabType = 'escolas' | 'fluxo' | 'notas' | 'situacao' | 'cdg' | 'busca' | 'recomposicao' | 'ppdt' | 'superintendentes';
 
 // Painel técnico (DevPanel) só existe em build de desenvolvimento.
 // import.meta.env.DEV é substituído por uma constante em tempo de build pelo
@@ -292,6 +294,7 @@ export default function App() {
       case 'escolas': return 'border-t-brand-turquoise';
       case 'fluxo': return 'border-t-brand-coral';
       case 'notas': return 'border-t-brand-green';
+      case 'situacao': return 'border-t-brand-turquoise';
       case 'cdg': return 'border-[#26b2b7]';
       case 'busca': return 'border-t-brand-orange';
       case 'recomposicao': return 'border-t-brand-coral';
@@ -534,6 +537,20 @@ export default function App() {
               <ChevronRight size={12} className="opacity-60" />
             </button>
 
+            <button
+              onClick={() => setActiveTab('situacao')}
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
+                activeTab === 'situacao'
+                  ? 'bg-brand-turquoise text-white shadow-sm border border-brand-turquoise-dark/20'
+                  : 'text-slate-650 hover:bg-brand-turquoise/10 hover:text-brand-turquoise-dark'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <Radar size={15} /> Sala de Situação
+              </span>
+              <ChevronRight size={12} className="opacity-60" />
+            </button>
+
             <span className="text-[10px] font-black uppercase text-brand-orange-dark tracking-widest px-3 py-1 block mt-3 mb-1">Gestão de Equipes Seduc</span>
 
             <button
@@ -612,6 +629,7 @@ export default function App() {
             {activeTab === 'escolas' && <ErrorBoundary><EscolasView /></ErrorBoundary>}
             {activeTab === 'fluxo' && <ErrorBoundary><FluxoView /></ErrorBoundary>}
             {activeTab === 'notas' && <ErrorBoundary><NotasView /></ErrorBoundary>}
+            {activeTab === 'situacao' && <ErrorBoundary><SalaDeSituacaoView /></ErrorBoundary>}
             {activeTab === 'cdg' && <ErrorBoundary><CdgView /></ErrorBoundary>}
             {activeTab === 'busca' && <ErrorBoundary><BuscaAtivaView /></ErrorBoundary>}
             {activeTab === 'recomposicao' && <ErrorBoundary><RecomposicaoView /></ErrorBoundary>}

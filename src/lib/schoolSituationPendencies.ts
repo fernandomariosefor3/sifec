@@ -1,0 +1,135 @@
+// Fase 2D — Sala de Situação: pendências operacionais (seção 9 do plano).
+// Extraído de schoolSituationCalculations.ts para manter os arquivos desta
+// fase pequenos e focados (ver coding-style.md: muitos arquivos pequenos >
+// poucos arquivos grandes). Cada pendência é sempre explicável: o que
+// falta, de qual período, de qual coleção veio a verificação, e qual ação
+// resolve — nunca um rótulo genérico de julgamento ("situação grave" etc.)
+// e nunca uma pontuação secreta.
+import type {
+  EnrollmentMovementIndicators,
+  GradeFillIndicators,
+  SchoolFlowIndicators,
+  SchoolSituationPendingItem,
+  SchoolStructureIndicators,
+  VisitIndicators,
+} from '../types/schoolSituation';
+
+export interface PendingItemsInput {
+  schoolId: string;
+  anoLetivo: number;
+  estrutura: SchoolStructureIndicators;
+  matricula: EnrollmentMovementIndicators;
+  fluxo: SchoolFlowIndicators;
+  notas: GradeFillIndicators | null;
+  visitas: VisitIndicators;
+  turmasSemAnoLetivo: number;
+}
+
+export function buildPendingItems(input: PendingItemsInput): SchoolSituationPendingItem[] {
+  const { schoolId, anoLetivo, estrutura, matricula, fluxo, notas, visitas, turmasSemAnoLetivo } = input;
+  const items: SchoolSituationPendingItem[] = [];
+
+  if (!estrutura.anoLetivoConfigurado) {
+    items.push({
+      type: 'ano_letivo_nao_configurado',
+      schoolId,
+      message: `Ano letivo ${anoLetivo} ainda não foi configurado para esta escola.`,
+      period: String(anoLetivo),
+      sourceCollection: 'school_years',
+      resolutionAction: 'Configurar o ano letivo em Gestão de Escolas.',
+    });
+  }
+  if (estrutura.turmasCadastradas === 0) {
+    items.push({
+      type: 'nenhuma_turma_cadastrada',
+      schoolId,
+      message: 'Nenhuma turma cadastrada para esta escola e ano letivo.',
+      period: String(anoLetivo),
+      sourceCollection: 'turmas',
+      resolutionAction: 'Cadastrar turmas em Gestão de Escolas.',
+    });
+  }
+  if (turmasSemAnoLetivo > 0) {
+    items.push({
+      type: 'turma_sem_ano_letivo',
+      schoolId,
+      message: `${turmasSemAnoLetivo} turma(s) sem ano letivo definido.`,
+      period: null,
+      sourceCollection: 'turmas',
+      resolutionAction: 'Completar o ano letivo de cada turma em Gestão de Escolas.',
+    });
+  }
+  if (estrutura.matriculaInicial == null) {
+    items.push({
+      type: 'matricula_inicial_nao_informada',
+      schoolId,
+      message: 'Matrícula inicial ainda não foi informada.',
+      period: String(anoLetivo),
+      sourceCollection: 'school_years',
+      resolutionAction: 'Registrar a matrícula inicial em Gestão de Escolas.',
+    });
+  }
+  if (matricula.quantidadeMesesPendentes > 0) {
+    items.push({
+      type: 'registro_mensal_pendente',
+      schoolId,
+      message: `${matricula.quantidadeMesesPendentes} mês(es) do acompanhamento mensal ainda não foram preenchidos.`,
+      period: String(anoLetivo),
+      sourceCollection: 'enrollment_snapshots',
+      resolutionAction: 'Preencher o registro mensal em Gestão de Escolas.',
+    });
+  }
+  if (fluxo.status === 'nao_informado') {
+    items.push({
+      type: 'fluxo_nao_informado',
+      schoolId,
+      message: 'Fluxo escolar ainda não foi informado.',
+      period: String(anoLetivo),
+      sourceCollection: 'school_flow_results',
+      resolutionAction: 'Registrar o fluxo escolar em Fluxo Escolar.',
+    });
+  } else if (fluxo.status === 'rascunho') {
+    items.push({
+      type: 'fluxo_rascunho',
+      schoolId,
+      message: 'Fluxo escolar está em rascunho — ainda não foi confirmado.',
+      period: String(anoLetivo),
+      sourceCollection: 'school_flow_results',
+      resolutionAction: 'Confirmar o fluxo escolar em Fluxo Escolar.',
+    });
+  }
+  if (notas != null) {
+    if (notas.semNotas > 0) {
+      items.push({
+        type: 'estudantes_sem_notas',
+        schoolId,
+        message: `${notas.semNotas} estudante(s) ativo(s) sem nenhuma nota lançada.`,
+        period: null,
+        sourceCollection: 'student_bimester_grades',
+        resolutionAction: 'Lançar notas em Lançamento de Notas.',
+      });
+    }
+    if (notas.parciais > 0) {
+      items.push({
+        type: 'notas_parcialmente_preenchidas',
+        schoolId,
+        message: `${notas.parciais} estudante(s) com preenchimento parcial de notas.`,
+        period: null,
+        sourceCollection: 'student_bimester_grades',
+        resolutionAction: 'Completar o lançamento de notas em Lançamento de Notas.',
+      });
+    }
+  }
+  if (visitas.semVisitaNoAno) {
+    items.push({
+      type: 'escola_sem_visita',
+      schoolId,
+      message: `Nenhuma visita registrada em ${anoLetivo}.`,
+      period: String(anoLetivo),
+      sourceCollection: 'visitas',
+      resolutionAction: 'Agendar ou registrar uma visita técnica.',
+    });
+  }
+
+  return items;
+}
