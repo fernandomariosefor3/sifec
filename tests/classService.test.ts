@@ -6,6 +6,7 @@ import {
   ClassroomValidationError,
   getActiveClassroomCount,
   getClassroomsForSchool,
+  getClassroomsForSchoolYear,
   isDuplicateClassroom,
   validateCreateClassroomInput,
   type CreateClassroomInput,
@@ -73,6 +74,43 @@ describe('getClassroomsForSchool', () => {
 
   it('não retorna turmas de outra escola quando nada corresponde', () => {
     const result = getClassroomsForSchool(turmasDivaCabral, { id: 'escola-inexistente', nome: 'Escola Que Não Existe' });
+    expect(result).toEqual([]);
+  });
+});
+
+// Fase 2C — revisão do PR #15: NotasView precisa de turma × ANO LETIVO,
+// nunca só escola (ver mesma integridade em firestore.rules via
+// isCanonicalTurmaOfSchoolYear).
+describe('getClassroomsForSchoolYear', () => {
+  const turmasComAno: Turma[] = [
+    { id: 't2026', schoolId: 'diva-cabral', escolaId: 'diva-cabral', escolaNome: 'EEM Diva Cabral', nome: '3A', ano: '3º Ano', periodo: 'Matutino', anoLetivo: 2026 },
+    { id: 't2025', schoolId: 'diva-cabral', escolaId: 'diva-cabral', escolaNome: 'EEM Diva Cabral', nome: '3B', ano: '3º Ano', periodo: 'Vespertino', anoLetivo: 2025 },
+    { id: 'tSemAno', schoolId: 'diva-cabral', escolaId: 'diva-cabral', escolaNome: 'EEM Diva Cabral', nome: '3C', ano: '3º Ano', periodo: 'Matutino' },
+    { id: 'tOutraEscola', schoolId: 'figueiredo-correia', escolaId: 'figueiredo-correia', escolaNome: 'EEM Figueiredo Correia', nome: '3A', ano: '3º Ano', periodo: 'Matutino', anoLetivo: 2026 },
+  ];
+
+  it('roster/turma do mesmo ano letivo é permitido', () => {
+    const result = getClassroomsForSchoolYear(turmasComAno, { id: 'diva-cabral', nome: 'EEM Diva Cabral' }, 2026);
+    expect(result.map(t => t.id)).toEqual(['t2026']);
+  });
+
+  it('turma de outro ano letivo é bloqueada', () => {
+    const result = getClassroomsForSchoolYear(turmasComAno, { id: 'diva-cabral', nome: 'EEM Diva Cabral' }, 2026);
+    expect(result.map(t => t.id)).not.toContain('t2025');
+  });
+
+  it('turma sem anoLetivo nunca aparece silenciosamente (precisa ser completada em Gestão de Escolas)', () => {
+    const result = getClassroomsForSchoolYear(turmasComAno, { id: 'diva-cabral', nome: 'EEM Diva Cabral' }, 2026);
+    expect(result.map(t => t.id)).not.toContain('tSemAno');
+  });
+
+  it('turma de outra escola é bloqueada mesmo com o mesmo ano letivo', () => {
+    const result = getClassroomsForSchoolYear(turmasComAno, { id: 'diva-cabral', nome: 'EEM Diva Cabral' }, 2026);
+    expect(result.map(t => t.id)).not.toContain('tOutraEscola');
+  });
+
+  it('nenhuma turma bate quando o ano letivo pedido não existe para a escola', () => {
+    const result = getClassroomsForSchoolYear(turmasComAno, { id: 'diva-cabral', nome: 'EEM Diva Cabral' }, 2030);
     expect(result).toEqual([]);
   });
 });

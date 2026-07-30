@@ -147,11 +147,10 @@ describe('Firestore Rules propostas — SIFEC', () => {
     await assertFails(getDocs(collection(ctxFor(STRANGER_EMAIL).firestore(), 'schools')));
   });
 
-  it('superintendente ativo consegue ler dados permitidos (schools, turmas, grades, visitas)', async () => {
+  it('superintendente ativo consegue ler dados permitidos (schools, turmas, visitas)', async () => {
     const db = ctxFor(ACTIVE_EMAIL).firestore();
     await assertSucceeds(getDocs(collection(db, 'schools')));
     await assertSucceeds(getDocs(collection(db, 'turmas')));
-    await assertSucceeds(getDocs(collection(db, 'grades')));
     await assertSucceeds(getDocs(collection(db, 'visitas')));
   });
 
@@ -160,6 +159,13 @@ describe('Firestore Rules propostas — SIFEC', () => {
     await assertFails(getDocs(collection(db, 'schools')));
     await assertFails(getDocs(collection(db, 'grades')));
   });
+
+  // Fase 2C (seção 16 do plano): `grades` deixou de ser legível/gravável por
+  // qualquer superintendente/admin cadastrado — vira legado, restrito ao
+  // admin raiz só para leitura, sem nenhuma escrita via app (ver
+  // "GRADES — legado restrito (Fase 2C)" abaixo e
+  // tests/studentRosterAndGradeRules.test.ts para a cobertura completa das
+  // novas coleções student_rosters/student_bimester_grades).
 
   it('superintendente não consegue alterar escola de outro responsável', async () => {
     const db = ctxFor(ACTIVE_EMAIL).firestore();
@@ -219,16 +225,25 @@ describe('Firestore Rules propostas — SIFEC', () => {
     });
   });
 
-  it('leitura e escrita em grades respeitam a autorização', async () => {
+  // Fase 2C (seção 16 do plano): `grades` virou legado restrito — só o
+  // admin raiz lê, e NINGUÉM escreve via app (nem o admin raiz). Substitui
+  // o comportamento anterior ("Opção C"), onde qualquer superintendente
+  // ativo lia e escrevia livremente, sem isolamento por escola.
+  it('leitura em grades restrita ao admin raiz; nenhuma escrita via app', async () => {
     await assertFails(getDocs(collection(ctxFor(null).firestore(), 'grades')));
     await assertFails(getDocs(collection(ctxFor(STRANGER_EMAIL).firestore(), 'grades')));
-    await assertSucceeds(getDocs(collection(ctxFor(ACTIVE_EMAIL).firestore(), 'grades')));
+    await assertFails(getDocs(collection(ctxFor(ACTIVE_EMAIL).firestore(), 'grades')));
+    await assertSucceeds(getDocs(collection(ctxFor(ADMIN_EMAIL).firestore(), 'grades')));
 
     await assertFails(setDoc(doc(ctxFor(STRANGER_EMAIL).firestore(), 'grades', 'nota-teste-2'), {
       nome: 'Aluno Fictício Dois', turma: 'Turma Teste',
       portugues: 8, matematica: 8, ciencias: 8, bimestre: '1º Bimestre',
     }));
-    await assertSucceeds(setDoc(doc(ctxFor(ACTIVE_EMAIL).firestore(), 'grades', 'nota-teste-2'), {
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_EMAIL).firestore(), 'grades', 'nota-teste-2'), {
+      nome: 'Aluno Fictício Dois', turma: 'Turma Teste',
+      portugues: 8, matematica: 8, ciencias: 8, bimestre: '1º Bimestre',
+    }));
+    await assertFails(setDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'grades', 'nota-teste-2'), {
       nome: 'Aluno Fictício Dois', turma: 'Turma Teste',
       portugues: 8, matematica: 8, ciencias: 8, bimestre: '1º Bimestre',
     }));
@@ -386,21 +401,41 @@ describe('Firestore Rules propostas — SIFEC', () => {
     });
   });
 
-  describe('GRADES — Opção C (superintendente ativo, sem isolamento por escola)', () => {
-    it('superintendente ativo consegue ler', async () => {
-      await assertSucceeds(getDocs(collection(ctxFor(ACTIVE_EMAIL).firestore(), 'grades')));
+  // Fase 2C (seção 16 do plano) substituiu a antiga "Opção C" (qualquer
+  // superintendente ativo lia/escrevia `grades` livremente, sem isolamento
+  // por escola) por um bloqueio total: `grades` agora é legado, só o admin
+  // raiz lê, e nenhuma escrita passa pelo app — nem do admin raiz. Cobertura
+  // mais completa (inclusive tentativa de update/delete pelo admin raiz)
+  // está em tests/studentRosterAndGradeRules.test.ts.
+  describe('GRADES — legado restrito (Fase 2C)', () => {
+    it('admin raiz consegue ler', async () => {
+      await assertSucceeds(getDocs(collection(ctxFor(ADMIN_EMAIL).firestore(), 'grades')));
     });
 
-    it('superintendente ativo consegue criar e atualizar', async () => {
+    it('superintendente ativo NÃO lê nem escreve mais (antiga "Opção C" revogada)', async () => {
       const db = ctxFor(ACTIVE_EMAIL).firestore();
-      await assertSucceeds(setDoc(doc(db, 'grades', 'nota-teste-opcao-c'), {
+      await assertFails(getDocs(collection(db, 'grades')));
+      await assertFails(setDoc(doc(db, 'grades', 'nota-teste-opcao-c'), {
         nome: 'Aluno Fictício Opção C', turma: 'Turma Teste',
         portugues: 6, matematica: 6, ciencias: 6, bimestre: '1º Bimestre',
       }));
-      await assertSucceeds(updateDoc(doc(db, 'grades', 'nota-teste-1'), {
+      await assertFails(updateDoc(doc(db, 'grades', 'nota-teste-1'), {
         nome: 'Aluno Fictício Um', turma: 'Turma Teste',
         portugues: 8, matematica: 8, ciencias: 8, bimestre: '1º Bimestre',
       }));
+    });
+
+    it('mesmo o admin raiz não escreve — só leitura', async () => {
+      const db = ctxFor(ADMIN_EMAIL).firestore();
+      await assertFails(setDoc(doc(db, 'grades', 'nota-teste-admin-raiz'), {
+        nome: 'Aluno Fictício Admin', turma: 'Turma Teste',
+        portugues: 6, matematica: 6, ciencias: 6, bimestre: '1º Bimestre',
+      }));
+      await assertFails(updateDoc(doc(db, 'grades', 'nota-teste-1'), {
+        nome: 'Aluno Fictício Um', turma: 'Turma Teste',
+        portugues: 8, matematica: 8, ciencias: 8, bimestre: '1º Bimestre',
+      }));
+      await assertFails(deleteDoc(doc(db, 'grades', 'nota-teste-1')));
     });
 
     it('superintendente inativo não lê nem escreve', async () => {

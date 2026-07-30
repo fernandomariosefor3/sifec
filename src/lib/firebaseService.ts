@@ -77,68 +77,74 @@ export const SEED_SCHOOLS = [
 ];
 
 export const SEED_TURMAS = [
-  { 
+  {
     id: 'turma-3a-diva',
-    escolaId: 'diva-cabral', 
-    escolaNome: 'EEM Diva Cabral', 
-    nome: '3º Ano A - Matutino', 
-    ano: '3º Ano', 
-    periodo: 'Matutino', 
+    escolaId: 'diva-cabral',
+    escolaNome: 'EEM Diva Cabral',
+    nome: '3º Ano A - Matutino',
+    ano: '3º Ano',
+    periodo: 'Matutino',
+    anoLetivo: 2026,
     lancamentosBimestre: { b1: 'Lançado', b2: 'Lançado', b3: 'Pendente', b4: 'Pendente' },
     mediaBimestre: { b1: 7.5, b2: 7.8, b3: 0, b4: 0 },
     alunosSinalizados: 2
   },
-  { 
+  {
     id: 'turma-3b-diva',
-    escolaId: 'diva-cabral', 
-    escolaNome: 'EEM Diva Cabral', 
-    nome: '3º Ano B - Vespertino', 
-    ano: '3º Ano', 
-    periodo: 'Vespertino', 
+    escolaId: 'diva-cabral',
+    escolaNome: 'EEM Diva Cabral',
+    nome: '3º Ano B - Vespertino',
+    ano: '3º Ano',
+    periodo: 'Vespertino',
+    anoLetivo: 2026,
     lancamentosBimestre: { b1: 'Lançado', b2: 'Pendente', b3: 'Pendente', b4: 'Pendente' },
-    mediaBimestre: { b1: 5.4, b2: 0, b3: 0, b4: 0 }, 
+    mediaBimestre: { b1: 5.4, b2: 0, b3: 0, b4: 0 },
     alunosSinalizados: 8
   },
-  { 
+  {
     id: 'turma-3a-figueiredo',
-    escolaId: 'figueiredo-correia', 
-    escolaNome: 'EEM Figueiredo Correia', 
-    nome: '3º Ano A - Matutino', 
-    ano: '3º Ano', 
-    periodo: 'Matutino', 
+    escolaId: 'figueiredo-correia',
+    escolaNome: 'EEM Figueiredo Correia',
+    nome: '3º Ano A - Matutino',
+    ano: '3º Ano',
+    periodo: 'Matutino',
+    anoLetivo: 2026,
     lancamentosBimestre: { b1: 'Lançado', b2: 'Lançado', b3: 'Pendente', b4: 'Pendente' },
     mediaBimestre: { b1: 7.1, b2: 7.2, b3: 0, b4: 0 },
     alunosSinalizados: 3
   },
-  { 
+  {
     id: 'turma-3a-leopoldino',
-    escolaId: 'jose-leopoldino', 
-    escolaNome: 'EEM José Leopoldino da Silva', 
-    nome: '3º Ano A - Matutino', 
-    ano: '3º Ano', 
-    periodo: 'Matutino', 
+    escolaId: 'jose-leopoldino',
+    escolaNome: 'EEM José Leopoldino da Silva',
+    nome: '3º Ano A - Matutino',
+    ano: '3º Ano',
+    periodo: 'Matutino',
+    anoLetivo: 2026,
     lancamentosBimestre: { b1: 'Lançado', b2: 'Lançado', b3: 'Pendente', b4: 'Pendente' },
     mediaBimestre: { b1: 6.4, b2: 6.5, b3: 0, b4: 0 },
     alunosSinalizados: 1
   },
-  { 
+  {
     id: 'turma-3a-canindezinho',
-    escolaId: 'canindezinho', 
-    escolaNome: 'EEM São Francisco Canindezinho', 
-    nome: '3º Ano A - Matutino', 
-    ano: '3º Ano', 
-    periodo: 'Matutino', 
+    escolaId: 'canindezinho',
+    escolaNome: 'EEM São Francisco Canindezinho',
+    nome: '3º Ano A - Matutino',
+    ano: '3º Ano',
+    periodo: 'Matutino',
+    anoLetivo: 2026,
     lancamentosBimestre: { b1: 'Pendente', b2: 'Pendente', b3: 'Pendente', b4: 'Pendente' },
-    mediaBimestre: { b1: 5.0, b2: 0, b3: 0, b4: 0 }, 
+    mediaBimestre: { b1: 5.0, b2: 0, b3: 0, b4: 0 },
     alunosSinalizados: 11
   },
-  { 
+  {
     id: 'turma-3a-anisio',
-    escolaId: 'anisio-teixeira', 
-    escolaNome: 'EEMTI Anísio Teixeira', 
-    nome: '3º Ano A - Matutino', 
-    ano: '3º Ano', 
-    periodo: 'Matutino', 
+    escolaId: 'anisio-teixeira',
+    escolaNome: 'EEMTI Anísio Teixeira',
+    nome: '3º Ano A - Matutino',
+    ano: '3º Ano',
+    periodo: 'Matutino',
+    anoLetivo: 2026,
     lancamentosBimestre: { b1: 'Lançado', b2: 'Lançado', b3: 'Pendente', b4: 'Pendente' },
     mediaBimestre: { b1: 6.1, b2: 6.2, b3: 0, b4: 0 },
     alunosSinalizados: 4

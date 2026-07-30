@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-// Hotfix — o painel "Ativar Conexão com Firebase" de NotasView (login/seed/
-// desconectar manuais) exibia um texto hardcoded referenciando o projeto
-// Firebase de outro sistema (emdiafinanceiro-13483) e ficava visível para
-// qualquer usuário em produção. Ele agora só existe em desenvolvimento
-// (import.meta.env.DEV) e, quando visível, mostra o projectId real vindo de
-// firebase-applet-config.json (sifec-sefor3) em vez do texto incorreto.
+// Hotfix original: o painel "Ativar Conexão com Firebase" de NotasView
+// (login/seed/desconectar manuais) exibia um texto hardcoded referenciando
+// o projeto Firebase de outro sistema (emdiafinanceiro-13483). A Fase 2C
+// removeu esse painel manual por completo ao reescrever NotasView.tsx
+// (substituição pelo módulo real de Notas Bimestrais — ver
+// docs/fase-2c-inventario-notas-legadas.md) — este arquivo agora confirma
+// que a proteção original continua válida: nenhum painel manual, nenhuma
+// referência ao projeto errado, em nenhum ambiente.
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
@@ -17,37 +19,43 @@ afterEach(() => {
 
 vi.mock('../src/lib/firebase', () => ({
   auth: {
+    currentUser: null,
     onAuthStateChanged: (callback: (user: unknown) => void) => {
       callback(null);
       return () => {};
     },
   },
-  loginWithGoogle: vi.fn(),
-  logout: vi.fn(),
 }));
 
-vi.mock('../src/lib/firebaseService', () => ({
-  seedFirestoreDatabase: vi.fn(),
-  subscribeToCollection: () => () => {},
-  updateDocument: vi.fn(),
-  addDocument: vi.fn(),
-  deleteDocument: vi.fn(),
-  SEED_GRADES: [],
-  SEED_TURMAS: [],
-  SEED_SCHOOLS: [],
+vi.mock('../src/lib/firebaseService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/lib/firebaseService')>();
+  return { ...actual, subscribeToCollection: () => () => {} };
+});
+
+vi.mock('../src/lib/studentRosterService', () => ({
+  listStudentRosterForSchool: vi.fn().mockResolvedValue([]),
+  deactivateStudentRosterEntry: vi.fn(),
+  activateStudentRosterEntry: vi.fn(),
 }));
 
-vi.mock('../src/lib/superintendentService', () => ({
-  isSchoolVisible: () => true,
-  getActiveSuperintendentId: () => 'all',
-  hasSchoolWriteAccess: () => true,
-  schoolNamesMatch: (a: string, b: string) => a === b,
+vi.mock('../src/lib/studentBimesterGradeService', () => ({
+  listStudentBimesterGradesForSchool: vi.fn().mockResolvedValue([]),
 }));
 
-describe('NotasView — painel manual de conexão Firebase', () => {
-  it('não renderiza o painel de conexão/seed manual em produção', () => {
+describe('NotasView — sem painel manual de conexão Firebase (Fase 2C removeu essa UI)', () => {
+  it('nunca renderiza um painel de conexão/seed manual, em produção', () => {
     vi.stubEnv('DEV', false);
     vi.stubEnv('PROD', true);
+    render(<NotasView />);
+
+    expect(screen.queryByText(/Ativar Conexão com Firebase/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Inserir Cópia Temp/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Puxar do Firebase/i)).not.toBeInTheDocument();
+  });
+
+  it('nunca renderiza um painel de conexão/seed manual, em desenvolvimento', () => {
+    vi.stubEnv('DEV', true);
+    vi.stubEnv('PROD', false);
     render(<NotasView />);
 
     expect(screen.queryByText(/Ativar Conexão com Firebase/i)).not.toBeInTheDocument();
@@ -68,20 +76,11 @@ describe('NotasView — painel manual de conexão Firebase', () => {
     expect(screen.queryByText(/emdiafinanceiro/i)).not.toBeInTheDocument();
   });
 
-  it('mantém o painel manual em desenvolvimento, para uso local do time', () => {
-    vi.stubEnv('DEV', true);
-    vi.stubEnv('PROD', false);
-    render(<NotasView />);
-
-    expect(screen.getByText(/Ativar Conexão com Firebase/i)).toBeInTheDocument();
-    expect(screen.getByText(/Puxar do Firebase/i)).toBeInTheDocument();
-  });
-
   it('modo demonstração (sem Firestore) continua funcionando em produção', () => {
     vi.stubEnv('DEV', false);
     vi.stubEnv('PROD', true);
     render(<NotasView />);
 
-    expect(screen.getByText('Lançamento & Monitoramento de Notas')).toBeInTheDocument();
+    expect(screen.getByText('Notas Bimestrais')).toBeInTheDocument();
   });
 });
