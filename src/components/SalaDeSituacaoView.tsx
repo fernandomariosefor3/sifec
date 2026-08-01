@@ -16,7 +16,7 @@ import {
   getSchoolsForCurrentScope,
   isScopedAdmin,
 } from '../lib/superintendentService';
-import type { Bimestre } from '../types/studentBimesterGrade';
+import type { Bimestre } from '../types/gradeEntryMonitoring';
 import type { DataQualityState, PendingItemType, SchoolScopeMode } from '../types/schoolSituation';
 import { useSchoolSituation } from '../hooks/useSchoolSituation';
 import { calculatePortfolioSituationSummary } from '../lib/schoolSituationCalculations';

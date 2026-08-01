@@ -1,10 +1,15 @@
 // Fase 2D — Sala de Situação: painel analítico agregado, calculado a partir
 // das coleções existentes (schools, turmas, school_years, enrollment_snapshots,
-// school_flow_results, student_rosters, student_bimester_grades, visitas).
-// Não persiste NENHUM resultado consolidado — tudo aqui é derivado por
-// funções puras em schoolSituationCalculations.ts a partir do que já está
-// gravado. Nunca inclui nome de estudante, nota individual ou qualquer dado
-// nominal — só agregados (ver seção 15 do plano da Fase 2D).
+// school_flow_results, grade_entry_monitoring, visitas). Não persiste NENHUM
+// resultado consolidado — tudo aqui é derivado por funções puras em
+// schoolSituationCalculations.ts a partir do que já está gravado. Nunca
+// inclui nome de estudante, nota individual ou qualquer dado nominal — só
+// agregados (ver seção 15 do plano da Fase 2D).
+//
+// Fase 2C.1 — correção de escopo: notas passa a vir de
+// `grade_entry_monitoring` (agregado por turma), nunca mais de
+// `student_rosters`/`student_bimester_grades` (protótipo nominal
+// descontinuado — ver docs/descontinuacao-prototipo-notas-nominais.md).
 
 // 'indisponivel' (revisão do code review do PR #16): uma fonte que FALHOU
 // ao ler nunca vira 'sem_dados' (que significa "consultamos com sucesso e
@@ -21,8 +26,8 @@ export type PendingItemType =
   | 'registro_mensal_pendente'
   | 'fluxo_nao_informado'
   | 'fluxo_rascunho'
-  | 'estudantes_sem_notas'
-  | 'notas_parcialmente_preenchidas'
+  | 'turmas_sem_relatorio_notas'
+  | 'turmas_com_preenchimento_parcial'
   | 'escola_sem_visita';
 
 // Revisão do code review do PR #16 (seção 3): resultado explícito de uma
@@ -46,8 +51,7 @@ export interface SchoolSituationSourceAvailability {
   turmas: boolean;
   snapshots: boolean;
   flow: boolean;
-  roster: boolean;
-  grades: boolean;
+  gradeEntryMonitoring: boolean;
   visitas: boolean;
 }
 
@@ -67,9 +71,8 @@ export type InconsistencyType =
   | 'matricula_final_divergente'
   | 'snapshot_turma_outra_escola'
   | 'snapshot_ano_diferente'
-  | 'roster_turma_ano_diferente'
-  | 'nota_sem_roster'
-  | 'nota_estudante_inativo'
+  | 'grade_entry_monitoring_turma_outra_escola'
+  | 'grade_entry_monitoring_turma_ano_diferente'
   | 'fluxo_confirmado_total_zero'
   | 'registro_duplicado'
   | 'school_id_inexistente'
@@ -122,17 +125,20 @@ export interface SchoolFlowIndicators {
 }
 
 // null: notas ainda não carregadas para esta escola (visão global sem
-// escola selecionada — seção 13 do plano, nunca carrega nomes/turmas de
-// notas das 56 escolas de uma vez). Nunca inclui nome de estudante.
-export interface GradeFillIndicators {
-  estudantesAtivos: number;
-  completos: number;
-  parciais: number;
-  semNotas: number;
-  abaixoReferencia: number;
-  percentualPreenchimento: number;
-  turmasComPreenchimentoCompleto: number;
-  turmasComPendencia: number;
+// escola selecionada — seção 13 do plano, nunca carrega turmas/notas das 56
+// escolas de uma vez). Nunca inclui nome de estudante — agregado por TURMA
+// (Fase 2C.1, ver src/lib/gradeEntryMonitoringCalculations.ts).
+export interface GradeEntryMonitoringIndicators {
+  turmasCadastradas: number;
+  turmasComRelatorio: number;
+  turmasSemRelatorio: number;
+  turmasCompletas: number;
+  turmasParciais: number;
+  turmasSemPreenchimento: number;
+  // Soma de completedGradeEntries / soma de expectedGradeEntries das turmas
+  // com relatório — null quando nenhuma turma com relatório tem
+  // expectedGradeEntries > 0 (nunca 0% automático).
+  percentualPreenchimentoGeral: number | null;
   dataQuality: DataQualityState;
 }
 
@@ -157,9 +163,9 @@ export interface SchoolSituation {
   matricula: EnrollmentMovementIndicators;
   fluxo: SchoolFlowIndicators;
   // null só quando as notas não foram carregadas para esta escola (ver
-  // GradeFillIndicators) — nunca confundir com "sem_dados" (que é um
-  // GradeFillIndicators real com todos os contadores em zero).
-  notas: GradeFillIndicators | null;
+  // GradeEntryMonitoringIndicators) — nunca confundir com "sem_dados" (que é
+  // um GradeEntryMonitoringIndicators real com todos os contadores em zero).
+  notas: GradeEntryMonitoringIndicators | null;
   visitas: VisitIndicators;
   pendencias: SchoolSituationPendingItem[];
   inconsistencias: SchoolSituationInconsistency[];

@@ -1,15 +1,20 @@
 // Fase 2D — Sala de Situação: orquestração assíncrona (Firestore) em torno
 // dos cálculos puros de schoolSituationCalculations.ts/Pendencies.ts/
-// Inconsistencies.ts. Nunca consulta student_rosters/student_bimester_grades
-// sem schoolId (seção 13 do plano) e nunca processa mais de
-// DEFAULT_SITUATION_CONCURRENCY escolas em paralelo — nem na visão global
-// de 56 escolas. Uma falha ao carregar uma coleção nunca apaga os
-// indicadores das outras coleções já carregadas (seção 16 do plano): cada
-// fonte é buscada isoladamente por loadSource, que devolve um
-// SourceLoadResult (success/failure/not_requested) em vez de um fallback
-// silencioso — o chamador decide o que fazer com uma falha em vez de um
-// valor vazio se disfarçar de "sem_dados" (revisão do code review do PR
-// #16, seção 3).
+// Inconsistencies.ts. Nunca consulta grade_entry_monitoring sem schoolId
+// (seção 13 do plano) e nunca processa mais de DEFAULT_SITUATION_CONCURRENCY
+// escolas em paralelo — nem na visão global de 56 escolas. Uma falha ao
+// carregar uma coleção nunca apaga os indicadores das outras coleções já
+// carregadas (seção 16 do plano): cada fonte é buscada isoladamente por
+// loadSource, que devolve um SourceLoadResult (success/failure/
+// not_requested) em vez de um fallback silencioso — o chamador decide o que
+// fazer com uma falha em vez de um valor vazio se disfarçar de "sem_dados"
+// (revisão do code review do PR #16, seção 3).
+//
+// Fase 2C.1 — correção de escopo: notas passa a vir de
+// `grade_entry_monitoring` (agregado por turma), nunca mais de
+// `student_rosters`/`student_bimester_grades` (protótipo nominal
+// descontinuado, agora bloqueado em firestore.rules — ver
+// docs/descontinuacao-prototipo-notas-nominais.md).
 //
 // Revisão do code review do PR #16, seção 5: turmas/visitas NUNCA leem a
 // coleção inteira — turmas é consultado só pelas escolas do escopo visível
@@ -25,8 +30,7 @@ import type { Turma } from '../types/classroom';
 import type { SchoolYear } from '../types/schoolYear';
 import type { EnrollmentSnapshot } from '../types/enrollment';
 import type { SchoolFlowResult } from '../types/schoolFlow';
-import type { StudentRosterEntry } from '../types/studentRoster';
-import type { Bimestre, StudentBimesterGrade } from '../types/studentBimesterGrade';
+import type { Bimestre, GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
 import type {
   DataQualityState,
   SchoolSituation,
@@ -38,13 +42,12 @@ import type {
 import { listSchoolYearsForSchool } from './schoolYearService';
 import { listEnrollmentSnapshotsForSchool } from './enrollmentSnapshotService';
 import { listSchoolFlowResultsForSchoolYear } from './schoolFlowService';
-import { listStudentRosterForSchool } from './studentRosterService';
-import { listStudentBimesterGradesForSchool } from './studentBimesterGradeService';
+import { listGradeEntryMonitoringForSchool } from './gradeEntryMonitoringService';
 import { getClassroomsForSchool } from './classService';
 import {
   calculateEnrollmentMovementIndicators,
   calculateFlowIndicators,
-  calculateGradeFillIndicators,
+  calculateGradeEntryMonitoringIndicators,
   calculateStructureIndicators,
   calculateVisitIndicators,
   combineDataQualityStates,
@@ -248,50 +251,54 @@ async function loadCoreSources(school: SchoolSituationSchoolInput, anoLetivo: nu
   };
 }
 
-interface GradesLoadResult {
-  roster: StudentRosterEntry[];
-  grades: StudentBimesterGrade[];
-  notas: ReturnType<typeof calculateGradeFillIndicators> | null;
-  rosterAvailable: boolean;
-  gradesAvailable: boolean;
+interface GradeEntryMonitoringLoadResult {
+  monitoring: GradeEntryMonitoring[];
+  notas: ReturnType<typeof calculateGradeEntryMonitoringIndicators> | null;
+  monitoringAvailable: boolean;
   failures: SchoolSituationSourceFailure[];
 }
 
 // Só chamada quando includeGrades é true (seção 13 do plano — nunca carrega
-// nomes/notas das 56 escolas de uma vez na visão global sem escola
-// selecionada). Se roster OU grades falhou, notas fica indisponível — nunca
-// calculado a partir de dado parcial (nunca "sem notas" nem "nota sem
-// roster" falsos, seção 3 do code review). roster/grades continuam
-// disponíveis (quando cada um individualmente teve sucesso) para as outras
-// verificações de detectInconsistencies que não precisam das duas.
-async function loadGradesData(
+// notas das 56 escolas de uma vez na visão global sem escola selecionada).
+// Se grade_entry_monitoring falhou, notas fica indisponível — nunca
+// calculado a partir de dado parcial (seção 3 do code review). turmasDoAno
+// já vem resolvido pelo chamador (mesmo conjunto usado por
+// calculateStructureIndicators) — o indicador de notas precisa saber de
+// TODA turma cadastrada, mesmo as que ainda não têm relatório informado.
+// Diferente do protótipo nominal anterior (onde roster/grades carregavam a
+// identidade da turma denormalizada em cada documento), este indicador
+// agora DEPENDE da lista de turmas para enumerar "turmas sem relatório" —
+// então uma falha em turmas também precisa marcar notas como
+// 'indisponivel' (withUnavailableOverride), senão turmasDoAno cai no
+// fallback vazio de fetchSchoolSituation e o indicador mostraria
+// "sem_dados" mesmo com grade_entry_monitoring tendo carregado com sucesso
+// (mesmo cuidado de estrutura/matricula, seção 3 do code review do PR #16).
+async function loadGradeEntryMonitoringData(
   school: SchoolSituationSchoolInput,
   anoLetivo: number,
-  bimestre: Bimestre
-): Promise<GradesLoadResult> {
-  const [rosterResult, gradesResult] = await Promise.all([
-    loadSource<StudentRosterEntry[]>('student_rosters', () => listStudentRosterForSchool(school.id, anoLetivo)),
-    loadSource<StudentBimesterGrade[]>('student_bimester_grades', () =>
-      listStudentBimesterGradesForSchool(school.id, anoLetivo, bimestre)),
-  ]);
+  bimestre: Bimestre,
+  turmasDoAno: readonly Turma[],
+  turmasAvailable: boolean
+): Promise<GradeEntryMonitoringLoadResult> {
+  const monitoringResult = await loadSource<GradeEntryMonitoring[]>('grade_entry_monitoring', () =>
+    listGradeEntryMonitoringForSchool(school.id, anoLetivo, bimestre));
+
   const failures: SchoolSituationSourceFailure[] = [];
-  const rosterFailure = failureOf(rosterResult);
-  if (rosterFailure) failures.push(rosterFailure);
-  const gradesFailure = failureOf(gradesResult);
-  if (gradesFailure) failures.push(gradesFailure);
+  const monitoringFailure = failureOf(monitoringResult);
+  if (monitoringFailure) failures.push(monitoringFailure);
 
-  const rosterAvailable = isAvailable(rosterResult);
-  const gradesAvailable = isAvailable(gradesResult);
-  const roster = dataOr(rosterResult, []);
-  const grades = dataOr(gradesResult, []);
-  const notas = (rosterAvailable && gradesAvailable) ? calculateGradeFillIndicators(roster, grades) : null;
+  const monitoringAvailable = isAvailable(monitoringResult);
+  const monitoring = dataOr(monitoringResult, []);
+  const notas = monitoringAvailable
+    ? withUnavailableOverride(calculateGradeEntryMonitoringIndicators(turmasDoAno, monitoring), turmasAvailable)
+    : null;
 
-  return { roster, grades, notas, rosterAvailable, gradesAvailable, failures };
+  return { monitoring, notas, monitoringAvailable, failures };
 }
 
 // Uma escola por vez, nunca a coleção completa (mesmo padrão de
-// listStudentRosterForSchool/listStudentBimesterGradesForSchool). turmas e
-// visitas chegam já resolvidas pelo chamador (fetchTurmasForSchools/
+// listGradeEntryMonitoringForSchool). turmas e visitas chegam já resolvidas
+// pelo chamador (fetchTurmasForSchools/
 // fetchVisitasForSchools, uma única vez por sessão de consulta) como
 // SourceLoadResult — uma falha em qualquer uma das duas nunca impede o
 // cálculo dos outros indicadores desta escola (seção 4 do code review).
@@ -320,18 +327,14 @@ export async function fetchSchoolSituation(
   const turmasDoAno = turmasDaEscola.filter(t => t.anoLetivo === anoLetivo);
   const turmasSemAnoLetivo = turmasAvailable ? turmasDaEscola.filter(t => t.anoLetivo == null).length : 0;
 
-  let roster: StudentRosterEntry[] = [];
-  let grades: StudentBimesterGrade[] = [];
-  let notas: ReturnType<typeof calculateGradeFillIndicators> | null = null;
-  let rosterAvailable = false;
-  let gradesAvailable = false;
+  let monitoring: GradeEntryMonitoring[] = [];
+  let notas: ReturnType<typeof calculateGradeEntryMonitoringIndicators> | null = null;
+  let monitoringAvailable = false;
   if (options.includeGrades) {
-    const gradesData = await loadGradesData(school, anoLetivo, options.bimestre);
-    roster = gradesData.roster;
-    grades = gradesData.grades;
+    const gradesData = await loadGradeEntryMonitoringData(school, anoLetivo, options.bimestre, turmasDoAno, turmasAvailable);
+    monitoring = gradesData.monitoring;
     notas = gradesData.notas;
-    rosterAvailable = gradesData.rosterAvailable;
-    gradesAvailable = gradesData.gradesAvailable;
+    monitoringAvailable = gradesData.monitoringAvailable;
     failures.push(...gradesData.failures);
   }
 
@@ -340,8 +343,7 @@ export async function fetchSchoolSituation(
     turmas: turmasAvailable,
     snapshots: core.snapshotsAvailable,
     flow: core.flowAvailable,
-    roster: rosterAvailable,
-    grades: gradesAvailable,
+    gradeEntryMonitoring: monitoringAvailable,
     visitas: isAvailable(visitasResult),
   };
 
@@ -372,8 +374,7 @@ export async function fetchSchoolSituation(
     turmasDoAno,
     turmasById,
     snapshots,
-    roster,
-    grades,
+    monitoring,
     flowResult,
     availability,
     schoolYearDocs,

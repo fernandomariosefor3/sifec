@@ -16,7 +16,7 @@
 // em turmas ou visitas nunca apaga estrutura/matrícula/fluxo/notas (seção 4
 // do code review) nem impede o restante do carregamento de continuar.
 import { useCallback, useEffect, useState } from 'react';
-import type { Bimestre } from '../types/studentBimesterGrade';
+import type { Bimestre } from '../types/gradeEntryMonitoring';
 import type { SchoolScopeMode, SchoolSituation } from '../types/schoolSituation';
 import {
   fetchPortfolioSituations,
@@ -51,7 +51,7 @@ export function useSchoolSituation(input: UseSchoolSituationInput): UseSchoolSit
   const [loadError, setLoadError] = useState('');
   // Incrementado por refresh() para forçar o efeito abaixo a rodar de novo
   // (mesmo padrão de refreshTick em useSchoolFlowResults/
-  // useStudentRosterAndGrades).
+  // useGradeEntryMonitoring).
   const [refreshTick, setRefreshTick] = useState(0);
   const refresh = useCallback(() => setRefreshTick(t => t + 1), []);
 

@@ -265,7 +265,11 @@ describe('SalaDeSituacaoView', () => {
     // fetchSchoolSituation (só usada na visão global — ver useSchoolSituation.ts).
     mockFetchPortfolioSituations.mockImplementation(async (schools: Array<{ id: string; nome: string }>) =>
       Object.fromEntries(schools.map(s => [s.id, buildSituation(s.id, s.nome, {
-        notas: { estudantesAtivos: 30, completos: 20, parciais: 8, semNotas: 2, abaixoReferencia: 5, percentualPreenchimento: 90, turmasComPreenchimentoCompleto: 1, turmasComPendencia: 1, dataQuality: 'incompleto' },
+        notas: {
+          turmasCadastradas: 3, turmasComRelatorio: 2, turmasSemRelatorio: 1,
+          turmasCompletas: 1, turmasParciais: 1, turmasSemPreenchimento: 0,
+          percentualPreenchimentoGeral: 90, dataQuality: 'incompleto',
+        },
       })]))
     );
 

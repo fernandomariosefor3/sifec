@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { buildPendingItems, type PendingItemsInput } from '../src/lib/schoolSituationPendencies';
 import type {
   EnrollmentMovementIndicators,
-  GradeFillIndicators,
+  GradeEntryMonitoringIndicators,
   SchoolFlowIndicators,
   SchoolSituationSourceAvailability,
   SchoolStructureIndicators,
@@ -13,7 +13,7 @@ import type {
 } from '../src/types/schoolSituation';
 
 const AVAILABILITY_ALL: SchoolSituationSourceAvailability = {
-  schoolYear: true, turmas: true, snapshots: true, flow: true, roster: true, grades: true, visitas: true,
+  schoolYear: true, turmas: true, snapshots: true, flow: true, gradeEntryMonitoring: true, visitas: true,
 };
 
 const ESTRUTURA_OK: SchoolStructureIndicators = {
@@ -30,9 +30,10 @@ const FLUXO_CONFIRMADO: SchoolFlowIndicators = {
   percentualAprovacao: 83.3, percentualReprovacao: 10.4, percentualAbandono: 6.3,
   status: 'confirmado', dataQuality: 'atualizado',
 };
-const NOTAS_COMPLETAS: GradeFillIndicators = {
-  estudantesAtivos: 10, completos: 10, parciais: 0, semNotas: 0, abaixoReferencia: 0,
-  percentualPreenchimento: 100, turmasComPreenchimentoCompleto: 1, turmasComPendencia: 0, dataQuality: 'atualizado',
+const NOTAS_COMPLETAS: GradeEntryMonitoringIndicators = {
+  turmasCadastradas: 2, turmasComRelatorio: 2, turmasSemRelatorio: 0,
+  turmasCompletas: 2, turmasParciais: 0, turmasSemPreenchimento: 0,
+  percentualPreenchimentoGeral: 100, dataQuality: 'atualizado',
 };
 const VISITA_OK: VisitIndicators = {
   quantidadeVisitasNoAno: 1, dataUltimaVisita: '2026-03-01', semVisitaNoAno: false, dataQuality: 'atualizado',
@@ -104,15 +105,29 @@ describe('buildPendingItems', () => {
 
   it('não gera pendência de notas quando notas ainda não foram carregadas (null)', () => {
     const items = buildPendingItems(baseInput({ notas: null }));
-    expect(items.some(i => i.type === 'estudantes_sem_notas' || i.type === 'notas_parcialmente_preenchidas')).toBe(false);
+    expect(items.some(i => i.type === 'turmas_sem_relatorio_notas' || i.type === 'turmas_com_preenchimento_parcial')).toBe(false);
   });
 
-  it('estudantes sem notas e notas parciais geram pendências distintas', () => {
+  it('turmas sem relatório e turmas com preenchimento parcial geram pendências distintas', () => {
     const items = buildPendingItems(baseInput({
-      notas: { ...NOTAS_COMPLETAS, completos: 5, parciais: 3, semNotas: 2, percentualPreenchimento: 70 },
+      notas: {
+        ...NOTAS_COMPLETAS, turmasComRelatorio: 1, turmasSemRelatorio: 1,
+        turmasCompletas: 0, turmasParciais: 1, turmasSemPreenchimento: 0, percentualPreenchimentoGeral: 70,
+      },
     }));
-    expect(items.some(i => i.type === 'estudantes_sem_notas')).toBe(true);
-    expect(items.some(i => i.type === 'notas_parcialmente_preenchidas')).toBe(true);
+    expect(items.some(i => i.type === 'turmas_sem_relatorio_notas')).toBe(true);
+    expect(items.some(i => i.type === 'turmas_com_preenchimento_parcial')).toBe(true);
+  });
+
+  it('turmas sem preenchimento (relatório informado, zero lançamentos) contam junto de "preenchimento parcial"', () => {
+    const items = buildPendingItems(baseInput({
+      notas: {
+        ...NOTAS_COMPLETAS, turmasCompletas: 1, turmasParciais: 0, turmasSemPreenchimento: 1, percentualPreenchimentoGeral: 50,
+      },
+    }));
+    const item = items.find(i => i.type === 'turmas_com_preenchimento_parcial');
+    expect(item).toBeDefined();
+    expect(item?.message).toContain('1');
   });
 
   it('escola sem visita no ano gera pendência', () => {
@@ -184,13 +199,13 @@ describe('buildPendingItems', () => {
       expect(items.some(i => i.type === 'fluxo_rascunho')).toBe(false);
     });
 
-    it('falha de student_rosters/student_bimester_grades não gera "sem notas" nem "notas parciais"', () => {
+    it('falha de grade_entry_monitoring não gera "turmas sem relatório" nem "preenchimento parcial"', () => {
       const items = buildPendingItems(baseInput({
-        notas: { ...NOTAS_COMPLETAS, semNotas: 5, parciais: 3 },
-        availability: { ...AVAILABILITY_ALL, roster: false, grades: false },
+        notas: { ...NOTAS_COMPLETAS, turmasSemRelatorio: 5, turmasParciais: 3 },
+        availability: { ...AVAILABILITY_ALL, gradeEntryMonitoring: false },
       }));
-      expect(items.some(i => i.type === 'estudantes_sem_notas')).toBe(false);
-      expect(items.some(i => i.type === 'notas_parcialmente_preenchidas')).toBe(false);
+      expect(items.some(i => i.type === 'turmas_sem_relatorio_notas')).toBe(false);
+      expect(items.some(i => i.type === 'turmas_com_preenchimento_parcial')).toBe(false);
     });
 
     it('falha de visitas não gera "escola sem visita"', () => {

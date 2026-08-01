@@ -22,8 +22,7 @@ const SOURCE_FRIENDLY_LABELS: Record<string, string> = {
   turmas: 'Turmas',
   enrollment_snapshots: 'Matrícula mensal',
   school_flow_results: 'Fluxo escolar',
-  student_rosters: 'Cadastro de estudantes',
-  student_bimester_grades: 'Notas bimestrais',
+  grade_entry_monitoring: 'Notas bimestrais agregadas',
   visitas: 'Visitas técnicas',
   schoolSituation: 'Sala de Situação desta escola',
 };
@@ -59,7 +58,7 @@ export default function SituationSchoolDetail({ situation, onClose }: SituationS
   // selecionada) de "notas indisponíveis por falha de leitura" — as duas
   // deixam `notas` null, mas só a segunda tem uma entrada correspondente em
   // sourceFailures (seção 9 do code review do PR #16).
-  const notasIndisponiveis = sourceFailures.some(f => f.source === 'student_rosters' || f.source === 'student_bimester_grades');
+  const notasIndisponiveis = sourceFailures.some(f => f.source === 'grade_entry_monitoring');
 
   return (
     <div className="space-y-4">
@@ -124,17 +123,19 @@ export default function SituationSchoolDetail({ situation, onClose }: SituationS
         <Section title="Notas bimestrais agregadas" quality={notas ? notas.dataQuality : (notasIndisponiveis ? 'indisponivel' : 'sem_dados')}>
           {notas ? (
             <>
-              <StatRow label="Estudantes ativos" value={notas.estudantesAtivos} />
-              <StatRow label="Preenchimento completo" value={notas.completos} />
-              <StatRow label="Preenchimento parcial" value={notas.parciais} />
-              <StatRow label="Sem notas" value={notas.semNotas} />
-              <StatRow label="Abaixo da referência" value={notas.abaixoReferencia} />
-              <StatRow label="% de preenchimento geral" value={`${notas.percentualPreenchimento.toFixed(1)}%`} />
-              <StatRow label="Turmas com preenchimento completo" value={notas.turmasComPreenchimentoCompleto} />
-              <StatRow label="Turmas com pendência" value={notas.turmasComPendencia} />
+              <StatRow label="Turmas cadastradas" value={notas.turmasCadastradas} />
+              <StatRow label="Turmas com relatório" value={notas.turmasComRelatorio} />
+              <StatRow label="Turmas sem relatório" value={notas.turmasSemRelatorio} />
+              <StatRow label="Turmas com preenchimento completo" value={notas.turmasCompletas} />
+              <StatRow label="Turmas com preenchimento parcial" value={notas.turmasParciais} />
+              <StatRow label="Turmas sem preenchimento" value={notas.turmasSemPreenchimento} />
+              <StatRow
+                label="% de preenchimento geral"
+                value={notas.percentualPreenchimentoGeral == null ? 'Não informado' : `${notas.percentualPreenchimentoGeral.toFixed(1)}%`}
+              />
             </>
           ) : notasIndisponiveis ? (
-            <p className="text-[11px] text-slate-400">Notas indisponíveis — falha ao carregar cadastro de estudantes ou notas (ver aviso acima).</p>
+            <p className="text-[11px] text-slate-400">Notas indisponíveis — falha ao carregar o acompanhamento de notas (ver aviso acima).</p>
           ) : (
             <p className="text-[11px] text-slate-400">Notas ainda não carregadas para esta escola.</p>
           )}

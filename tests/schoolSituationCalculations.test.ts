@@ -4,12 +4,11 @@ import type { SchoolYear } from '../src/types/schoolYear';
 import type { Turma } from '../src/types/classroom';
 import type { EnrollmentSnapshot } from '../src/types/enrollment';
 import type { SchoolFlowResult } from '../src/types/schoolFlow';
-import type { StudentRosterEntry } from '../src/types/studentRoster';
-import type { StudentBimesterGrade } from '../src/types/studentBimesterGrade';
+import type { GradeEntryMonitoring } from '../src/types/gradeEntryMonitoring';
 import {
   calculateEnrollmentMovementIndicators,
   calculateFlowIndicators,
-  calculateGradeFillIndicators,
+  calculateGradeEntryMonitoringIndicators,
   calculatePortfolioSituationSummary,
   calculateStructureIndicators,
   calculateVisitIndicators,
@@ -63,22 +62,13 @@ function buildFlowResult(overrides: Partial<SchoolFlowResult> = {}): SchoolFlowR
   };
 }
 
-function buildRoster(overrides: Partial<StudentRosterEntry> = {}): StudentRosterEntry {
+function buildMonitoring(overrides: Partial<GradeEntryMonitoring> = {}): GradeEntryMonitoring {
   return {
-    id: 'esc1_2026_t1_s1', studentKey: 's1', schoolId: 'esc1', codInep: '123', escolaNome: 'Escola 1',
-    turmaId: 't1', turmaNome: 'Turma A', anoLetivo: 2026, studentName: 'Estudante Um', active: true,
-    createdAt: '2026-02-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z',
-    createdBy: 'x@example.com', updatedBy: 'x@example.com',
-    ...overrides,
-  };
-}
-
-function buildGrade(overrides: Partial<StudentBimesterGrade> = {}): StudentBimesterGrade {
-  return {
-    id: 'esc1_2026_t1_s1_b1', rosterId: 'esc1_2026_t1_s1', studentKey: 's1',
-    schoolId: 'esc1', codInep: '123', escolaNome: 'Escola 1', turmaId: 't1', turmaNome: 'Turma A',
-    anoLetivo: 2026, bimestre: 1,
-    scores: { linguaPortuguesa: 8, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 },
+    id: 'esc1_2026_b1_t1', schoolId: 'esc1', codInep: '123', escolaNome: 'Escola 1',
+    turmaId: 't1', turmaNome: 'Turma A', anoLetivo: 2026, bimestre: 1,
+    totalStudents: 30, studentsWithCompleteGrades: 30, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+    expectedGradeEntries: 120, completedGradeEntries: 120, status: 'confirmado', sourceSystem: 'SIGE Escola',
+    referenceDate: '2026-04-01',
     createdAt: '2026-04-01T00:00:00.000Z', updatedAt: '2026-04-01T00:00:00.000Z',
     createdBy: 'x@example.com', updatedBy: 'x@example.com',
     ...overrides,
@@ -287,42 +277,57 @@ describe('calculateFlowIndicators', () => {
   });
 });
 
-describe('calculateGradeFillIndicators', () => {
+describe('calculateGradeEntryMonitoringIndicators', () => {
   it('notas agregadas nunca incluem nome de estudante', () => {
-    const roster = [buildRoster()];
-    const grades = [buildGrade()];
-    const result = calculateGradeFillIndicators(roster, grades);
-    expect(Object.keys(result)).not.toContain('studentName');
-    expect(JSON.stringify(result)).not.toContain('Estudante Um');
+    const turmas = [buildTurma()];
+    const result = calculateGradeEntryMonitoringIndicators(turmas, [buildMonitoring()]);
+    expect(JSON.stringify(result)).not.toContain('studentName');
+    expect(JSON.stringify(result)).not.toContain('Estudante');
   });
 
-  it('estudante inativo fica fora dos indicadores', () => {
-    const roster = [buildRoster({ studentKey: 's1', active: true }), buildRoster({ studentKey: 's2', id: 'esc1_2026_t1_s2', active: false })];
-    const grades = [buildGrade({ rosterId: 'esc1_2026_t1_s1' })];
-    const result = calculateGradeFillIndicators(roster, grades);
-    expect(result.estudantesAtivos).toBe(1);
-  });
-
-  it('turma com todos os ativos completos conta como preenchimento completo', () => {
-    const roster = [buildRoster()];
-    const grades = [buildGrade()];
-    const result = calculateGradeFillIndicators(roster, grades);
-    expect(result.turmasComPreenchimentoCompleto).toBe(1);
-    expect(result.turmasComPendencia).toBe(0);
-  });
-
-  it('turma com estudante sem notas conta como pendência, não como completa', () => {
-    const roster = [buildRoster()];
-    const result = calculateGradeFillIndicators(roster, []);
-    expect(result.turmasComPendencia).toBe(1);
-    expect(result.turmasComPreenchimentoCompleto).toBe(0);
-    expect(result.semNotas).toBe(1);
-  });
-
-  it('sem estudantes ativos → sem_dados', () => {
-    const result = calculateGradeFillIndicators([], []);
+  it('turma cadastrada sem relatório informado conta como sem relatório, nunca completa', () => {
+    const turmas = [buildTurma({ id: 't1' })];
+    const result = calculateGradeEntryMonitoringIndicators(turmas, []);
+    expect(result.turmasCadastradas).toBe(1);
+    expect(result.turmasSemRelatorio).toBe(1);
+    expect(result.turmasCompletas).toBe(0);
     expect(result.dataQuality).toBe('sem_dados');
-    expect(result.estudantesAtivos).toBe(0);
+  });
+
+  it('turma com relatório completo conta como completa', () => {
+    const turmas = [buildTurma({ id: 't1' })];
+    const result = calculateGradeEntryMonitoringIndicators(turmas, [buildMonitoring({ turmaId: 't1' })]);
+    expect(result.turmasCompletas).toBe(1);
+    expect(result.turmasComRelatorio).toBe(1);
+    expect(result.dataQuality).toBe('atualizado');
+  });
+
+  it('turma com relatório parcial mantém dataQuality incompleto', () => {
+    const turmas = [buildTurma({ id: 't1' })];
+    const monitoring = [buildMonitoring({
+      turmaId: 't1', completedGradeEntries: 60, expectedGradeEntries: 120,
+      studentsWithCompleteGrades: 15, studentsWithPartialGrades: 15, studentsWithoutGrades: 0,
+    })];
+    const result = calculateGradeEntryMonitoringIndicators(turmas, monitoring);
+    expect(result.turmasParciais).toBe(1);
+    expect(result.dataQuality).toBe('incompleto');
+    expect(result.percentualPreenchimentoGeral).toBe(50);
+  });
+
+  it('sem nenhuma turma cadastrada → sem_dados', () => {
+    const result = calculateGradeEntryMonitoringIndicators([], []);
+    expect(result.dataQuality).toBe('sem_dados');
+    expect(result.turmasCadastradas).toBe(0);
+  });
+
+  it('percentual geral é null quando nenhuma turma com relatório tem lançamentos esperados', () => {
+    const turmas = [buildTurma({ id: 't1' })];
+    const monitoring = [buildMonitoring({
+      turmaId: 't1', expectedGradeEntries: 0, completedGradeEntries: 0,
+      totalStudents: 0, studentsWithCompleteGrades: 0, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+    })];
+    const result = calculateGradeEntryMonitoringIndicators(turmas, monitoring);
+    expect(result.percentualPreenchimentoGeral).toBeNull();
   });
 });
 
@@ -388,10 +393,26 @@ describe('calculatePortfolioSituationSummary', () => {
 
   it('percentual de preenchimento de notas é a média das escolas com notas carregadas', () => {
     const withGrades = buildSituation({
-      notas: { estudantesAtivos: 10, completos: 10, parciais: 0, semNotas: 0, abaixoReferencia: 0, percentualPreenchimento: 100, turmasComPreenchimentoCompleto: 1, turmasComPendencia: 0, dataQuality: 'atualizado' },
+      notas: {
+        turmasCadastradas: 1, turmasComRelatorio: 1, turmasSemRelatorio: 0,
+        turmasCompletas: 1, turmasParciais: 0, turmasSemPreenchimento: 0,
+        percentualPreenchimentoGeral: 100, dataQuality: 'atualizado',
+      },
     });
     const summary = calculatePortfolioSituationSummary([withGrades, buildSituation({ schoolId: 'esc2', notas: null })]);
     expect(summary.percentualPreenchimentoNotas).toBe(100);
+  });
+
+  it('percentual de preenchimento de notas é null quando notas foi carregada mas nenhuma turma com relatório tem lançamentos esperados', () => {
+    const semLancamentos = buildSituation({
+      notas: {
+        turmasCadastradas: 1, turmasComRelatorio: 1, turmasSemRelatorio: 0,
+        turmasCompletas: 0, turmasParciais: 0, turmasSemPreenchimento: 1,
+        percentualPreenchimentoGeral: null, dataQuality: 'incompleto',
+      },
+    });
+    const summary = calculatePortfolioSituationSummary([semLancamentos]);
+    expect(summary.percentualPreenchimentoNotas).toBeNull();
   });
 
   it('conta escolas com pendências e com fluxo informado', () => {

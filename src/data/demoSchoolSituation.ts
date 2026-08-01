@@ -63,8 +63,9 @@ function buildDemoSituation(
 
   const notas: SchoolSituation['notas'] = isComplete
     ? {
-        estudantesAtivos: 472, completos: 390, parciais: 70, semNotas: 12, abaixoReferencia: 58,
-        percentualPreenchimento: 91.2, turmasComPreenchimentoCompleto: 4, turmasComPendencia: 2,
+        turmasCadastradas: 6, turmasComRelatorio: 4, turmasSemRelatorio: 2,
+        turmasCompletas: 2, turmasParciais: 2, turmasSemPreenchimento: 0,
+        percentualPreenchimentoGeral: 91.2,
         dataQuality: 'incompleto',
       }
     : null;
@@ -78,10 +79,10 @@ function buildDemoSituation(
 
   const pendencias: SchoolSituation['pendencias'] = isComplete
     ? [{
-        type: 'notas_parcialmente_preenchidas', schoolId,
-        message: '70 estudante(s) com preenchimento parcial de notas.',
-        period: null, sourceCollection: 'student_bimester_grades',
-        resolutionAction: 'Completar o lançamento de notas em Lançamento de Notas.',
+        type: 'turmas_com_preenchimento_parcial', schoolId,
+        message: '2 turma(s) com relatório de notas incompleto.',
+        period: null, sourceCollection: 'grade_entry_monitoring',
+        resolutionAction: 'Completar o lançamento de notas em Notas Bimestrais.',
       }]
     : [{
         type: 'ano_letivo_nao_configurado', schoolId,

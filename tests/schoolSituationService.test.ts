@@ -1,9 +1,9 @@
 // Fase 2D — orquestração assíncrona da Sala de Situação. Cada serviço de
 // fase anterior (school_years, enrollment_snapshots, school_flow_results,
-// student_rosters, student_bimester_grades) é mockado diretamente — seu
-// próprio comportamento de Firestore já é coberto pelos testes daquela
-// fase; aqui o alvo é isolamento de falha por fonte/por escola, limite de
-// concorrência e nunca consultar sem schoolId.
+// grade_entry_monitoring) é mockado diretamente — seu próprio comportamento
+// de Firestore já é coberto pelos testes daquela fase; aqui o alvo é
+// isolamento de falha por fonte/por escola, limite de concorrência e nunca
+// consultar sem schoolId.
 //
 // Revisão do code review do PR #16: fetchSchoolSituation/
 // fetchPortfolioSituations agora RECEBEM turmas/visitas já resolvidas como
@@ -18,20 +18,18 @@ import type { Turma } from '../src/types/classroom';
 import type { SchoolSituationSourceFailure, SourceLoadResult } from '../src/types/schoolSituation';
 
 const {
-  mockListSchoolYears, mockListSnapshots, mockListFlowResults, mockListRoster, mockListGrades,
+  mockListSchoolYears, mockListSnapshots, mockListFlowResults, mockListMonitoring,
 } = vi.hoisted(() => ({
   mockListSchoolYears: vi.fn(),
   mockListSnapshots: vi.fn(),
   mockListFlowResults: vi.fn(),
-  mockListRoster: vi.fn(),
-  mockListGrades: vi.fn(),
+  mockListMonitoring: vi.fn(),
 }));
 
 vi.mock('../src/lib/schoolYearService', () => ({ listSchoolYearsForSchool: mockListSchoolYears }));
 vi.mock('../src/lib/enrollmentSnapshotService', () => ({ listEnrollmentSnapshotsForSchool: mockListSnapshots }));
 vi.mock('../src/lib/schoolFlowService', () => ({ listSchoolFlowResultsForSchoolYear: mockListFlowResults }));
-vi.mock('../src/lib/studentRosterService', () => ({ listStudentRosterForSchool: mockListRoster }));
-vi.mock('../src/lib/studentBimesterGradeService', () => ({ listStudentBimesterGradesForSchool: mockListGrades }));
+vi.mock('../src/lib/gradeEntryMonitoringService', () => ({ listGradeEntryMonitoringForSchool: mockListMonitoring }));
 
 import {
   DEFAULT_SITUATION_CONCURRENCY,
@@ -65,8 +63,7 @@ beforeEach(() => {
   mockListSchoolYears.mockReset().mockResolvedValue([]);
   mockListSnapshots.mockReset().mockResolvedValue([]);
   mockListFlowResults.mockReset().mockResolvedValue([]);
-  mockListRoster.mockReset().mockResolvedValue([]);
-  mockListGrades.mockReset().mockResolvedValue([]);
+  mockListMonitoring.mockReset().mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -80,14 +77,12 @@ describe('fetchSchoolSituation — isolamento por schoolId', () => {
     expect(mockListSchoolYears).toHaveBeenCalledWith('esc1', 2026);
     expect(mockListSnapshots).toHaveBeenCalledWith('esc1', 2026);
     expect(mockListFlowResults).toHaveBeenCalledWith('esc1', 2026);
-    expect(mockListRoster).toHaveBeenCalledWith('esc1', 2026);
-    expect(mockListGrades).toHaveBeenCalledWith('esc1', 2026, 1);
+    expect(mockListMonitoring).toHaveBeenCalledWith('esc1', 2026, 1);
   });
 
-  it('includeGrades=false nunca consulta student_rosters/student_bimester_grades (visão global sem escola selecionada)', async () => {
+  it('includeGrades=false nunca consulta grade_entry_monitoring (visão global sem escola selecionada)', async () => {
     const situation = await fetchSchoolSituation(school('esc1'), NO_TURMAS, NO_VISITAS, 2026, { includeGrades: false, bimestre: 1 });
-    expect(mockListRoster).not.toHaveBeenCalled();
-    expect(mockListGrades).not.toHaveBeenCalled();
+    expect(mockListMonitoring).not.toHaveBeenCalled();
     expect(situation.notas).toBeNull();
   });
 });
@@ -170,17 +165,37 @@ describe('fetchSchoolSituation — consolidação parcial quando uma fonte falha
     expect(situation.fluxo.status).toBe('confirmado');
   });
 
-  it('falha de student_rosters ou student_bimester_grades: notas fica indisponível (null), sem pendência falsa de notas', async () => {
-    mockListRoster.mockRejectedValueOnce(new Error('unavailable'));
-    mockListGrades.mockResolvedValueOnce([]);
+  it('falha de grade_entry_monitoring: notas fica indisponível (null), sem pendência falsa de notas', async () => {
+    mockListMonitoring.mockRejectedValueOnce(new Error('unavailable'));
 
     const situation = await fetchSchoolSituation(school('esc1'), NO_TURMAS, NO_VISITAS, 2026, { includeGrades: true, bimestre: 1 });
 
     expect(situation.notas).toBeNull();
-    expect(situation.sourceFailures.some(f => f.source === 'student_rosters')).toBe(true);
-    expect(situation.pendencias.some(p => p.type === 'estudantes_sem_notas')).toBe(false);
-    expect(situation.pendencias.some(p => p.type === 'notas_parcialmente_preenchidas')).toBe(false);
-    expect(situation.inconsistencias.some(i => i.type === 'nota_sem_roster')).toBe(false);
+    expect(situation.sourceFailures.some(f => f.source === 'grade_entry_monitoring')).toBe(true);
+    expect(situation.pendencias.some(p => p.type === 'turmas_sem_relatorio_notas')).toBe(false);
+    expect(situation.pendencias.some(p => p.type === 'turmas_com_preenchimento_parcial')).toBe(false);
+    expect(situation.inconsistencias.some(i => i.type === 'grade_entry_monitoring_turma_outra_escola')).toBe(false);
+  });
+
+  // notas agora DEPENDE da lista de turmas para enumerar "turmas sem
+  // relatório" (diferente do protótipo nominal anterior, onde roster/grades
+  // carregavam a identidade da turma denormalizada). Uma falha em turmas
+  // nunca pode fazer o indicador de notas parecer "sem_dados" só porque
+  // turmasDoAno caiu no fallback vazio — precisa virar 'indisponivel',
+  // mesmo com grade_entry_monitoring tendo carregado com sucesso.
+  it('falha de turmas marca notas como indisponível, mesmo com grade_entry_monitoring tendo carregado com sucesso', async () => {
+    mockListMonitoring.mockResolvedValueOnce([{
+      id: 'esc1_2026_b1_t1', schoolId: 'esc1', codInep: 'INEP-esc1', escolaNome: 'Escola esc1',
+      turmaId: 't1', turmaNome: 'Turma A', anoLetivo: 2026, bimestre: 1,
+      totalStudents: 30, studentsWithCompleteGrades: 30, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+      expectedGradeEntries: 120, completedGradeEntries: 120, status: 'confirmado', sourceSystem: 'SIGE Escola',
+      referenceDate: '2026-04-01', createdAt: 'x', updatedAt: 'x', createdBy: 'x', updatedBy: 'x',
+    }]);
+
+    const situation = await fetchSchoolSituation(school('esc1'), fail('turmas'), NO_VISITAS, 2026, { includeGrades: true, bimestre: 1 });
+
+    expect(situation.notas).not.toBeNull();
+    expect(situation.notas?.dataQuality).toBe('indisponivel');
   });
 });
 
@@ -224,7 +239,7 @@ describe('fetchPortfolioSituations — carteira e visão global', () => {
     const result = await fetchPortfolioSituations(schools, NO_TURMAS, {}, 2026, { includeGrades: true, bimestre: 1, concurrency: 4 });
 
     expect(Object.keys(result)).toHaveLength(7);
-    expect(mockListRoster).toHaveBeenCalledTimes(7);
+    expect(mockListMonitoring).toHaveBeenCalledTimes(7);
   });
 
   it('arquitetura universal: funciona igual para 1, 7 ou 56 escolas, sem hardcode', async () => {

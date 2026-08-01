@@ -97,7 +97,9 @@ export default function SituationSchoolTable({ schools, situations, loading, onS
                   {matriculaIndisponivel ? INDISPONIVEL_LABEL : (situation.matricula.ultimoMesPreenchido ?? 'Não informado')}
                 </td>
                 <td className="px-3 py-3 text-right font-mono text-slate-700">
-                  {situation.notas ? `${situation.notas.percentualPreenchimento.toFixed(0)}%` : '—'}
+                  {situation.notas?.percentualPreenchimentoGeral != null
+                    ? `${situation.notas.percentualPreenchimentoGeral.toFixed(0)}%`
+                    : '—'}
                 </td>
                 <td className="px-3 py-3 text-slate-600">
                   {fluxoIndisponivel ? INDISPONIVEL_LABEL : FLOW_STATUS_LABELS[situation.fluxo.status]}

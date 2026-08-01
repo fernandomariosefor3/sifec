@@ -6,18 +6,27 @@
 // Revisão do code review do PR #16: (a) implementa matricula_final_divergente
 // (seção 6), que existia no tipo mas nunca era detectada; (b) detecta
 // documentos duplicados pela CHAVE NATURAL em school_years/
-// school_flow_results/enrollment_snapshots/student_rosters/
-// student_bimester_grades, inclusive quando um documento antigo tem ID não
-// canônico (seção 7) — os IDs determinísticos impedem duplicidade para
-// documentos criados por este app, mas não para um documento legado
-// importado com outro esquema de ID; (c) toda verificação que depende de
-// uma fonte agora é condicionada por `availability` — uma fonte que falhou
-// nunca produz um diagnóstico (seção 3).
+// school_flow_results/enrollment_snapshots/grade_entry_monitoring, inclusive
+// quando um documento antigo tem ID não canônico (seção 7) — os IDs
+// determinísticos impedem duplicidade para documentos criados por este app,
+// mas não para um documento legado importado com outro esquema de ID; (c)
+// toda verificação que depende de uma fonte agora é condicionada por
+// `availability` — uma fonte que falhou nunca produz um diagnóstico (seção
+// 3).
+//
+// Fase 2C.1 — correção de escopo: as verificações antes baseadas em
+// student_rosters/student_bimester_grades (roster_turma_ano_diferente,
+// nota_sem_roster, nota_estudante_inativo) foram substituídas pelas
+// verificações equivalentes sobre grade_entry_monitoring — mesmo cuidado de
+// cruzamento com a turma (agora
+// grade_entry_monitoring_turma_outra_escola/_ano_diferente) e de
+// duplicidade pela chave natural, sem precisar de um "roster" próprio já
+// que o acompanhamento é por turma, não por estudante (ver
+// docs/descontinuacao-prototipo-notas-nominais.md).
 import type { EnrollmentSnapshot } from '../types/enrollment';
 import type { SchoolFlowResult } from '../types/schoolFlow';
 import type { SchoolYear } from '../types/schoolYear';
-import type { StudentBimesterGrade } from '../types/studentBimesterGrade';
-import type { StudentRosterEntry } from '../types/studentRoster';
+import type { GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
 import type { SchoolSituationInconsistency, SchoolSituationSourceAvailability } from '../types/schoolSituation';
 import { calculateMatriculaFimMes, hasEnrollmentDivergence } from './enrollmentCalculations';
 import { calculateTotalResultados } from './schoolFlowCalculations';
@@ -38,8 +47,7 @@ export interface InconsistencyDetectionInput {
   turmasDoAno: readonly TurmaRefLike[];
   turmasById: ReadonlyMap<string, TurmaRefLike>;
   snapshots: readonly EnrollmentSnapshot[];
-  roster: readonly StudentRosterEntry[];
-  grades: readonly StudentBimesterGrade[];
+  monitoring: readonly GradeEntryMonitoring[];
   flowResult: SchoolFlowResult | null;
   // Disponibilidade das fontes desta escola (revisão do code review do PR
   // #16, seção 3) — nenhuma verificação abaixo roda a partir de uma fonte
@@ -86,7 +94,7 @@ function pushNaturalKeyDuplicates<T>(
 
 export function detectInconsistencies(input: InconsistencyDetectionInput): SchoolSituationInconsistency[] {
   const {
-    schoolId, codInep, anoLetivo, turmasDoAno, turmasById, snapshots, roster, grades, flowResult,
+    schoolId, codInep, anoLetivo, turmasDoAno, turmasById, snapshots, monitoring, flowResult,
     availability, schoolYearDocs, flowResultDocs,
   } = input;
   const inconsistencies: SchoolSituationInconsistency[] = [];
@@ -150,62 +158,41 @@ export function detectInconsistencies(input: InconsistencyDetectionInput): Schoo
     );
   }
 
-  if (availability.roster) {
-    // Cadastro de estudante vinculado a uma turma de ano letivo diferente
-    // do próprio cadastro (mesma lacuna já fechada em firestore.rules via
-    // isCanonicalTurmaOfSchoolYear — aqui só sinaliza para quem já existir).
-    for (const entry of roster) {
+  if (availability.gradeEntryMonitoring) {
+    // Acompanhamento de notas vinculado a uma turma de outra escola, ou de
+    // ano letivo diferente do próprio acompanhamento — mesma lacuna já
+    // fechada em firestore.rules via isCanonicalTurmaOfSchoolYear (aqui só
+    // sinaliza para quem já existir). Mesmo padrão dos cruzamentos de
+    // enrollment_snapshots acima.
+    for (const entry of monitoring) {
       const turma = turmasById.get(entry.turmaId);
-      if (turma?.anoLetivo != null && turma.anoLetivo !== entry.anoLetivo) {
+      if (!turma) continue;
+      const turmaSchoolId = turma.schoolId ?? turma.escolaId;
+      if (turmaSchoolId != null && turmaSchoolId !== entry.schoolId) {
         inconsistencies.push({
-          type: 'roster_turma_ano_diferente',
+          type: 'grade_entry_monitoring_turma_outra_escola',
           schoolId,
-          message: `Cadastro de estudante ${entry.id} vinculado a uma turma de ano letivo diferente (${turma.anoLetivo}).`,
+          message: `Acompanhamento de notas ${entry.id} referencia uma turma de outra escola.`,
+          details: entry.id,
+        });
+      }
+      if (turma.anoLetivo != null && turma.anoLetivo !== entry.anoLetivo) {
+        inconsistencies.push({
+          type: 'grade_entry_monitoring_turma_ano_diferente',
+          schoolId,
+          message: `Acompanhamento de notas ${entry.id} referencia uma turma de ano letivo diferente (${turma.anoLetivo}).`,
           details: entry.id,
         });
       }
     }
 
+    // turmaId é a chave natural aqui: a consulta já filtra por
+    // schoolId+anoLetivo+bimestre (ver listGradeEntryMonitoringForSchool em
+    // schoolSituationService.ts), então mais de um documento para a mesma
+    // turmaId dentro desse conjunto já é a duplicidade.
     pushNaturalKeyDuplicates(
-      inconsistencies, schoolId, 'student_rosters', 'turmaId+studentKey',
-      roster, r => `${r.turmaId}_${r.studentKey}`, r => r.id
-    );
-  }
-
-  if (availability.roster && availability.grades) {
-    // Nota sem roster correspondente, ou de estudante inativo — nunca
-    // exposto com nome (details usa só o ID do documento). Só roda quando
-    // AMBAS as fontes (roster e grades) foram lidas com sucesso: se
-    // qualquer uma falhou, cruzar as duas listas produziria um falso
-    // positivo ("nota sem roster" só porque o roster não carregou).
-    const rosterById = new Map(roster.map(r => [r.id, r] as const));
-    for (const grade of grades) {
-      const rosterEntry = rosterById.get(grade.rosterId);
-      if (!rosterEntry) {
-        inconsistencies.push({
-          type: 'nota_sem_roster',
-          schoolId,
-          message: `Nota ${grade.id} não corresponde a nenhum cadastro de estudante encontrado.`,
-          details: grade.id,
-        });
-      } else if (!rosterEntry.active) {
-        inconsistencies.push({
-          type: 'nota_estudante_inativo',
-          schoolId,
-          message: `Nota ${grade.id} registrada para um estudante inativo.`,
-          details: grade.id,
-        });
-      }
-    }
-  }
-
-  if (availability.grades) {
-    // rosterId+bimestre é a chave natural, mas `grades` já vem filtrado por
-    // um único bimestre (ver schoolSituationService.ts) — dentro dele,
-    // agrupar só por rosterId já é equivalente.
-    pushNaturalKeyDuplicates(
-      inconsistencies, schoolId, 'student_bimester_grades', 'rosterId+bimestre',
-      grades, g => `${g.rosterId}_${g.bimestre}`, g => g.id
+      inconsistencies, schoolId, 'grade_entry_monitoring', 'turmaId',
+      monitoring, m => m.turmaId, m => m.id
     );
   }
 
