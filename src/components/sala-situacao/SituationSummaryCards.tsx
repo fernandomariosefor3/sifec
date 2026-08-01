@@ -1,7 +1,7 @@
 // Fase 2D — Sala de Situação: cartões consolidados da carteira/visão
 // selecionada (seção 14 do plano). Puramente apresentacional — os totais já
 // chegam calculados por calculatePortfolioSituationSummary.
-import { GraduationCap, LayoutGrid, Users, CalendarCheck, FileCheck2, AlertTriangle } from 'lucide-react';
+import { GraduationCap, LayoutGrid, Users, CalendarCheck, FileCheck2, AlertTriangle, CloudOff } from 'lucide-react';
 import type { PortfolioSituationSummary } from '../../types/schoolSituation';
 
 interface SituationSummaryCardsProps {
@@ -19,6 +19,7 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
     percentualPreenchimentoNotas,
     escolasComFluxoInformado,
     escolasComPendencias,
+    escolasComFontesIndisponiveis,
   } = summary;
 
   const cards = [
@@ -57,6 +58,18 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
       value: escolasComPendencias,
       detail: `de ${escolasAcompanhadas} escola(s)`,
       accent: 'border-rose-200 bg-rose-50 text-rose-700',
+    },
+    {
+      // Revisão do code review do PR #16, seção 9: quantas escolas do
+      // conjunto têm ao menos uma fonte indisponível — nunca contabilizada
+      // como "dado não informado" nos outros cartões, sempre visível
+      // separadamente.
+      label: 'Fontes indisponíveis', icon: <CloudOff size={16} />,
+      value: escolasComFontesIndisponiveis,
+      detail: escolasComFontesIndisponiveis === 0
+        ? 'nenhuma escola com falha de leitura'
+        : `de ${escolasAcompanhadas} escola(s) com dados parcialmente indisponíveis`,
+      accent: 'border-orange-200 bg-orange-50 text-orange-700',
     },
   ];
 

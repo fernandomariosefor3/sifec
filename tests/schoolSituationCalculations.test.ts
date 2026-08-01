@@ -19,6 +19,9 @@ import {
 } from '../src/lib/schoolSituationCalculations';
 import type { SchoolSituation } from '../src/types/schoolSituation';
 
+// dataInicio default fevereiro/2026 (revisão do code review do PR #16,
+// seção 2): a maioria dos fixtures testa a partir daqui, então o padrão
+// precisa refletir um ano letivo real (não janeiro implícito).
 function buildSchoolYear(overrides: Partial<SchoolYear> = {}): SchoolYear {
   return {
     id: 'esc1_2026', schoolId: 'esc1', codInep: '123', escolaNome: 'Escola 1', anoLetivo: 2026,
@@ -98,20 +101,65 @@ describe('combineDataQualityStates', () => {
   it('lista vazia é sem_dados', () => {
     expect(combineDataQualityStates([])).toBe('sem_dados');
   });
+  it('inconsistente vence indisponivel', () => {
+    expect(combineDataQualityStates(['indisponivel', 'inconsistente'])).toBe('inconsistente');
+  });
+  it('indisponivel vence sem_dados/incompleto/atualizado', () => {
+    expect(combineDataQualityStates(['atualizado', 'indisponivel', 'sem_dados'])).toBe('indisponivel');
+  });
 });
 
-describe('getExpectedMonthReferences — nunca trata mês futuro como pendência', () => {
-  it('ano letivo em curso: só até o mês corrente (inclusive)', () => {
+describe('getExpectedMonthReferences — usa o período letivo REALMENTE configurado (revisão do code review do PR #16)', () => {
+  it('ano em curso iniciado em fevereiro: esperado é fevereiro até o mês corrente (abril)', () => {
     const now = new Date(Date.UTC(2026, 3, 15)); // abril de 2026 (mês 4)
-    expect(getExpectedMonthReferences(2026, now)).toEqual(['2026-01', '2026-02', '2026-03', '2026-04']);
+    const result = getExpectedMonthReferences({ anoLetivo: 2026, dataInicio: '2026-02-01', dataFim: null }, now);
+    expect(result.months).toEqual(['2026-02', '2026-03', '2026-04']);
+    expect(result.periodoConhecido).toBe(true);
   });
-  it('ano letivo já encerrado (anterior ao corrente): os 12 meses contam', () => {
-    const now = new Date(Date.UTC(2026, 3, 15));
-    expect(getExpectedMonthReferences(2025, now)).toHaveLength(12);
+
+  it('ano encerrado iniciado em fevereiro e terminado em novembro: esperado é fevereiro até novembro, nunca janeiro até dezembro', () => {
+    const now = new Date(Date.UTC(2027, 3, 15)); // 2027, ano 2026 já encerrado
+    const result = getExpectedMonthReferences({ anoLetivo: 2026, dataInicio: '2026-02-10', dataFim: '2026-11-30' }, now);
+    expect(result.months).toEqual([
+      '2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07',
+      '2026-08', '2026-09', '2026-10', '2026-11',
+    ]);
+    expect(result.periodoConhecido).toBe(true);
   });
-  it('ano letivo futuro (posterior ao corrente): nenhum mês é esperado', () => {
+
+  it('ano letivo futuro (posterior ao corrente): nenhum mês é esperado ainda, período conhecido', () => {
     const now = new Date(Date.UTC(2026, 3, 15));
-    expect(getExpectedMonthReferences(2027, now)).toEqual([]);
+    const result = getExpectedMonthReferences({ anoLetivo: 2027, dataInicio: '2027-02-01', dataFim: null }, now);
+    expect(result.months).toEqual([]);
+    expect(result.periodoConhecido).toBe(true);
+  });
+
+  it('dataInicio ausente: nunca inventa janeiro — período desconhecido, meses vazios', () => {
+    const now = new Date(Date.UTC(2026, 3, 15));
+    const result = getExpectedMonthReferences({ anoLetivo: 2026, dataInicio: null, dataFim: null }, now);
+    expect(result.months).toEqual([]);
+    expect(result.periodoConhecido).toBe(false);
+  });
+
+  it('dataFim ausente em ano corrente: limita ao mês atual (permitido pelo plano)', () => {
+    const now = new Date(Date.UTC(2026, 5, 10)); // junho de 2026
+    const result = getExpectedMonthReferences({ anoLetivo: 2026, dataInicio: '2026-01-01', dataFim: null }, now);
+    expect(result.months).toEqual(['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']);
+    expect(result.periodoConhecido).toBe(true);
+  });
+
+  it('dataFim ausente em ano ANTERIOR: nunca presume dezembro — período desconhecido, meses vazios', () => {
+    const now = new Date(Date.UTC(2027, 3, 15));
+    const result = getExpectedMonthReferences({ anoLetivo: 2026, dataInicio: '2026-02-01', dataFim: null }, now);
+    expect(result.months).toEqual([]);
+    expect(result.periodoConhecido).toBe(false);
+  });
+
+  it('mês futuro nunca aparece nos meses esperados, mesmo com dataFim distante', () => {
+    const now = new Date(Date.UTC(2026, 2, 20)); // março de 2026
+    const result = getExpectedMonthReferences({ anoLetivo: 2026, dataInicio: '2026-01-01', dataFim: '2026-12-31' }, now);
+    expect(result.months).not.toContain('2026-04');
+    expect(result.months[result.months.length - 1]).toBe('2026-03');
   });
 });
 
@@ -166,8 +214,9 @@ describe('calculateEnrollmentMovementIndicators', () => {
   });
 
   it('mês futuro nunca conta como pendência', () => {
-    // "agora" é março/2026: só jan/fev/mar são esperados, mesmo que o ano
-    // letivo continue até dezembro.
+    // "agora" é março/2026, dataInicio (fixture) é fevereiro/2026: só
+    // fev/mar são esperados — nem janeiro (antes de dataInicio) nem abril
+    // em diante (futuro), mesmo que o ano letivo continue até dezembro.
     const turmas = [buildTurma()];
     const snapshots = [
       buildSnapshot({ mesReferencia: '2026-01' }),
@@ -176,7 +225,17 @@ describe('calculateEnrollmentMovementIndicators', () => {
     ];
     const result = calculateEnrollmentMovementIndicators(buildSchoolYear(), snapshots, turmas, 2026, now);
     expect(result.quantidadeMesesPendentes).toBe(0);
-    expect(result.quantidadeMesesRegistrados).toBe(3);
+    expect(result.quantidadeMesesRegistrados).toBe(2);
+  });
+
+  it('dataInicio ausente: cobertura mensal fica incompleta, nunca "atualizado" mesmo com tudo preenchido', () => {
+    const turmas = [buildTurma()];
+    const snapshots = [buildSnapshot({ mesReferencia: '2026-01' }), buildSnapshot({ mesReferencia: '2026-02' })];
+    const result = calculateEnrollmentMovementIndicators(
+      buildSchoolYear({ dataInicio: null }), snapshots, turmas, 2026, now
+    );
+    expect(result.quantidadeMesesPendentes).toBe(0);
+    expect(result.dataQuality).toBe('incompleto');
   });
 
   it('mês esperado sem snapshot de alguma turma ativa conta como pendente', () => {
@@ -342,5 +401,20 @@ describe('calculatePortfolioSituationSummary', () => {
     const summary = calculatePortfolioSituationSummary([comPendencia, buildSituation({ schoolId: 'esc2' })]);
     expect(summary.escolasComPendencias).toBe(1);
     expect(summary.escolasComFluxoInformado).toBe(2);
+  });
+
+  it('conta escolas com fontes indisponíveis (revisão do code review do PR #16, seção 9)', () => {
+    const comFalha = buildSituation({ sourceFailures: [{ source: 'turmas', message: 'falhou' }] });
+    const summary = calculatePortfolioSituationSummary([comFalha, buildSituation({ schoolId: 'esc2' })]);
+    expect(summary.escolasComFontesIndisponiveis).toBe(1);
+  });
+
+  it('fluxo indisponível (falha de leitura) nunca conta como fluxo informado nem contamina "não informado"', () => {
+    const fluxoIndisponivel = buildSituation({
+      fluxo: { aprovados: 0, reprovados: 0, abandono: 0, totalInformado: 0, percentualAprovacao: 0, percentualReprovacao: 0, percentualAbandono: 0, status: 'nao_informado', dataQuality: 'indisponivel' },
+      sourceFailures: [{ source: 'school_flow_results', message: 'falhou' }],
+    });
+    const summary = calculatePortfolioSituationSummary([fluxoIndisponivel, buildSituation({ schoolId: 'esc2' })]);
+    expect(summary.escolasComFluxoInformado).toBe(1);
   });
 });

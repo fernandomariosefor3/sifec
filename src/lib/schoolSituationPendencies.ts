@@ -10,6 +10,7 @@ import type {
   GradeFillIndicators,
   SchoolFlowIndicators,
   SchoolSituationPendingItem,
+  SchoolSituationSourceAvailability,
   SchoolStructureIndicators,
   VisitIndicators,
 } from '../types/schoolSituation';
@@ -23,13 +24,18 @@ export interface PendingItemsInput {
   notas: GradeFillIndicators | null;
   visitas: VisitIndicators;
   turmasSemAnoLetivo: number;
+  // Revisão do code review do PR #16 (seção 3): disponibilidade das fontes
+  // desta escola. Uma pendência só pode ser gerada a partir de uma fonte
+  // que foi lida com SUCESSO — uma fonte que falhou nunca vira pendência
+  // (isso seria um diagnóstico falso, ver schoolSituationService.ts).
+  availability: SchoolSituationSourceAvailability;
 }
 
 export function buildPendingItems(input: PendingItemsInput): SchoolSituationPendingItem[] {
-  const { schoolId, anoLetivo, estrutura, matricula, fluxo, notas, visitas, turmasSemAnoLetivo } = input;
+  const { schoolId, anoLetivo, estrutura, matricula, fluxo, notas, visitas, turmasSemAnoLetivo, availability } = input;
   const items: SchoolSituationPendingItem[] = [];
 
-  if (!estrutura.anoLetivoConfigurado) {
+  if (availability.schoolYear && !estrutura.anoLetivoConfigurado) {
     items.push({
       type: 'ano_letivo_nao_configurado',
       schoolId,
@@ -39,7 +45,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       resolutionAction: 'Configurar o ano letivo em Gestão de Escolas.',
     });
   }
-  if (estrutura.turmasCadastradas === 0) {
+  if (availability.turmas && estrutura.turmasCadastradas === 0) {
     items.push({
       type: 'nenhuma_turma_cadastrada',
       schoolId,
@@ -49,7 +55,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       resolutionAction: 'Cadastrar turmas em Gestão de Escolas.',
     });
   }
-  if (turmasSemAnoLetivo > 0) {
+  if (availability.turmas && turmasSemAnoLetivo > 0) {
     items.push({
       type: 'turma_sem_ano_letivo',
       schoolId,
@@ -59,7 +65,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       resolutionAction: 'Completar o ano letivo de cada turma em Gestão de Escolas.',
     });
   }
-  if (estrutura.matriculaInicial == null) {
+  if (availability.schoolYear && estrutura.matriculaInicial == null) {
     items.push({
       type: 'matricula_inicial_nao_informada',
       schoolId,
@@ -69,7 +75,13 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       resolutionAction: 'Registrar a matrícula inicial em Gestão de Escolas.',
     });
   }
-  if (matricula.quantidadeMesesPendentes > 0) {
+  // registro_mensal_pendente depende de school_years (dataInicio/dataFim,
+  // usado por getExpectedMonthReferences) e de turmas (cobertura por turma
+  // ativa), além de enrollment_snapshots — uma falha em qualquer uma das
+  // três infla artificialmente quantidadeMesesPendentes (ver
+  // schoolSituationService.ts), então as três precisam estar disponíveis
+  // antes desta pendência ser confiável.
+  if (availability.schoolYear && availability.turmas && availability.snapshots && matricula.quantidadeMesesPendentes > 0) {
     items.push({
       type: 'registro_mensal_pendente',
       schoolId,
@@ -79,7 +91,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       resolutionAction: 'Preencher o registro mensal em Gestão de Escolas.',
     });
   }
-  if (fluxo.status === 'nao_informado') {
+  if (availability.flow && fluxo.status === 'nao_informado') {
     items.push({
       type: 'fluxo_nao_informado',
       schoolId,
@@ -88,7 +100,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       sourceCollection: 'school_flow_results',
       resolutionAction: 'Registrar o fluxo escolar em Fluxo Escolar.',
     });
-  } else if (fluxo.status === 'rascunho') {
+  } else if (availability.flow && fluxo.status === 'rascunho') {
     items.push({
       type: 'fluxo_rascunho',
       schoolId,
@@ -98,7 +110,13 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       resolutionAction: 'Confirmar o fluxo escolar em Fluxo Escolar.',
     });
   }
-  if (notas != null) {
+  // notas == null já cobre "não solicitada" e "fonte falhou" (o serviço
+  // nunca calcula notas quando roster ou grades falha — ver
+  // schoolSituationService.ts); availability.roster/grades reforça o mesmo
+  // contrato aqui, para esta função continuar correta mesmo se algum
+  // chamador futuro passar um `notas` não-nulo por engano com uma fonte
+  // indisponível.
+  if (notas != null && availability.roster && availability.grades) {
     if (notas.semNotas > 0) {
       items.push({
         type: 'estudantes_sem_notas',
@@ -120,7 +138,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
       });
     }
   }
-  if (visitas.semVisitaNoAno) {
+  if (availability.visitas && visitas.semVisitaNoAno) {
     items.push({
       type: 'escola_sem_visita',
       schoolId,

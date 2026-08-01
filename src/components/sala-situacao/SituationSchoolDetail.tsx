@@ -13,6 +13,25 @@ interface SituationSchoolDetailProps {
   onClose: () => void;
 }
 
+// Rótulo amigável para a fonte técnica de uma falha (revisão do code
+// review do PR #16, seção 9) — o nome da coleção continua visível (em
+// font-mono, menor) só como diagnóstico secundário, nunca como a
+// informação principal exibida ao usuário.
+const SOURCE_FRIENDLY_LABELS: Record<string, string> = {
+  school_years: 'Estrutura escolar (ano letivo)',
+  turmas: 'Turmas',
+  enrollment_snapshots: 'Matrícula mensal',
+  school_flow_results: 'Fluxo escolar',
+  student_rosters: 'Cadastro de estudantes',
+  student_bimester_grades: 'Notas bimestrais',
+  visitas: 'Visitas técnicas',
+  schoolSituation: 'Sala de Situação desta escola',
+};
+
+function friendlySourceLabel(source: string): string {
+  return SOURCE_FRIENDLY_LABELS[source] ?? source;
+}
+
 function StatRow({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="flex items-center justify-between py-1.5 border-b border-slate-100 last:border-0">
@@ -36,6 +55,11 @@ function Section({ title, quality, children }: { title: string; quality: SchoolS
 
 export default function SituationSchoolDetail({ situation, onClose }: SituationSchoolDetailProps) {
   const { estrutura, matricula, fluxo, notas, visitas, pendencias, inconsistencias, sourceFailures } = situation;
+  // Distingue "notas nunca solicitadas" (visão global sem escola
+  // selecionada) de "notas indisponíveis por falha de leitura" — as duas
+  // deixam `notas` null, mas só a segunda tem uma entrada correspondente em
+  // sourceFailures (seção 9 do code review do PR #16).
+  const notasIndisponiveis = sourceFailures.some(f => f.source === 'student_rosters' || f.source === 'student_bimester_grades');
 
   return (
     <div className="space-y-4">
@@ -63,7 +87,8 @@ export default function SituationSchoolDetail({ situation, onClose }: SituationS
           <ul className="list-disc list-inside space-y-0.5">
             {sourceFailures.map(f => (
               <li key={f.source}>
-                <span className="font-mono">{f.source}</span>: {f.message}
+                <span className="font-bold">{friendlySourceLabel(f.source)}</span>: {f.message}{' '}
+                <span className="font-mono text-rose-400 text-[10px]">({f.source})</span>
               </li>
             ))}
           </ul>
@@ -96,7 +121,7 @@ export default function SituationSchoolDetail({ situation, onClose }: SituationS
           <StatRow label="Abandono" value={`${fluxo.abandono} (${fluxo.percentualAbandono.toFixed(1)}%)`} />
         </Section>
 
-        <Section title="Notas bimestrais agregadas" quality={notas?.dataQuality ?? 'sem_dados'}>
+        <Section title="Notas bimestrais agregadas" quality={notas ? notas.dataQuality : (notasIndisponiveis ? 'indisponivel' : 'sem_dados')}>
           {notas ? (
             <>
               <StatRow label="Estudantes ativos" value={notas.estudantesAtivos} />
@@ -108,6 +133,8 @@ export default function SituationSchoolDetail({ situation, onClose }: SituationS
               <StatRow label="Turmas com preenchimento completo" value={notas.turmasComPreenchimentoCompleto} />
               <StatRow label="Turmas com pendência" value={notas.turmasComPendencia} />
             </>
+          ) : notasIndisponiveis ? (
+            <p className="text-[11px] text-slate-400">Notas indisponíveis — falha ao carregar cadastro de estudantes ou notas (ver aviso acima).</p>
           ) : (
             <p className="text-[11px] text-slate-400">Notas ainda não carregadas para esta escola.</p>
           )}

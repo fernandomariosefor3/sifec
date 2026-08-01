@@ -2,7 +2,7 @@
 // (seção 10 do plano). Puramente explicativo — os estados nunca são
 // persistidos, sempre recalculados (ver combineDataQualityStates).
 import type { ReactNode } from 'react';
-import { CircleDashed, CircleDot, CircleCheck, CircleAlert } from 'lucide-react';
+import { CircleDashed, CircleDot, CircleCheck, CircleAlert, CloudOff } from 'lucide-react';
 import type { DataQualityState } from '../../types/schoolSituation';
 
 const QUALITY_INFO: Record<DataQualityState, { label: string; description: string; icon: ReactNode; className: string }> = {
@@ -29,6 +29,16 @@ const QUALITY_INFO: Record<DataQualityState, { label: string; description: strin
     description: 'Os valores existentes não fecham matematicamente ou possuem vínculos divergentes.',
     icon: <CircleAlert size={14} />,
     className: 'text-rose-700 bg-rose-50 border-rose-200',
+  },
+  // Revisão do code review do PR #16, seção 3/9: uma fonte que FALHOU ao
+  // ler — nunca confundir com "sem_dados" (que significa "consultamos com
+  // sucesso e não há registro"). Cor própria (laranja) para diferenciar
+  // visualmente das outras três.
+  indisponivel: {
+    label: 'Dados indisponíveis',
+    description: 'Falha de leitura desta fonte — tente atualizar novamente.',
+    icon: <CloudOff size={14} />,
+    className: 'text-orange-700 bg-orange-50 border-orange-200',
   },
 };
 

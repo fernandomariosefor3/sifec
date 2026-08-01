@@ -6,7 +6,12 @@
 // gravado. Nunca inclui nome de estudante, nota individual ou qualquer dado
 // nominal — só agregados (ver seção 15 do plano da Fase 2D).
 
-export type DataQualityState = 'sem_dados' | 'incompleto' | 'atualizado' | 'inconsistente';
+// 'indisponivel' (revisão do code review do PR #16): uma fonte que FALHOU
+// ao ler nunca vira 'sem_dados' (que significa "consultamos com sucesso e
+// não há registro"). Precisa de um estado próprio para que a interface
+// mostre "Falha de leitura" / "Dados indisponíveis" em vez de inventar uma
+// ausência que pode não ser real — ver SourceLoadResult abaixo.
+export type DataQualityState = 'sem_dados' | 'incompleto' | 'atualizado' | 'inconsistente' | 'indisponivel';
 
 export type PendingItemType =
   | 'ano_letivo_nao_configurado'
@@ -19,6 +24,32 @@ export type PendingItemType =
   | 'estudantes_sem_notas'
   | 'notas_parcialmente_preenchidas'
   | 'escola_sem_visita';
+
+// Revisão do code review do PR #16 (seção 3): resultado explícito de uma
+// tentativa de carregar UMA fonte. 'not_requested' é diferente de
+// 'success' com dado vazio — nunca confundir "não pedimos essa fonte agora"
+// (ex.: notas na visão global sem escola selecionada) com "pedimos e não
+// havia nada" ou "pedimos e falhou". buildPendingItems/detectInconsistencies
+// só podem gerar diagnóstico a partir de fontes 'success'.
+export type SourceLoadResult<T> =
+  | { status: 'success'; data: T }
+  | { status: 'failure'; error: SchoolSituationSourceFailure }
+  | { status: 'not_requested' };
+
+// Disponibilidade das fontes usadas por UMA escola — passada explicitamente
+// para buildPendingItems/detectInconsistencies (revisão do PR #16, seção 3)
+// para que nenhuma das duas gere diagnóstico a partir de uma fonte que
+// falhou. `true` cobre tanto 'success' quanto (quando aplicável) uma lista
+// vazia bem-sucedida — só 'failure' vira `false`.
+export interface SchoolSituationSourceAvailability {
+  schoolYear: boolean;
+  turmas: boolean;
+  snapshots: boolean;
+  flow: boolean;
+  roster: boolean;
+  grades: boolean;
+  visitas: boolean;
+}
 
 // Cada pendência precisa explicar o que falta, de qual período, de qual
 // coleção veio a verificação, e qual ação resolve — nunca um rótulo
@@ -146,6 +177,10 @@ export interface PortfolioSituationSummary {
   percentualPreenchimentoNotas: number | null;
   escolasComFluxoInformado: number;
   escolasComPendencias: number;
+  // Revisão do code review do PR #16 (seção 9): quantas escolas do conjunto
+  // têm ao menos uma fonte indisponível (sourceFailures.length > 0) — nunca
+  // contabilizada como se fosse "dado não informado" nos outros contadores.
+  escolasComFontesIndisponiveis: number;
 }
 
 export type SchoolScopeMode = 'carteira' | 'global';

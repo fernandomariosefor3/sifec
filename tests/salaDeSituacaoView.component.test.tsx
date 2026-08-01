@@ -12,6 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, within, act } from '@testing-library/react';
 import SalaDeSituacaoView from '../src/components/SalaDeSituacaoView';
 import { getSuperintendents, saveSuperintendents, setActiveSuperintendentId, setAdminSchoolScope } from '../src/lib/superintendentService';
+import { SEED_SCHOOLS } from '../src/lib/firebaseService';
 import type { SchoolSituation } from '../src/types/schoolSituation';
 
 afterEach(() => {
@@ -19,7 +20,10 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const { authStateListeners, mockAuth, mockFetchAllTurmas, mockFetchAllVisitas, mockFetchPortfolioSituations, mockFetchSchoolSituation } = vi.hoisted(() => {
+const {
+  authStateListeners, mockAuth, mockFetchTurmasForSchools, mockFetchVisitasForSchools,
+  mockFetchPortfolioSituations, mockFetchSchoolSituation,
+} = vi.hoisted(() => {
   const listeners: Array<(user: unknown) => void> = [];
   return {
     authStateListeners: listeners,
@@ -33,8 +37,8 @@ const { authStateListeners, mockAuth, mockFetchAllTurmas, mockFetchAllVisitas, m
         };
       },
     },
-    mockFetchAllTurmas: vi.fn(),
-    mockFetchAllVisitas: vi.fn(),
+    mockFetchTurmasForSchools: vi.fn(),
+    mockFetchVisitasForSchools: vi.fn(),
     mockFetchPortfolioSituations: vi.fn(),
     mockFetchSchoolSituation: vi.fn(),
   };
@@ -43,8 +47,8 @@ const { authStateListeners, mockAuth, mockFetchAllTurmas, mockFetchAllVisitas, m
 vi.mock('../src/lib/firebase', () => ({ auth: mockAuth }));
 
 vi.mock('../src/lib/schoolSituationService', () => ({
-  fetchAllTurmas: (...args: unknown[]) => mockFetchAllTurmas(...args),
-  fetchAllVisitas: (...args: unknown[]) => mockFetchAllVisitas(...args),
+  fetchTurmasForSchools: (...args: unknown[]) => mockFetchTurmasForSchools(...args),
+  fetchVisitasForSchools: (...args: unknown[]) => mockFetchVisitasForSchools(...args),
   fetchPortfolioSituations: (...args: unknown[]) => mockFetchPortfolioSituations(...args),
   fetchSchoolSituation: (...args: unknown[]) => mockFetchSchoolSituation(...args),
 }));
@@ -97,8 +101,8 @@ describe('SalaDeSituacaoView', () => {
     localStorage.clear();
     authStateListeners.length = 0;
     mockAuth.currentUser = null;
-    mockFetchAllTurmas.mockReset().mockResolvedValue([]);
-    mockFetchAllVisitas.mockReset().mockResolvedValue([]);
+    mockFetchTurmasForSchools.mockReset().mockResolvedValue({ status: 'success', data: [] });
+    mockFetchVisitasForSchools.mockReset().mockResolvedValue({});
     mockFetchPortfolioSituations.mockReset().mockImplementation(async (schools: Array<{ id: string; nome: string }>) =>
       Object.fromEntries(schools.map(s => [s.id, buildSituation(s.id, s.nome)]))
     );
@@ -213,21 +217,44 @@ describe('SalaDeSituacaoView', () => {
     expect(within(table).getByText('EEM Diva Cabral')).toBeInTheDocument();
   });
 
-  it('erro real de carregamento permanece visível, com "Tentar novamente"', async () => {
+  it('erro real e inesperado de carregamento permanece visível, com "Tentar novamente"', async () => {
     saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
     setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
-    mockFetchAllTurmas.mockRejectedValueOnce(new Error('Missing or insufficient permissions.'));
+    mockFetchPortfolioSituations.mockRejectedValueOnce(new Error('Erro inesperado.'));
 
     render(<SalaDeSituacaoView />);
     await loginAs(SUPER_A_EMAIL);
 
-    await waitFor(() => expect(screen.getByText('Missing or insufficient permissions.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Erro inesperado.')).toBeInTheDocument());
     expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument();
 
-    mockFetchAllTurmas.mockResolvedValueOnce([]);
+    mockFetchPortfolioSituations.mockImplementation(async (schools: Array<{ id: string; nome: string }>) =>
+      Object.fromEntries(schools.map(s => [s.id, buildSituation(s.id, s.nome)]))
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
 
-    await waitFor(() => expect(screen.queryByText('Missing or insufficient permissions.')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText('Erro inesperado.')).not.toBeInTheDocument());
+  });
+
+  // Revisão do code review do PR #16, seção 4/9: uma escola com
+  // sourceFailures (ex.: turmas indisponível) nunca desaparece do painel —
+  // continua na tabela, com um aviso discreto indicando a falha, em vez de
+  // um erro de tela cheia que apagaria o restante já carregado.
+  it('escola com sourceFailures continua visível na tabela, com aviso discreto (nunca some o painel inteiro)', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    mockFetchPortfolioSituations.mockImplementation(async (schools: Array<{ id: string; nome: string }>) =>
+      Object.fromEntries(schools.map(s => [s.id, buildSituation(s.id, s.nome, {
+        sourceFailures: [{ source: 'turmas', message: 'Falha ao carregar turmas.' }],
+      })]))
+    );
+
+    render(<SalaDeSituacaoView />);
+    await loginAs(SUPER_A_EMAIL);
+
+    const table = await getTable();
+    expect(within(table).getByText('EEM Diva Cabral')).toBeInTheDocument();
+    expect(within(table).getByText(/fonte indisponível/i)).toBeInTheDocument();
   });
 
   it('nenhuma informação nominal é exibida, mesmo no detalhe da escola', async () => {
@@ -273,5 +300,136 @@ describe('SalaDeSituacaoView', () => {
     await waitFor(() => expect(within(realTable).getByText('EEM Diva Cabral')).toBeInTheDocument());
     expect(within(realTable).queryByText('472')).not.toBeInTheDocument();
     expect(within(realTable).getByText('98')).toBeInTheDocument();
+  });
+
+  // Revisão do code review do PR #16, seção 1: o ano letivo inicial precisa
+  // refletir o ano corrente REAL do sistema, nunca um valor fixo de 2026 no
+  // código-fonte. Como a data real do ambiente de teste já é 2026, mockamos
+  // o relógio do sistema para um ano diferente — só assim dá para provar
+  // que o valor vem de `new Date()`, não de uma constante hardcoded que
+  // coincidentemente bateria com 2026 mesmo sem o fix.
+  it('ano letivo inicial nunca fica preso em 2026 — segue o ano corrente real do sistema', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2028-05-01T12:00:00.000Z'));
+    try {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(SUPER_A_EMAIL);
+      await getTable();
+
+      const anoSelect = screen.getByLabelText('Ano letivo') as HTMLSelectElement;
+      expect(anoSelect.value).toBe('2028');
+      const options = Array.from(anoSelect.options).map(o => o.value);
+      expect(options).toEqual(['2027', '2028', '2029']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Revisão do code review do PR #16, seção 8: trocar de ano/bimestre/
+  // carteira/superintendente nunca deixa o resultado do contexto ANTERIOR
+  // visível enquanto o novo carrega.
+  describe('proteção contra resultado antigo sobrescrevendo o novo (troca rápida de contexto)', () => {
+    it('troca de ano com detalhe aberto nunca mostra o detalhe do ano anterior enquanto o novo carrega', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(SUPER_A_EMAIL);
+      await getTable();
+
+      fireEvent.click(screen.getByRole('button', { name: /Ver detalhes/i }));
+      await waitFor(() => expect(screen.getByText('Detalhe da escola — 2026')).toBeInTheDocument());
+
+      let resolveNext: (value: Record<string, SchoolSituation>) => void = () => {};
+      mockFetchPortfolioSituations.mockImplementation(() => new Promise(resolve => { resolveNext = resolve; }));
+
+      fireEvent.change(screen.getByLabelText('Ano letivo'), { target: { value: '2025' } });
+
+      await waitFor(() => expect(screen.queryByText('Detalhe da escola — 2026')).not.toBeInTheDocument());
+      expect(screen.getByText('Carregando detalhe da escola...')).toBeInTheDocument();
+
+      resolveNext({ 'diva-cabral': buildSituation('diva-cabral', 'EEM Diva Cabral', { anoLetivo: 2025 }) });
+      await waitFor(() => expect(screen.getByText('Detalhe da escola — 2025')).toBeInTheDocument());
+    });
+
+    it('troca de bimestre com detalhe aberto nunca mostra o detalhe do bimestre anterior enquanto o novo carrega', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(SUPER_A_EMAIL);
+      await getTable();
+
+      fireEvent.click(screen.getByRole('button', { name: /Ver detalhes/i }));
+      await waitFor(() => expect(screen.getByText('Detalhe da escola — 2026')).toBeInTheDocument());
+
+      let resolveNext: (value: Record<string, SchoolSituation>) => void = () => {};
+      mockFetchPortfolioSituations.mockImplementation(() => new Promise(resolve => { resolveNext = resolve; }));
+
+      fireEvent.change(screen.getByLabelText('Bimestre'), { target: { value: '2' } });
+
+      await waitFor(() => expect(screen.queryByText('Detalhe da escola — 2026')).not.toBeInTheDocument());
+      expect(screen.getByText('Carregando detalhe da escola...')).toBeInTheDocument();
+
+      resolveNext({ 'diva-cabral': buildSituation('diva-cabral', 'EEM Diva Cabral') });
+      await waitFor(() => expect(screen.getByText('Detalhe da escola — 2026')).toBeInTheDocument());
+    });
+
+    it('trocar de superintendente com detalhe aberto fecha o detalhe (escola do superintendente anterior sai do escopo)', async () => {
+      const SUPER_B_EMAIL = 'super.b@example.com';
+      saveSuperintendents([
+        ...getSuperintendents(),
+        superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral']),
+        superComEscolas(SUPER_B_EMAIL, ['EEM Figueiredo Correia']),
+      ]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(SUPER_A_EMAIL);
+      await getTable();
+
+      fireEvent.click(screen.getByRole('button', { name: /Ver detalhes/i }));
+      await waitFor(() => expect(screen.getByText('Detalhe da escola — 2026')).toBeInTheDocument());
+
+      act(() => {
+        setActiveSuperintendentId(`super-${SUPER_B_EMAIL}`);
+      });
+
+      await waitFor(() => expect(screen.queryByText('Detalhe da escola — 2026')).not.toBeInTheDocument());
+      const table = await getTable();
+      expect(within(table).getByText('EEM Figueiredo Correia')).toBeInTheDocument();
+      expect(within(table).queryByText('EEM Diva Cabral')).not.toBeInTheDocument();
+    });
+
+    it('alternar de carteira para visão global e de volta fecha o detalhe quando a escola selecionada sai do escopo', async () => {
+      const outroEscola = SEED_SCHOOLS[15];
+      setAdminSchoolScope('global');
+      // Visão global: selecionar uma escola dispara fetchSchoolSituation
+      // para carregar as notas só daquela escola (ver useSchoolSituation.ts)
+      // — precisa de um retorno válido, senão o detalhe nunca aparece.
+      mockFetchSchoolSituation.mockImplementation(async (s: { id: string; nome: string }) =>
+        buildSituation(s.id, s.nome)
+      );
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(ADMIN_EMAIL);
+      await waitFor(() => expect(screen.getByText('56 Escolas')).toBeInTheDocument());
+
+      const globalTable = await getTable();
+      const row = within(globalTable).getByText(outroEscola.nome).closest('tr');
+      expect(row).not.toBeNull();
+      fireEvent.click(within(row as HTMLElement).getByRole('button', { name: /Ver detalhes/i }));
+      await waitFor(() => expect(screen.getByText(/Detalhe da escola/)).toBeInTheDocument());
+
+      act(() => {
+        setAdminSchoolScope('portfolio');
+      });
+
+      await waitFor(() => expect(screen.getByText('7 Escolas')).toBeInTheDocument());
+      expect(screen.queryByText(/Detalhe da escola/)).not.toBeInTheDocument();
+    });
   });
 });

@@ -14,6 +14,7 @@ export const DATA_QUALITY_LABELS: Record<DataQualityState, string> = {
   incompleto: 'Incompleto',
   atualizado: 'Atualizado',
   inconsistente: 'Inconsistente',
+  indisponivel: 'Dados indisponíveis',
 };
 
 export const PENDING_ITEM_TYPE_LABELS: Record<PendingItemType, string> = {

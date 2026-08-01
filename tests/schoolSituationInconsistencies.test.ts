@@ -6,6 +6,11 @@ import type { EnrollmentSnapshot } from '../src/types/enrollment';
 import type { StudentBimesterGrade } from '../src/types/studentBimesterGrade';
 import type { StudentRosterEntry } from '../src/types/studentRoster';
 import type { SchoolFlowResult } from '../src/types/schoolFlow';
+import type { SchoolSituationSourceAvailability } from '../src/types/schoolSituation';
+
+const AVAILABILITY_ALL: SchoolSituationSourceAvailability = {
+  schoolYear: true, turmas: true, snapshots: true, flow: true, roster: true, grades: true, visitas: true,
+};
 
 function buildSnapshot(overrides: Partial<EnrollmentSnapshot> = {}): EnrollmentSnapshot {
   return {
@@ -63,6 +68,9 @@ function baseInput(overrides: Partial<InconsistencyDetectionInput> = {}): Incons
     roster: [],
     grades: [],
     flowResult: null,
+    availability: AVAILABILITY_ALL,
+    schoolYearDocs: [{ id: 'esc1_2026' }],
+    flowResultDocs: [],
     ...overrides,
   };
 }
@@ -151,5 +159,172 @@ describe('detectInconsistencies', () => {
     });
     const result = detectInconsistencies(input);
     expect(result.some(i => i.type === 'registro_duplicado')).toBe(true);
+  });
+});
+
+// Revisão do code review do PR #16, seção 6: matricula_final_divergente
+// existia no tipo mas nunca era detectada.
+describe('matricula_final_divergente', () => {
+  it('cálculo correto (matriculaFimMes bate com o esperado) não gera inconsistência', () => {
+    const snap = buildSnapshot({
+      matriculaInicioMes: 30, novasMatriculas: 2, transferenciasEntrada: 0,
+      transferenciasSaida: 1, abandono: 0, outrasSaidas: 0, matriculaFimMes: 31,
+    });
+    const result = detectInconsistencies(baseInput({ snapshots: [snap] }));
+    expect(result.some(i => i.type === 'matricula_final_divergente')).toBe(false);
+  });
+
+  it('diferença positiva (matriculaFimMes maior que o esperado) gera inconsistência', () => {
+    const snap = buildSnapshot({
+      matriculaInicioMes: 30, novasMatriculas: 0, transferenciasEntrada: 0,
+      transferenciasSaida: 0, abandono: 0, outrasSaidas: 0, matriculaFimMes: 35,
+    });
+    const result = detectInconsistencies(baseInput({ snapshots: [snap] }));
+    const item = result.find(i => i.type === 'matricula_final_divergente');
+    expect(item).toBeDefined();
+    expect(item?.message).toContain('35');
+    expect(item?.message).toContain('30');
+  });
+
+  it('diferença negativa (matriculaFimMes menor que o esperado) gera inconsistência', () => {
+    const snap = buildSnapshot({
+      matriculaInicioMes: 30, novasMatriculas: 0, transferenciasEntrada: 0,
+      transferenciasSaida: 0, abandono: 0, outrasSaidas: 0, matriculaFimMes: 20,
+    });
+    const result = detectInconsistencies(baseInput({ snapshots: [snap] }));
+    expect(result.some(i => i.type === 'matricula_final_divergente')).toBe(true);
+  });
+
+  it('valores zero funcionam (matrícula inicial e final ambas zero, sem movimento)', () => {
+    const snap = buildSnapshot({
+      matriculaInicioMes: 0, novasMatriculas: 0, transferenciasEntrada: 0,
+      transferenciasSaida: 0, abandono: 0, outrasSaidas: 0, matriculaFimMes: 0,
+    });
+    const result = detectInconsistencies(baseInput({ snapshots: [snap] }));
+    expect(result.some(i => i.type === 'matricula_final_divergente')).toBe(false);
+  });
+
+  it('múltiplos snapshots inconsistentes são todos listados', () => {
+    const snap1 = buildSnapshot({ id: 'esc1_t1_2026-01', mesReferencia: '2026-01', matriculaInicioMes: 30, matriculaFimMes: 999 });
+    const snap2 = buildSnapshot({ id: 'esc1_t1_2026-02', mesReferencia: '2026-02', matriculaInicioMes: 30, matriculaFimMes: 1 });
+    const result = detectInconsistencies(baseInput({ snapshots: [snap1, snap2] }));
+    const divergentes = result.filter(i => i.type === 'matricula_final_divergente');
+    expect(divergentes).toHaveLength(2);
+  });
+
+  it('nunca é detectada quando enrollment_snapshots está indisponível (fonte falhou)', () => {
+    const snap = buildSnapshot({ matriculaInicioMes: 30, matriculaFimMes: 999 });
+    const result = detectInconsistencies(baseInput({
+      snapshots: [snap],
+      availability: { ...AVAILABILITY_ALL, snapshots: false },
+    }));
+    expect(result.some(i => i.type === 'matricula_final_divergente')).toBe(false);
+  });
+});
+
+// Revisão do code review do PR #16, seção 7: duplicidade real pela chave
+// natural, inclusive quando um documento antigo tem ID não canônico — os
+// serviços da Sala de Situação usam listagem própria (sem limit(1)) para
+// isto, então mais de um documento na lista já é a duplicidade.
+describe('registro_duplicado — chave natural por coleção', () => {
+  it('school_years: mais de um documento para schoolId+anoLetivo é duplicidade', () => {
+    const result = detectInconsistencies(baseInput({
+      schoolYearDocs: [{ id: 'esc1_2026' }, { id: 'esc1_2026_legado' }],
+    }));
+    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('school_years'));
+    expect(item).toBeDefined();
+  });
+
+  it('school_years: um único documento não é duplicidade', () => {
+    const result = detectInconsistencies(baseInput({ schoolYearDocs: [{ id: 'esc1_2026' }] }));
+    expect(result.some(i => i.type === 'registro_duplicado' && i.message.includes('school_years'))).toBe(false);
+  });
+
+  it('school_years: duplicidade não é sinalizada quando a fonte falhou', () => {
+    const result = detectInconsistencies(baseInput({
+      schoolYearDocs: [{ id: 'esc1_2026' }, { id: 'esc1_2026_legado' }],
+      availability: { ...AVAILABILITY_ALL, schoolYear: false },
+    }));
+    expect(result.some(i => i.type === 'registro_duplicado' && i.message.includes('school_years'))).toBe(false);
+  });
+
+  it('school_flow_results: mais de um documento para schoolId+anoLetivo é duplicidade', () => {
+    const result = detectInconsistencies(baseInput({
+      flowResultDocs: [{ id: 'esc1_2026' }, { id: 'esc1_2026_legado' }],
+    }));
+    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('school_flow_results'));
+    expect(item).toBeDefined();
+  });
+
+  it('enrollment_snapshots: dois documentos para a mesma turmaId+mesReferencia são duplicidade', () => {
+    const snapA = buildSnapshot({ id: 'esc1_t1_2026-03' });
+    const snapB = buildSnapshot({ id: 'esc1_t1_2026-03_legado' });
+    const result = detectInconsistencies(baseInput({ snapshots: [snapA, snapB] }));
+    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('enrollment_snapshots'));
+    expect(item).toBeDefined();
+  });
+
+  it('enrollment_snapshots: turmas/meses diferentes não são duplicidade', () => {
+    const snapA = buildSnapshot({ id: 'esc1_t1_2026-03', turmaId: 't1', mesReferencia: '2026-03' });
+    const snapB = buildSnapshot({ id: 'esc1_t1_2026-04', turmaId: 't1', mesReferencia: '2026-04' });
+    const result = detectInconsistencies(baseInput({ snapshots: [snapA, snapB] }));
+    expect(result.some(i => i.type === 'registro_duplicado' && i.message.includes('enrollment_snapshots'))).toBe(false);
+  });
+
+  it('student_rosters: dois documentos para a mesma turmaId+studentKey são duplicidade', () => {
+    const rosterA = buildRoster({ id: 'esc1_2026_t1_s1' });
+    const rosterB = buildRoster({ id: 'esc1_2026_t1_s1_legado' });
+    const result = detectInconsistencies(baseInput({ roster: [rosterA, rosterB] }));
+    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('student_rosters'));
+    expect(item).toBeDefined();
+  });
+
+  it('student_bimester_grades: dois documentos para o mesmo rosterId+bimestre são duplicidade', () => {
+    const gradeA = buildGrade({ id: 'esc1_2026_t1_s1_b1' });
+    const gradeB = buildGrade({ id: 'esc1_2026_t1_s1_b1_legado' });
+    const result = detectInconsistencies(baseInput({ grades: [gradeA, gradeB] }));
+    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('student_bimester_grades'));
+    expect(item).toBeDefined();
+  });
+});
+
+describe('disponibilidade das fontes — nenhum diagnóstico a partir de uma fonte que falhou', () => {
+  it('roster indisponível: nenhuma verificação de roster_turma_ano_diferente/duplicidade roda', () => {
+    const turmaOutroAno = { id: 't1', schoolId: 'esc1', anoLetivo: 2025, nome: 'Turma A' };
+    const result = detectInconsistencies(baseInput({
+      turmasById: new Map([['t1', turmaOutroAno]]),
+      roster: [buildRoster({ anoLetivo: 2026 })],
+      availability: { ...AVAILABILITY_ALL, roster: false },
+    }));
+    expect(result.some(i => i.type === 'roster_turma_ano_diferente')).toBe(false);
+  });
+
+  it('roster ou grades indisponível: nota_sem_roster/nota_estudante_inativo nunca são falsos positivos', () => {
+    const result = detectInconsistencies(baseInput({
+      roster: [],
+      grades: [buildGrade({ rosterId: 'inexistente' })],
+      availability: { ...AVAILABILITY_ALL, roster: false },
+    }));
+    expect(result.some(i => i.type === 'nota_sem_roster')).toBe(false);
+    expect(result.some(i => i.type === 'nota_estudante_inativo')).toBe(false);
+  });
+
+  it('turmas indisponível: registro_duplicado de turmas (mesmo nome normalizado) não roda', () => {
+    const result = detectInconsistencies(baseInput({
+      turmasDoAno: [
+        { id: 't1', schoolId: 'esc1', anoLetivo: 2026, nome: 'Turma A' },
+        { id: 't2', schoolId: 'esc1', anoLetivo: 2026, nome: 'turma a' },
+      ],
+      availability: { ...AVAILABILITY_ALL, turmas: false },
+    }));
+    expect(result).toEqual([]);
+  });
+
+  it('flow indisponível: fluxo_confirmado_total_zero não é sinalizado', () => {
+    const result = detectInconsistencies(baseInput({
+      flowResult: buildFlow({ aprovados: 0, reprovados: 0, abandono: 0, status: 'confirmado' }),
+      availability: { ...AVAILABILITY_ALL, flow: false },
+    }));
+    expect(result.some(i => i.type === 'fluxo_confirmado_total_zero')).toBe(false);
   });
 });

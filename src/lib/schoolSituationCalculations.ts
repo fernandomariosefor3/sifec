@@ -37,13 +37,16 @@ import { schoolNamesMatch } from './schoolIdentity';
 // --- Qualidade dos dados (seção 10 do plano) ---
 
 // inconsistente sempre vence (qualquer inconsistência real importa mais que
-// "incompleto"); só "sem_dados" em todos os domínios permanece sem_dados; só
-// "atualizado" em todos os domínios permanece atualizado; qualquer mistura
-// vira incompleto. Nunca persistido — recalculado sempre que os indicadores
-// mudam.
+// "incompleto"); em seguida indisponivel (revisão do code review do PR #16
+// — uma fonte que falhou ao ler é mais grave que um domínio simplesmente
+// incompleto, precisa aparecer antes); só "sem_dados" em todos os domínios
+// permanece sem_dados; só "atualizado" em todos os domínios permanece
+// atualizado; qualquer mistura vira incompleto. Nunca persistido —
+// recalculado sempre que os indicadores mudam.
 export function combineDataQualityStates(states: readonly DataQualityState[]): DataQualityState {
   if (states.length === 0) return 'sem_dados';
   if (states.some(s => s === 'inconsistente')) return 'inconsistente';
+  if (states.some(s => s === 'indisponivel')) return 'indisponivel';
   if (states.every(s => s === 'sem_dados')) return 'sem_dados';
   if (states.every(s => s === 'atualizado')) return 'atualizado';
   return 'incompleto';
@@ -76,30 +79,86 @@ export function calculateStructureIndicators(
 
 // --- Movimentação de matrícula (seção 8.2) ---
 
-// Meses "esperados" até agora dentro do ano letivo — nunca um mês FUTURO
-// (seção 8.2 do plano: "não tratar um mês futuro como pendência"). Ano
-// letivo já encerrado (anterior ao ano corrente): os 12 meses contam. Ano
-// letivo ainda não iniciado (posterior ao ano corrente): nenhum mês conta.
-// Ano letivo em curso: janeiro até o mês corrente (inclusive — o mês em
-// andamento já é "esperado", mesmo que ainda não tenha terminado).
-export function getExpectedMonthReferences(anoLetivo: number, now: Date = new Date()): string[] {
+export interface ExpectedMonthReferencesInput {
+  anoLetivo: number;
+  // dataInicio/dataFim vêm de SchoolYear.dataInicio/dataFim (formato
+  // YYYY-MM-DD) — nunca um valor inventado pelo chamador.
+  dataInicio?: string | null;
+  dataFim?: string | null;
+}
+
+export interface ExpectedMonthsResult {
+  months: string[];
+  // false quando o período letivo não é conhecido o bastante para montar a
+  // lista de meses esperados: dataInicio ausente (nunca inventamos janeiro
+  // como início), ou dataFim ausente num ano JÁ ENCERRADO (nunca presumimos
+  // dezembro). Nesses dois casos `months` vem vazio de propósito — o
+  // chamador deve tratar a cobertura mensal como incompleta/período não
+  // configurado, nunca como "nenhum mês pendente" (revisão do code review
+  // do PR #16, seção 2).
+  periodoConhecido: boolean;
+}
+
+function parseMonthFromIsoDate(dateStr: string): number | null {
+  const match = /^\d{4}-(\d{2})-\d{2}/.exec(dateStr);
+  if (!match) return null;
+  const month = Number(match[1]);
+  return month >= 1 && month <= 12 ? month : null;
+}
+
+// Meses "esperados" dentro do ano letivo REALMENTE configurado — nunca um
+// mês FUTURO (seção 8.2 do plano: "não tratar um mês futuro como
+// pendência"), e agora (revisão do code review do PR #16, seção 2) nunca um
+// mês anterior a dataInicio nem posterior a dataFim. Regras:
+//   - ano letivo futuro (posterior ao corrente): nenhum mês é esperado
+//     ainda, período sempre "conhecido" (o resultado vazio É a resposta
+//     certa, não uma lacuna de dado).
+//   - dataInicio ausente: nunca inventa janeiro — período desconhecido.
+//   - ano letivo em curso: começa em dataInicio, vai até dataFim (se já
+//     definido e não estiver no futuro) ou até o mês corrente (inclusive) —
+//     dataFim ausente num ano corrente é permitido, o plano autoriza
+//     limitar ao mês atual.
+//   - ano letivo já encerrado (anterior ao corrente): começa em dataInicio,
+//     vai até dataFim — SEM dataFim aqui o período fica desconhecido (nunca
+//     presume dezembro), diferente do ano corrente.
+export function getExpectedMonthReferences(
+  input: ExpectedMonthReferencesInput,
+  now: Date = new Date()
+): ExpectedMonthsResult {
+  const { anoLetivo, dataInicio, dataFim } = input;
   const currentYear = now.getUTCFullYear();
   const currentMonth = now.getUTCMonth() + 1;
 
-  let lastMonth: number;
-  if (anoLetivo < currentYear) {
-    lastMonth = 12;
-  } else if (anoLetivo > currentYear) {
-    return [];
+  if (anoLetivo > currentYear) {
+    return { months: [], periodoConhecido: true };
+  }
+
+  const startMonth = dataInicio != null ? parseMonthFromIsoDate(dataInicio) : null;
+  if (startMonth == null) {
+    return { months: [], periodoConhecido: false };
+  }
+
+  let endMonth: number;
+  if (anoLetivo === currentYear) {
+    const dataFimMonth = dataFim != null ? parseMonthFromIsoDate(dataFim) : null;
+    endMonth = dataFimMonth != null ? Math.min(dataFimMonth, currentMonth) : currentMonth;
   } else {
-    lastMonth = currentMonth;
+    const dataFimMonth = dataFim != null ? parseMonthFromIsoDate(dataFim) : null;
+    if (dataFimMonth == null) {
+      return { months: [], periodoConhecido: false };
+    }
+    endMonth = dataFimMonth;
+  }
+
+  if (endMonth < startMonth) {
+    return { months: [], periodoConhecido: true };
   }
 
   const months: string[] = [];
-  for (let m = 1; m <= lastMonth; m += 1) {
+  for (let m = startMonth; m <= endMonth; m += 1) {
     months.push(`${anoLetivo}-${String(m).padStart(2, '0')}`);
   }
-  return months;
+  return { months, periodoConhecido: true };
 }
 
 function isMonthFullyCovered(
@@ -149,17 +208,27 @@ export function calculateEnrollmentMovementIndicators(
     ? null
     : mesesComSnapshot.reduce((latest, m) => (m > latest ? m : latest));
 
-  const expectedMonths = getExpectedMonthReferences(anoLetivo, now);
+  const { months: expectedMonths, periodoConhecido } = getExpectedMonthReferences(
+    { anoLetivo, dataInicio: schoolYear?.dataInicio, dataFim: schoolYear?.dataFim },
+    now
+  );
   const quantidadeMesesRegistrados = expectedMonths.filter(month =>
     isMonthFullyCovered(month, snapshots, turmasAtivas)
   ).length;
-  const quantidadeMesesPendentes = expectedMonths.length - quantidadeMesesRegistrados;
+  // Sem período letivo conhecido (dataInicio ausente, ou dataFim ausente
+  // num ano já encerrado), os meses pendentes usam SÓ o período
+  // efetivamente conhecido — aqui, nenhum (revisão do code review do PR
+  // #16, seção 2) — nunca inventa uma contagem de pendência a partir de um
+  // início/fim presumido.
+  const quantidadeMesesPendentes = periodoConhecido ? expectedMonths.length - quantidadeMesesRegistrados : 0;
 
   const coverage = calculateCurrentSchoolEnrollmentCoverage(snapshots, turmasAtivas);
 
   let dataQuality: DataQualityState;
   if (matriculaInicial == null && snapshots.length === 0) {
     dataQuality = 'sem_dados';
+  } else if (!periodoConhecido) {
+    dataQuality = 'incompleto';
   } else if (matriculaInicial != null && expectedMonths.length > 0 && quantidadeMesesPendentes === 0) {
     dataQuality = 'atualizado';
   } else {
@@ -321,13 +390,24 @@ export function calculatePortfolioSituationSummary(
     s => s.estrutura.anoLetivoConfigurado && s.matricula.quantidadeMesesPendentes === 0
   ).length;
 
+  // notas == null já exclui tanto "não carregadas" quanto "fonte falhou"
+  // (o serviço nunca calcula notas a partir de roster/grades parcial — ver
+  // schoolSituationService.ts), então esta média já ignora fontes
+  // indisponíveis sem precisar de um filtro extra (seção 9 do code review).
   const comNotasCarregadas = situations.filter((s): s is SchoolSituation & { notas: NonNullable<SchoolSituation['notas']> } => s.notas != null);
   const percentualPreenchimentoNotas = comNotasCarregadas.length === 0
     ? null
     : comNotasCarregadas.reduce((sum, s) => sum + s.notas.percentualPreenchimento, 0) / comNotasCarregadas.length;
 
-  const escolasComFluxoInformado = situations.filter(s => s.fluxo.status !== 'nao_informado').length;
+  // Revisão do code review do PR #16, seção 9: uma falha de leitura do
+  // fluxo nunca conta como "fluxo não informado" — dataQuality
+  // 'indisponivel' exclui a escola deste contador (nem soma como informado
+  // nem contamina a leitura de quem realmente não informou nada).
+  const escolasComFluxoInformado = situations.filter(
+    s => s.fluxo.dataQuality !== 'indisponivel' && s.fluxo.status !== 'nao_informado'
+  ).length;
   const escolasComPendencias = situations.filter(s => s.pendencias.length > 0).length;
+  const escolasComFontesIndisponiveis = situations.filter(s => s.sourceFailures.length > 0).length;
 
   return {
     escolasAcompanhadas,
@@ -338,5 +418,6 @@ export function calculatePortfolioSituationSummary(
     percentualPreenchimentoNotas,
     escolasComFluxoInformado,
     escolasComPendencias,
+    escolasComFontesIndisponiveis,
   };
 }

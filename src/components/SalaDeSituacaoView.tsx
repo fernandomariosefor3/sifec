@@ -20,6 +20,7 @@ import type { Bimestre } from '../types/studentBimesterGrade';
 import type { DataQualityState, PendingItemType, SchoolScopeMode } from '../types/schoolSituation';
 import { useSchoolSituation } from '../hooks/useSchoolSituation';
 import { calculatePortfolioSituationSummary } from '../lib/schoolSituationCalculations';
+import { buildAnoLetivoOptions } from '../lib/anoLetivoOptions';
 import SituationFilters from './sala-situacao/SituationFilters';
 import SituationSummaryCards from './sala-situacao/SituationSummaryCards';
 import SituationDataQualityPanel from './sala-situacao/SituationDataQualityPanel';
@@ -27,14 +28,19 @@ import SituationSchoolTable from './sala-situacao/SituationSchoolTable';
 import SituationSchoolDetail from './sala-situacao/SituationSchoolDetail';
 import SituationPendingItems, { type PendingItemWithSchool } from './sala-situacao/SituationPendingItems';
 
-const ANO_LETIVO_ATUAL = 2026;
-const ANOS_DISPONIVEIS = [ANO_LETIVO_ATUAL - 1, ANO_LETIVO_ATUAL];
-
 export default function SalaDeSituacaoView() {
   const [isFirebaseMode, setIsFirebaseMode] = useState(false);
   const [activeSuperId, setActiveSuperId] = useState('all');
   const [adminScope, setAdminScope] = useState(getAdminSchoolScope());
-  const [anoLetivo, setAnoLetivo] = useState(ANO_LETIVO_ATUAL);
+  // Ano corrente de verdade (revisão do code review do PR #16, seção 1) —
+  // nunca mais um valor fixo no código-fonte. Reaproveita a mesma função
+  // pura testável já usada por NotasView (buildAnoLetivoOptions) em vez de
+  // duplicar a lista de anos disponíveis.
+  const [anoLetivo, setAnoLetivo] = useState(() => new Date().getFullYear());
+  // Âncora sempre no ano corrente REAL (nunca no ano atualmente
+  // selecionado) — o conjunto de opções não "desliza" conforme o usuário
+  // navega entre anos, sempre os mesmos três: anterior/corrente/seguinte.
+  const anosDisponiveis = buildAnoLetivoOptions();
   const [bimestre, setBimestre] = useState<Bimestre>(1);
   const [selectedSchoolId, setSelectedSchoolId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
@@ -77,6 +83,17 @@ export default function SalaDeSituacaoView() {
 
   const showScopeToggle = isScopedAdmin(activeSuper, isFirebaseMode);
   const scopeMode: SchoolScopeMode = showScopeToggle && adminScope === 'global' ? 'global' : 'carteira';
+
+  // Revisão do code review do PR #16, seção 8: quando a escola selecionada
+  // deixa de estar no escopo visível (troca de superintendente, troca de
+  // carteira/global, ou qualquer mudança que reduza visibleSchools), o
+  // detalhe fecha sozinho — nunca continua mostrando o detalhe de uma
+  // escola fora do escopo atual.
+  useEffect(() => {
+    if (selectedSchoolId && !visibleSchools.some(s => s.id === selectedSchoolId)) {
+      setSelectedSchoolId(null);
+    }
+  }, [visibleSchools, selectedSchoolId]);
 
   const { situations, loading, loadError, refresh } = useSchoolSituation({
     schools: visibleSchools,
@@ -148,7 +165,7 @@ export default function SalaDeSituacaoView() {
         onSelectedSchoolIdChange={setSelectedSchoolId}
         anoLetivo={anoLetivo}
         onAnoLetivoChange={setAnoLetivo}
-        anosDisponiveis={ANOS_DISPONIVEIS}
+        anosDisponiveis={anosDisponiveis}
         bimestre={bimestre}
         onBimestreChange={setBimestre}
         qualityFilter={qualityFilter}
@@ -188,7 +205,16 @@ export default function SalaDeSituacaoView() {
         </div>
       )}
 
-      {selectedSituation ? (
+      {/* Revisão do code review do PR #16, seção 8: enquanto um novo
+          carregamento está em andamento (troca de ano/bimestre/carteira/
+          superintendente), o detalhe nunca continua mostrando o resultado
+          do contexto ANTERIOR — mostra um estado de carregamento próprio em
+          vez disso, até `situations` refletir o novo contexto. */}
+      {selectedSchoolId && loading ? (
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-400 font-bold">
+          Carregando detalhe da escola...
+        </div>
+      ) : selectedSituation ? (
         <SituationSchoolDetail situation={selectedSituation} onClose={() => setSelectedSchoolId(null)} />
       ) : (
         <>

@@ -90,6 +90,23 @@ export async function getSchoolYear(schoolId: string, anoLetivo: number): Promis
   return snap.empty ? null : (snap.docs[0].data() as SchoolYear);
 }
 
+// Mesmo filtro de getSchoolYear, SEM limit(1) — usada pela Sala de Situação
+// (revisão do code review do PR #16, seção 7) para detectar documentos
+// DUPLICADOS pela chave natural schoolId+anoLetivo, inclusive quando um
+// documento antigo tem ID não canônico. getSchoolYear() continua com
+// limit(1) para todo o resto do app, que só precisa do documento único —
+// só a detecção de duplicidade precisa enxergar mais de um resultado.
+export async function listSchoolYearsForSchool(schoolId: string, anoLetivo: number): Promise<SchoolYear[]> {
+  const snap = await getDocs(
+    query(
+      collection(db, COLLECTION),
+      where('schoolId', '==', schoolId),
+      where('anoLetivo', '==', anoLetivo)
+    )
+  );
+  return snap.docs.map(d => d.data() as SchoolYear);
+}
+
 export async function saveSchoolYear(input: SaveSchoolYearInput): Promise<SchoolYear> {
   const existing = await getSchoolYear(input.schoolId, input.anoLetivo);
   const payload = buildSchoolYearPayload(input, existing ?? undefined);

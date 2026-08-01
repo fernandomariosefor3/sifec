@@ -7,9 +7,14 @@ import type {
   EnrollmentMovementIndicators,
   GradeFillIndicators,
   SchoolFlowIndicators,
+  SchoolSituationSourceAvailability,
   SchoolStructureIndicators,
   VisitIndicators,
 } from '../src/types/schoolSituation';
+
+const AVAILABILITY_ALL: SchoolSituationSourceAvailability = {
+  schoolYear: true, turmas: true, snapshots: true, flow: true, roster: true, grades: true, visitas: true,
+};
 
 const ESTRUTURA_OK: SchoolStructureIndicators = {
   turmasCadastradas: 2, turmasAtivas: 2, matriculaInicial: 50, matriculaAtual: 48,
@@ -43,6 +48,7 @@ function baseInput(overrides: Partial<PendingItemsInput> = {}): PendingItemsInpu
     notas: NOTAS_COMPLETAS,
     visitas: VISITA_OK,
     turmasSemAnoLetivo: 0,
+    availability: AVAILABILITY_ALL,
     ...overrides,
   };
 }
@@ -127,5 +133,72 @@ describe('buildPendingItems', () => {
         expect(item.message.toLowerCase()).not.toContain(word);
       }
     }
+  });
+
+  // Revisão do code review do PR #16, seção 3: cada fonte que falhou nunca
+  // pode virar uma pendência falsa, mesmo quando os indicadores calculados
+  // "parecem" indicar ausência de dado (porque o fallback de uma fonte que
+  // falhou é vazio/null, igual ao de uma fonte genuinamente sem dado).
+  describe('disponibilidade das fontes — nenhuma pendência falsa a partir de uma fonte que falhou', () => {
+    it('falha de school_years não gera "ano letivo não configurado" nem "matrícula inicial não informada"', () => {
+      const items = buildPendingItems(baseInput({
+        estrutura: { ...ESTRUTURA_OK, anoLetivoConfigurado: false, matriculaInicial: null },
+        availability: { ...AVAILABILITY_ALL, schoolYear: false },
+      }));
+      expect(items.some(i => i.type === 'ano_letivo_nao_configurado')).toBe(false);
+      expect(items.some(i => i.type === 'matricula_inicial_nao_informada')).toBe(false);
+    });
+
+    it('falha de turmas não gera "nenhuma turma cadastrada" nem "turma sem ano letivo"', () => {
+      const items = buildPendingItems(baseInput({
+        estrutura: { ...ESTRUTURA_OK, turmasCadastradas: 0 },
+        turmasSemAnoLetivo: 3,
+        availability: { ...AVAILABILITY_ALL, turmas: false },
+      }));
+      expect(items.some(i => i.type === 'nenhuma_turma_cadastrada')).toBe(false);
+      expect(items.some(i => i.type === 'turma_sem_ano_letivo')).toBe(false);
+    });
+
+    it('falha de enrollment_snapshots não gera meses pendentes', () => {
+      const items = buildPendingItems(baseInput({
+        matricula: { ...MATRICULA_OK, quantidadeMesesPendentes: 4 },
+        availability: { ...AVAILABILITY_ALL, snapshots: false },
+      }));
+      expect(items.some(i => i.type === 'registro_mensal_pendente')).toBe(false);
+    });
+
+    it('falha de turmas TAMBÉM suprime meses pendentes (cobertura por turma fica indisponível)', () => {
+      const items = buildPendingItems(baseInput({
+        matricula: { ...MATRICULA_OK, quantidadeMesesPendentes: 4 },
+        availability: { ...AVAILABILITY_ALL, turmas: false },
+      }));
+      expect(items.some(i => i.type === 'registro_mensal_pendente')).toBe(false);
+    });
+
+    it('falha de fluxo → fonte indisponível, sem pendência falsa de fluxo (nunca mais "status nao_informado" a partir de uma falha)', () => {
+      const items = buildPendingItems(baseInput({
+        fluxo: { ...FLUXO_CONFIRMADO, status: 'nao_informado' },
+        availability: { ...AVAILABILITY_ALL, flow: false },
+      }));
+      expect(items.some(i => i.type === 'fluxo_nao_informado')).toBe(false);
+      expect(items.some(i => i.type === 'fluxo_rascunho')).toBe(false);
+    });
+
+    it('falha de student_rosters/student_bimester_grades não gera "sem notas" nem "notas parciais"', () => {
+      const items = buildPendingItems(baseInput({
+        notas: { ...NOTAS_COMPLETAS, semNotas: 5, parciais: 3 },
+        availability: { ...AVAILABILITY_ALL, roster: false, grades: false },
+      }));
+      expect(items.some(i => i.type === 'estudantes_sem_notas')).toBe(false);
+      expect(items.some(i => i.type === 'notas_parcialmente_preenchidas')).toBe(false);
+    });
+
+    it('falha de visitas não gera "escola sem visita"', () => {
+      const items = buildPendingItems(baseInput({
+        visitas: { ...VISITA_OK, semVisitaNoAno: true, quantidadeVisitasNoAno: 0, dataUltimaVisita: null },
+        availability: { ...AVAILABILITY_ALL, visitas: false },
+      }));
+      expect(items.some(i => i.type === 'escola_sem_visita')).toBe(false);
+    });
   });
 });
