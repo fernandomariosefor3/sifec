@@ -127,6 +127,22 @@ export async function getSchoolFlowResult(
   return snap.empty ? null : (snap.docs[0].data() as SchoolFlowResult);
 }
 
+// Mesmo filtro de getSchoolFlowResult, SEM limit(1) — usada pela Sala de
+// Situação (revisão do code review do PR #16, seção 7) para detectar
+// documentos DUPLICADOS pela chave natural schoolId+anoLetivo, inclusive
+// quando um documento antigo tem ID não canônico. getSchoolFlowResult()
+// continua com limit(1) para todo o resto do app.
+export async function listSchoolFlowResultsForSchoolYear(schoolId: string, anoLetivo: number): Promise<SchoolFlowResult[]> {
+  const snap = await getDocs(
+    query(
+      collection(db, COLLECTION),
+      where('schoolId', '==', schoolId),
+      where('anoLetivo', '==', anoLetivo)
+    )
+  );
+  return snap.docs.map(d => d.data() as SchoolFlowResult);
+}
+
 // Busca o resultado de VÁRIAS escolas para o mesmo ano letivo — uma consulta
 // por escola (nunca a coleção inteira sem filtro: a regra de leitura só
 // autoriza consultas filtradas por schoolId, ver firestore.rules). Não
