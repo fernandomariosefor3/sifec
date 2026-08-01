@@ -99,8 +99,6 @@ export default function SalaDeSituacaoView() {
     schools: visibleSchools,
     anoLetivo,
     bimestre,
-    scopeMode,
-    selectedSchoolId,
     isFirebaseMode,
   });
 

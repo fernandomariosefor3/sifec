@@ -864,19 +864,25 @@ service cloud.firestore {
 
       // Update = correção do MESMO acompanhamento (mesma escola/turma/ano/
       // bimestre) — nunca uma forma de mudar de turma/ano/bimestre mantendo
-      // o ID. id/schoolId/codInep/escolaNome/turmaId/anoLetivo/bimestre/
-      // createdAt/createdBy travados como imutáveis — mesmo padrão de
-      // school_years/school_flow_results (comparação par-a-par em vez de
+      // o ID. id/schoolId/codInep/escolaNome/turmaId/turmaNome/anoLetivo/
+      // bimestre/createdAt/createdBy travados como imutáveis — mesmo padrão
+      // de school_years/school_flow_results (comparação par-a-par em vez de
       // diff().affectedKeys(): esta coleção não tem um subconjunto pequeno
       // e fixo de campos alteráveis como student_rosters tinha só
       // studentName/active — quase todo campo pode mudar numa correção do
       // relatório, então travar só os campos de identidade é mais direto).
+      // turmaNome incluído na revisão do code review do PR #17, seção 3: o
+      // nome exibido da turma faz parte da identidade do acompanhamento
+      // tanto quanto turmaId — sem esta trava, uma correção podia renomear
+      // silenciosamente a turma de um relatório já registrado sem tocar
+      // turmaId, divergindo do nome real cadastrado em `turmas`.
       allow update: if isValidId(monitoringId) &&
         canWriteEscola(resource.data.escolaNome) &&
         incoming().schoolId == resource.data.schoolId &&
         incoming().codInep == resource.data.codInep &&
         incoming().escolaNome == resource.data.escolaNome &&
         incoming().turmaId == resource.data.turmaId &&
+        incoming().turmaNome == resource.data.turmaNome &&
         incoming().anoLetivo == resource.data.anoLetivo &&
         incoming().bimestre == resource.data.bimestre &&
         incoming().createdAt == resource.data.createdAt &&

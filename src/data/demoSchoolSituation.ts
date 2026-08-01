@@ -65,6 +65,7 @@ function buildDemoSituation(
     ? {
         turmasCadastradas: 6, turmasComRelatorio: 4, turmasSemRelatorio: 2,
         turmasCompletas: 2, turmasParciais: 2, turmasSemPreenchimento: 0,
+        expectedGradeEntries: 480, completedGradeEntries: 438,
         percentualPreenchimentoGeral: 91.2,
         dataQuality: 'incompleto',
       }

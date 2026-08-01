@@ -14,8 +14,23 @@ import {
 import {
   calculateCompletionPercentage,
   calculatePendingStudents,
+  classifyTurmaGradeEntryStatus,
+  type TurmaGradeEntryStatus,
 } from '../../lib/gradeEntryMonitoringCalculations';
 import type { Bimestre, GradeEntryMonitoring, GradeEntryMonitoringStatus } from '../../types/gradeEntryMonitoring';
+
+// Mesmos rótulos/cores de STATUS_BADGE em GradeEntryMonitoringTable.tsx,
+// exceto 'nao_informado': aqui significa "ainda não há dados suficientes
+// para classificar" (formulário em edição), não "nenhum relatório
+// informado" (que já não se aplica dentro do próprio formulário de
+// registro) — revisão do code review do PR #17, seção 7.
+const RESULTING_STATUS_INFO: Record<TurmaGradeEntryStatus, { label: string; className: string }> = {
+  nao_informado: { label: 'Não informado', className: 'bg-slate-100 text-slate-500 border-slate-200' },
+  sem_preenchimento: { label: 'Sem preenchimento', className: 'bg-rose-50 text-rose-700 border-rose-200' },
+  parcial: { label: 'Preenchimento parcial', className: 'bg-amber-50 text-amber-700 border-amber-200' },
+  completo: { label: 'Preenchimento completo', className: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  inconsistente: { label: 'Inconsistente', className: 'bg-orange-50 text-orange-700 border-orange-300' },
+};
 
 interface SchoolLike {
   id: string;
@@ -97,6 +112,14 @@ export default function GradeEntryMonitoringFormModal({
   const entriesConsistent = allFieldsFilled && parsed.completedGradeEntries <= parsed.expectedGradeEntries;
   const percentage = allFieldsFilled ? calculateCompletionPercentage(parsed) : null;
   const pendingStudents = allFieldsFilled ? calculatePendingStudents(parsed) : null;
+  // Mesma função pura usada por GradeEntryMonitoringTable — nunca duplicada
+  // aqui (seção 7 do code review do PR #17). Antes de todos os campos
+  // preenchidos, `parsed` tem NaN nos campos ainda vazios; em vez de deixar
+  // isMathematicallyConsistent classificar isso como "inconsistente" (o que
+  // seria enganoso enquanto o usuário ainda está digitando), o próprio
+  // formulário usa 'nao_informado' — a mesma semântica que a função já usa
+  // para "nenhum documento ainda".
+  const resultingStatus: TurmaGradeEntryStatus = allFieldsFilled ? classifyTurmaGradeEntryStatus(parsed) : 'nao_informado';
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -129,12 +152,13 @@ export default function GradeEntryMonitoringFormModal({
         ...parsed,
         status,
         referenceDate: referenceDate.trim(),
-        sourceReportTitle: sourceReportTitle.trim() === '' ? undefined : sourceReportTitle.trim(),
-        sourceFileName: sourceFileName.trim() === '' ? undefined : sourceFileName.trim(),
         // null (nunca undefined) quando o campo é enviado vazio — garante
-        // que uma observação existente é REMOVIDA, não preservada por
-        // engano (mesmo cuidado de StudentBimesterGradeFormModal antes da
-        // Fase 2C.1, ver buildGradeEntryMonitoringPayload).
+        // que um título/nome de arquivo/observação já existente é REMOVIDO,
+        // nunca preservado por engano (revisão do code review do PR #17,
+        // seção 6, estendida de `observation` para os três metadados de
+        // origem — ver buildGradeEntryMonitoringPayload).
+        sourceReportTitle: sourceReportTitle.trim() === '' ? null : sourceReportTitle.trim(),
+        sourceFileName: sourceFileName.trim() === '' ? null : sourceFileName.trim(),
         observation: observation.trim() === '' ? null : observation.trim(),
         actingUserEmail: email,
         now: new Date().toISOString(),
@@ -257,6 +281,17 @@ export default function GradeEntryMonitoringFormModal({
                 {allFieldsFilled ? `${studentsSum} de ${parsed.totalStudents}` : '—'}
               </div>
             </div>
+          </div>
+
+          {/* Situação resultante: atualiza em tempo real conforme os totais
+              são digitados, usando a mesma classificação de
+              GradeEntryMonitoringTable (revisão do code review do PR #17,
+              seção 7). */}
+          <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-xl px-3 py-2.5">
+            <span className="text-[9px] font-bold text-slate-400 uppercase">Situação resultante</span>
+            <span className={`inline-block px-2 py-0.5 rounded-md border text-[10px] font-bold whitespace-nowrap ${RESULTING_STATUS_INFO[resultingStatus].className}`}>
+              {RESULTING_STATUS_INFO[resultingStatus].label}
+            </span>
           </div>
 
           {allFieldsFilled && !sumMatches && (

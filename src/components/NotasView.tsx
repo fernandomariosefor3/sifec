@@ -6,9 +6,17 @@
 // correção. Este módulo NUNCA lê nem grava student_rosters/
 // student_bimester_grades/grades — só grade_entry_monitoring, sempre
 // filtrado por schoolId.
-import React, { useEffect, useMemo, useState } from 'react';
+//
+// Revisão do code review do PR #17: turmas passam a vir de
+// useSchoolClassrooms (consulta escopada por escola — seção 2), nunca mais
+// de subscribeToCollection('turmas') na coleção inteira. Falha de leitura
+// de turmas OU de grade_entry_monitoring nunca é tratada como "nenhum
+// relatório informado" (seção 1) — cada fonte expõe um status explícito, e
+// uma falha real esconde a tabela por trás de um aviso com "Tentar
+// novamente", em vez de renderizar zeros ou classificações inventadas.
+import { useEffect, useMemo, useState } from 'react';
 import { auth } from '../lib/firebase';
-import { SEED_SCHOOLS, SEED_TURMAS, subscribeToCollection } from '../lib/firebaseService';
+import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
   getSuperintendents,
   getActiveSuperintendentId,
@@ -18,6 +26,7 @@ import {
   hasSchoolWriteAccess,
 } from '../lib/superintendentService';
 import { getClassroomsForSchoolYear } from '../lib/classService';
+import { useSchoolClassrooms } from '../hooks/useSchoolClassrooms';
 import { useGradeEntryMonitoring } from '../hooks/useGradeEntryMonitoring';
 import { consolidateGradeEntryMonitoring } from '../lib/gradeEntryMonitoringCalculations';
 import { buildAnoLetivoOptions } from '../lib/anoLetivoOptions';
@@ -27,7 +36,6 @@ import GradeEntryMonitoringTable, {
   type StatusFilter,
 } from './notas/GradeEntryMonitoringTable';
 import GradeEntryMonitoringFormModal from './notas/GradeEntryMonitoringFormModal';
-import type { Turma } from '../types/classroom';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
 
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
@@ -42,7 +50,6 @@ export default function NotasView() {
   const [isFirebaseMode, setIsFirebaseMode] = useState(false);
   const [activeSuperId, setActiveSuperId] = useState('all');
   const [adminScope, setAdminScope] = useState(getAdminSchoolScope());
-  const [turmas, setTurmas] = useState<Turma[]>(SEED_TURMAS as unknown as Turma[]);
   const [anoLetivo, setAnoLetivo] = useState(() => new Date().getFullYear());
   // Âncora sempre no ano corrente REAL — o conjunto de opções não "desliza"
   // conforme o usuário navega entre anos, sempre os mesmos três.
@@ -77,16 +84,6 @@ export default function NotasView() {
     };
   }, []);
 
-  // Turmas reais da Fase 2A — nunca uma lista própria recalculada aqui.
-  useEffect(() => {
-    if (!isFirebaseMode) {
-      setTurmas(SEED_TURMAS as unknown as Turma[]);
-      return;
-    }
-    const unsubscribe = subscribeToCollection('turmas', loaded => setTurmas(loaded as Turma[]));
-    return () => unsubscribe();
-  }, [isFirebaseMode]);
-
   const superintendents = getSuperintendents();
   const activeSuper = superintendents.find(s => s.id === activeSuperId) || (superintendents.length > 0 ? superintendents[0] : null);
   const visibleSchools = useMemo(
@@ -109,6 +106,15 @@ export default function NotasView() {
 
   const selectedSchool: SchoolLike | null = visibleSchools.find(s => s.id === selectedSchoolId) ?? null;
 
+  // Turmas de UMA escola por vez (nunca a coleção inteira — seção 2 do code
+  // review do PR #17). Não depende de anoLetivo: as turmas da escola inteira
+  // são carregadas uma vez por escola/sessão, e o ano letivo filtra em
+  // memória via getClassroomsForSchoolYear, sem nova consulta ao Firestore.
+  const {
+    turmas, status: turmasStatus, loading: turmasLoading, loadError: turmasError, refresh: refreshTurmas,
+  } = useSchoolClassrooms(selectedSchool ? selectedSchool.id : null, isFirebaseMode);
+  const turmasUnavailable = turmasStatus === 'failure';
+
   // Identidade da turma resolvida pela cascata real da Fase 2A (codInep →
   // schoolId/escolaId → nome normalizado só como último recurso).
   const turmasDaEscola = useMemo(
@@ -116,12 +122,15 @@ export default function NotasView() {
     [turmas, selectedSchool, anoLetivo]
   );
 
-  const { monitoring, loading, loadError, refresh } = useGradeEntryMonitoring(
+  const {
+    monitoring, status: monitoringStatus, loading: monitoringLoading, loadError: monitoringError, refresh: refreshMonitoring,
+  } = useGradeEntryMonitoring(
     selectedSchool ? selectedSchool.id : null,
     anoLetivo,
     bimestre,
     isFirebaseMode
   );
+  const monitoringUnavailable = monitoringStatus === 'failure';
 
   const monitoringByTurmaId = useMemo(() => {
     const map = new Map<string, (typeof monitoring)[number]>();
@@ -137,6 +146,7 @@ export default function NotasView() {
   }));
 
   const consolidated = consolidateGradeEntryMonitoring(rows);
+  const isLoading = turmasLoading || monitoringLoading;
 
   const scopeLabel = getSchoolScopeLabel({
     superintendent: activeSuper,
@@ -206,16 +216,30 @@ export default function NotasView() {
         <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
           Selecione uma escola para carregar o acompanhamento de notas.
         </div>
+      ) : turmasUnavailable ? (
+        <div className="bg-white border border-rose-200 rounded-2xl p-10 text-center text-xs">
+          <p className="text-rose-500 font-bold mb-1">
+            Não foi possível carregar as turmas desta escola{turmasError ? `: ${turmasError}` : '.'}
+          </p>
+          <p className="text-slate-400 mb-3">Nenhum dado de turma é exibido enquanto esta falha não for resolvida.</p>
+          <button
+            type="button"
+            onClick={refreshTurmas}
+            className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition"
+          >
+            Tentar novamente
+          </button>
+        </div>
       ) : (
         <>
-          <NotasSummaryCards stats={consolidated} loading={loading} />
+          <NotasSummaryCards stats={consolidated} loading={isLoading || monitoringUnavailable} />
 
-          {loadError && (
+          {monitoringError && (
             <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-              <span>{loadError}</span>
+              <span>{monitoringError}</span>
               <button
                 type="button"
-                onClick={refresh}
+                onClick={refreshMonitoring}
                 className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0"
               >
                 Tentar novamente
@@ -223,14 +247,20 @@ export default function NotasView() {
             </div>
           )}
 
-          <GradeEntryMonitoringTable
-            rows={rows}
-            loading={loading}
-            canWrite={canWrite}
-            statusFilter={statusFilter}
-            onStatusFilterChange={setStatusFilter}
-            onRegistrar={setModalRow}
-          />
+          {monitoringUnavailable ? (
+            <div className="bg-white border border-rose-200 rounded-2xl p-10 text-center text-xs text-rose-500 font-bold">
+              Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.
+            </div>
+          ) : (
+            <GradeEntryMonitoringTable
+              rows={rows}
+              loading={isLoading}
+              canWrite={canWrite}
+              statusFilter={statusFilter}
+              onStatusFilterChange={setStatusFilter}
+              onRegistrar={setModalRow}
+            />
+          )}
         </>
       )}
 
@@ -243,7 +273,7 @@ export default function NotasView() {
           bimestre={bimestre}
           existing={modalRow.monitoring}
           onClose={() => setModalRow(null)}
-          onSaved={refresh}
+          onSaved={refreshMonitoring}
         />
       )}
     </div>

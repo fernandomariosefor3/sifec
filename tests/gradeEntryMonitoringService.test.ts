@@ -91,6 +91,33 @@ describe('validateGradeEntryMonitoringInput', () => {
   it('aceita observação com exatamente 500 caracteres', () => {
     expect(() => validateGradeEntryMonitoringInput(baseInput({ observation: 'x'.repeat(500) }))).not.toThrow();
   });
+
+  // Revisão do code review do PR #17, seção 6: mesma semântica de tamanho
+  // já aplicada a observation, estendida aos três metadados de origem.
+  it('rejeita sourceReportTitle acima de 200 caracteres, com mensagem clara', () => {
+    expect(() => validateGradeEntryMonitoringInput(baseInput({ sourceReportTitle: 'x'.repeat(201) })))
+      .toThrow(/Título do relatório limitado a 200 caracteres/);
+  });
+
+  it('aceita sourceReportTitle com exatamente 200 caracteres', () => {
+    expect(() => validateGradeEntryMonitoringInput(baseInput({ sourceReportTitle: 'x'.repeat(200) }))).not.toThrow();
+  });
+
+  it('rejeita sourceFileName acima de 200 caracteres, com mensagem clara', () => {
+    expect(() => validateGradeEntryMonitoringInput(baseInput({ sourceFileName: 'x'.repeat(201) })))
+      .toThrow(/Nome do arquivo limitado a 200 caracteres/);
+  });
+
+  it('rejeita sourceFileHash acima de 200 caracteres, com mensagem clara', () => {
+    expect(() => validateGradeEntryMonitoringInput(baseInput({ sourceFileHash: 'x'.repeat(201) })))
+      .toThrow(/Hash do arquivo limitado a 200 caracteres/);
+  });
+
+  it('null em qualquer metadado de origem nunca é validado quanto ao tamanho (remoção explícita, não um valor a validar)', () => {
+    expect(() => validateGradeEntryMonitoringInput(baseInput({
+      sourceReportTitle: null, sourceFileName: null, sourceFileHash: null, observation: null,
+    }))).not.toThrow();
+  });
 });
 
 describe('buildGradeEntryMonitoringPayload', () => {
@@ -149,6 +176,38 @@ describe('buildGradeEntryMonitoringPayload', () => {
     const original = buildGradeEntryMonitoringPayload(baseInput({ sourceReportTitle: 'Relatório original' }));
     const corrigido = buildGradeEntryMonitoringPayload(baseInput({ sourceReportTitle: 'Relatório novo' }), original);
     expect(corrigido.sourceReportTitle).toBe('Relatório novo');
+  });
+
+  // Revisão do code review do PR #17, seção 6: título existente pode ser
+  // apagado, nome do arquivo existente pode ser apagado, e cada remoção
+  // preserva os demais metadados intocados.
+  describe('sourceReportTitle/sourceFileName: undefined preserva, null remove explicitamente', () => {
+    it('título existente pode ser apagado (null explícito)', () => {
+      const original = buildGradeEntryMonitoringPayload(baseInput({ sourceReportTitle: 'Relatório a apagar' }));
+      const corrigido = buildGradeEntryMonitoringPayload(baseInput({ sourceReportTitle: null }), original) as unknown as Record<string, unknown>;
+      expect('sourceReportTitle' in corrigido).toBe(false);
+    });
+
+    it('nome do arquivo existente pode ser apagado (null explícito)', () => {
+      const original = buildGradeEntryMonitoringPayload(baseInput({ sourceFileName: 'relatorio-a-apagar.csv' }));
+      const corrigido = buildGradeEntryMonitoringPayload(baseInput({ sourceFileName: null }), original) as unknown as Record<string, unknown>;
+      expect('sourceFileName' in corrigido).toBe(false);
+    });
+
+    it('apagar o título preserva o nome do arquivo e a observação já existentes', () => {
+      const original = buildGradeEntryMonitoringPayload(baseInput({
+        sourceReportTitle: 'Relatório a apagar', sourceFileName: 'arquivo-preservado.csv', observation: 'Observação preservada',
+      }));
+      const corrigido = buildGradeEntryMonitoringPayload(baseInput({ sourceReportTitle: null }), original);
+      expect(corrigido.sourceFileName).toBe('arquivo-preservado.csv');
+      expect(corrigido.observation).toBe('Observação preservada');
+    });
+
+    it('sourceFileHash existente também pode ser apagado (null explícito)', () => {
+      const original = buildGradeEntryMonitoringPayload(baseInput({ sourceFileHash: 'hash-a-apagar' }));
+      const corrigido = buildGradeEntryMonitoringPayload(baseInput({ sourceFileHash: null }), original) as unknown as Record<string, unknown>;
+      expect('sourceFileHash' in corrigido).toBe(false);
+    });
   });
 
   describe('observation: undefined preserva, null remove explicitamente', () => {

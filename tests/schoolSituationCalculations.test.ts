@@ -386,33 +386,87 @@ describe('calculatePortfolioSituationSummary', () => {
     expect(summary.matriculaAtual).toBe(96);
   });
 
+  // Revisão do code review do PR #17, seção 5: percentual PONDERADO (soma
+  // de completedGradeEntries / soma de expectedGradeEntries de todas as
+  // escolas com notas disponíveis) — nunca a média simples do percentual de
+  // cada escola.
+  function notasComTotais(overrides: Partial<NonNullable<SchoolSituation['notas']>> = {}): NonNullable<SchoolSituation['notas']> {
+    return {
+      turmasCadastradas: 1, turmasComRelatorio: 1, turmasSemRelatorio: 0,
+      turmasCompletas: 1, turmasParciais: 0, turmasSemPreenchimento: 0,
+      expectedGradeEntries: 100, completedGradeEntries: 100,
+      percentualPreenchimentoGeral: 100, dataQuality: 'atualizado',
+      ...overrides,
+    };
+  }
+
   it('percentual de preenchimento de notas é null quando nenhuma escola teve notas carregadas', () => {
     const summary = calculatePortfolioSituationSummary([buildSituation({ notas: null })]);
     expect(summary.percentualPreenchimentoNotas).toBeNull();
+    expect(summary.escolasComNotasConsideradas).toBe(0);
   });
 
-  it('percentual de preenchimento de notas é a média das escolas com notas carregadas', () => {
-    const withGrades = buildSituation({
-      notas: {
-        turmasCadastradas: 1, turmasComRelatorio: 1, turmasSemRelatorio: 0,
-        turmasCompletas: 1, turmasParciais: 0, turmasSemPreenchimento: 0,
-        percentualPreenchimentoGeral: 100, dataQuality: 'atualizado',
-      },
-    });
+  it('escola única com notas carregadas: percentual bate com o da própria escola', () => {
+    const withGrades = buildSituation({ notas: notasComTotais({ expectedGradeEntries: 100, completedGradeEntries: 100 }) });
     const summary = calculatePortfolioSituationSummary([withGrades, buildSituation({ schoolId: 'esc2', notas: null })]);
     expect(summary.percentualPreenchimentoNotas).toBe(100);
+    expect(summary.escolasComNotasConsideradas).toBe(1);
   });
 
-  it('percentual de preenchimento de notas é null quando notas foi carregada mas nenhuma turma com relatório tem lançamentos esperados', () => {
+  it('escola pequena com 100% e escola grande com 50%: resultado é ponderado pelo volume real, nunca a média simples (75%)', () => {
+    // Escola pequena: 10 lançamentos esperados, 100% preenchido (10
+    // completados). Escola grande: 1000 lançamentos esperados, 50%
+    // preenchido (500 completados). Média simples dos percentuais seria
+    // (100 + 50) / 2 = 75% — errado, pesaria a escola pequena igual à
+    // grande. O resultado ponderado correto é (10 + 500) / (10 + 1000).
+    const escolaPequena = buildSituation({
+      schoolId: 'pequena',
+      notas: notasComTotais({ expectedGradeEntries: 10, completedGradeEntries: 10, percentualPreenchimentoGeral: 100 }),
+    });
+    const escolaGrande = buildSituation({
+      schoolId: 'grande',
+      notas: notasComTotais({ expectedGradeEntries: 1000, completedGradeEntries: 500, percentualPreenchimentoGeral: 50 }),
+    });
+    const summary = calculatePortfolioSituationSummary([escolaPequena, escolaGrande]);
+    const esperado = ((10 + 500) / (10 + 1000)) * 100;
+    expect(summary.percentualPreenchimentoNotas).toBeCloseTo(esperado, 5);
+    expect(summary.percentualPreenchimentoNotas).not.toBeCloseTo(75, 5);
+    expect(summary.escolasComNotasConsideradas).toBe(2);
+  });
+
+  it('percentual de preenchimento de notas é null quando a soma de expectedGradeEntries do conjunto é zero', () => {
     const semLancamentos = buildSituation({
-      notas: {
-        turmasCadastradas: 1, turmasComRelatorio: 1, turmasSemRelatorio: 0,
-        turmasCompletas: 0, turmasParciais: 0, turmasSemPreenchimento: 1,
-        percentualPreenchimentoGeral: null, dataQuality: 'incompleto',
-      },
+      notas: notasComTotais({
+        turmasComRelatorio: 1, turmasCompletas: 0, turmasSemPreenchimento: 1,
+        expectedGradeEntries: 0, completedGradeEntries: 0, percentualPreenchimentoGeral: null, dataQuality: 'incompleto',
+      }),
     });
     const summary = calculatePortfolioSituationSummary([semLancamentos]);
     expect(summary.percentualPreenchimentoNotas).toBeNull();
+  });
+
+  it('escola com notas indisponível (fonte de turmas falhou) fica fora da soma ponderada', () => {
+    const disponivel = buildSituation({
+      schoolId: 'esc1',
+      notas: notasComTotais({ expectedGradeEntries: 100, completedGradeEntries: 100 }),
+    });
+    const indisponivel = buildSituation({
+      schoolId: 'esc2',
+      notas: notasComTotais({ expectedGradeEntries: 1000, completedGradeEntries: 0, percentualPreenchimentoGeral: 0, dataQuality: 'indisponivel' }),
+    });
+    const summary = calculatePortfolioSituationSummary([disponivel, indisponivel]);
+    // Se a escola indisponível entrasse na soma, o resultado cairia para
+    // perto de 9% (100 / 1100) — o correto é ignorá-la por completo e
+    // manter 100%, só com a escola disponível.
+    expect(summary.percentualPreenchimentoNotas).toBe(100);
+    expect(summary.escolasComNotasConsideradas).toBe(1);
+  });
+
+  it('escola com notas null (fonte de grade_entry_monitoring falhou) fica fora da soma ponderada', () => {
+    const disponivel = buildSituation({ schoolId: 'esc1', notas: notasComTotais() });
+    const semNotas = buildSituation({ schoolId: 'esc2', notas: null });
+    const summary = calculatePortfolioSituationSummary([disponivel, semNotas]);
+    expect(summary.escolasComNotasConsideradas).toBe(1);
   });
 
   it('conta escolas com pendências e com fluxo informado', () => {

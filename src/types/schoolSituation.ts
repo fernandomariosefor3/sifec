@@ -124,10 +124,14 @@ export interface SchoolFlowIndicators {
   dataQuality: DataQualityState;
 }
 
-// null: notas ainda não carregadas para esta escola (visão global sem
-// escola selecionada — seção 13 do plano, nunca carrega turmas/notas das 56
-// escolas de uma vez). Nunca inclui nome de estudante — agregado por TURMA
-// (Fase 2C.1, ver src/lib/gradeEntryMonitoringCalculations.ts).
+// null: fonte grade_entry_monitoring desta escola falhou ao carregar
+// (indisponível — nunca confundido com "sem_dados", que é um
+// GradeEntryMonitoringIndicators real com todos os contadores em zero).
+// Nunca inclui nome de estudante — agregado por TURMA (Fase 2C.1, ver
+// src/lib/gradeEntryMonitoringCalculations.ts). Revisão do code review do
+// PR #17: grade_entry_monitoring é uma fonte AGREGADA (nunca nominal), por
+// isso é carregada para TODAS as escolas visíveis, inclusive na visão
+// global — nunca mais restrita à escola selecionada.
 export interface GradeEntryMonitoringIndicators {
   turmasCadastradas: number;
   turmasComRelatorio: number;
@@ -135,6 +139,12 @@ export interface GradeEntryMonitoringIndicators {
   turmasCompletas: number;
   turmasParciais: number;
   turmasSemPreenchimento: number;
+  // Totais brutos desta escola — usados por calculatePortfolioSituationSummary
+  // para consolidar carteira/visão global por SOMA (nunca por média simples
+  // dos percentuais de cada escola, que ponderaria uma escola pequena igual
+  // a uma grande — revisão do code review do PR #17, seção 5).
+  expectedGradeEntries: number;
+  completedGradeEntries: number;
   // Soma de completedGradeEntries / soma de expectedGradeEntries das turmas
   // com relatório — null quando nenhuma turma com relatório tem
   // expectedGradeEntries > 0 (nunca 0% automático).
@@ -162,9 +172,12 @@ export interface SchoolSituation {
   estrutura: SchoolStructureIndicators;
   matricula: EnrollmentMovementIndicators;
   fluxo: SchoolFlowIndicators;
-  // null só quando as notas não foram carregadas para esta escola (ver
-  // GradeEntryMonitoringIndicators) — nunca confundir com "sem_dados" (que é
-  // um GradeEntryMonitoringIndicators real com todos os contadores em zero).
+  // null só quando a leitura de grade_entry_monitoring desta escola falhou
+  // (revisão do code review do PR #17: notas agora é carregada para TODA
+  // escola visível, carteira ou visão global — deixou de existir um estado
+  // "ainda não solicitada" no fluxo normal da aplicação) — nunca confundir
+  // com "sem_dados" (que é um GradeEntryMonitoringIndicators real com todos
+  // os contadores em zero, ver GradeEntryMonitoringIndicators).
   notas: GradeEntryMonitoringIndicators | null;
   visitas: VisitIndicators;
   pendencias: SchoolSituationPendingItem[];
@@ -179,8 +192,17 @@ export interface PortfolioSituationSummary {
   turmasAtivas: number;
   matriculaAtual: number;
   escolasComRegistroMensalEmDia: number;
-  // null quando nenhuma escola do conjunto teve notas carregadas.
+  // Soma de completedGradeEntries / soma de expectedGradeEntries de todas as
+  // escolas com notas disponíveis (revisão do code review do PR #17, seção
+  // 5) — NUNCA a média simples do percentual de cada escola, que pesaria
+  // uma escola pequena igual a uma grande. null quando a soma de
+  // expectedGradeEntries do conjunto é zero.
   percentualPreenchimentoNotas: number | null;
+  // Quantas escolas efetivamente entraram na soma acima — nunca
+  // escolasAcompanhadas, já que escolas com notas indisponíveis (fonte
+  // falhou) ou com percentual não calculável (nenhuma turma com relatório)
+  // ficam de fora (revisão do code review do PR #17, seção 5).
+  escolasComNotasConsideradas: number;
   escolasComFluxoInformado: number;
   escolasComPendencias: number;
   // Revisão do code review do PR #16 (seção 9): quantas escolas do conjunto

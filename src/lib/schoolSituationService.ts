@@ -72,8 +72,12 @@ export interface SchoolSituationSchoolInput {
 }
 
 export interface FetchSchoolSituationOptions {
-  // false na visão global sem escola selecionada (seção 13 do plano: nunca
-  // carregar nomes/notas das 56 escolas de uma vez).
+  // grade_entry_monitoring é uma fonte agregada (nunca nominal), então
+  // useSchoolSituation.ts sempre passa true — includeGrades continua
+  // existindo como capacidade genérica do serviço (usada diretamente pelos
+  // testes unitários para isolar o comportamento de notas) e para permitir
+  // que um chamador futuro opte por pular essa fonte por razão de
+  // performance, sem precisar de outro parâmetro.
   includeGrades: boolean;
   bimestre: Bimestre;
 }
@@ -258,8 +262,6 @@ interface GradeEntryMonitoringLoadResult {
   failures: SchoolSituationSourceFailure[];
 }
 
-// Só chamada quando includeGrades é true (seção 13 do plano — nunca carrega
-// notas das 56 escolas de uma vez na visão global sem escola selecionada).
 // Se grade_entry_monitoring falhou, notas fica indisponível — nunca
 // calculado a partir de dado parcial (seção 3 do code review). turmasDoAno
 // já vem resolvido pelo chamador (mesmo conjunto usado por

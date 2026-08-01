@@ -17,6 +17,7 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
     matriculaAtual,
     escolasComRegistroMensalEmDia,
     percentualPreenchimentoNotas,
+    escolasComNotasConsideradas,
     escolasComFluxoInformado,
     escolasComPendencias,
     escolasComFontesIndisponiveis,
@@ -42,9 +43,15 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
       accent: 'border-sky-200 bg-sky-50 text-sky-700',
     },
     {
+      // Revisão do code review do PR #17, seção 5: percentual ponderado
+      // (soma de lançamentos realizados / soma de lançamentos esperados de
+      // toda a carteira/visão global) — nunca a média simples do percentual
+      // de cada escola.
       label: 'Preenchimento de notas', icon: <Users size={16} />,
       value: percentualPreenchimentoNotas == null ? '—' : `${percentualPreenchimentoNotas.toFixed(1)}%`,
-      detail: percentualPreenchimentoNotas == null ? 'Selecione uma escola para carregar' : 'média das escolas carregadas',
+      detail: percentualPreenchimentoNotas == null
+        ? 'Nenhuma escola com dado calculável'
+        : `ponderado — ${escolasComNotasConsideradas} escola(s) consideradas`,
       accent: 'border-violet-200 bg-violet-50 text-violet-700',
     },
     {

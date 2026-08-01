@@ -6,6 +6,7 @@
 // completedGradeEntries=0); a AUSÊNCIA de documento nunca é tratada como
 // zero — ver classifyTurmaGradeEntryStatus.
 import type { GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
+import { isNonNegativeInteger } from './enrollmentCalculations';
 
 export type TurmaGradeEntryStatus =
   | 'nao_informado'
@@ -23,12 +24,25 @@ export interface GradeEntryCounts {
   completedGradeEntries: number;
 }
 
+const COUNT_FIELDS: readonly (keyof GradeEntryCounts)[] = [
+  'totalStudents', 'studentsWithCompleteGrades', 'studentsWithPartialGrades',
+  'studentsWithoutGrades', 'expectedGradeEntries', 'completedGradeEntries',
+];
+
 // completedGradeEntries <= expectedGradeEntries e a soma dos três estados de
 // estudante bate com totalStudents — a mesma verificação que
 // validateGradeEntryMonitoringInput já exige antes de gravar (ver
 // gradeEntryMonitoringService.ts); aqui ela também protege a classificação
-// de um documento legado/corrompido que tenha passado por fora da validação.
+// de um documento legado/corrompido que tenha passado por fora da validação
+// (ex.: gravado direto no console do Firebase, ou por uma versão anterior
+// das regras) — cada contador precisa ser um inteiro não-negativo antes de
+// qualquer comparação: negativo, NaN, Infinity ou fracionário em QUALQUER
+// campo já é inconsistente, mesmo que a soma "bata" numericamente (ex.:
+// completedGradeEntries = Infinity nunca é <= um expectedGradeEntries
+// finito, mas um completedGradeEntries = NaN faria toda comparação
+// numérica falhar silenciosamente sem esta checagem explícita).
 function isMathematicallyConsistent(counts: GradeEntryCounts): boolean {
+  if (!COUNT_FIELDS.every(field => isNonNegativeInteger(counts[field]))) return false;
   const studentsSum = counts.studentsWithCompleteGrades + counts.studentsWithPartialGrades + counts.studentsWithoutGrades;
   return studentsSum === counts.totalStudents && counts.completedGradeEntries <= counts.expectedGradeEntries;
 }
@@ -56,11 +70,17 @@ export function calculatePendingStudents(
   return counts.studentsWithPartialGrades + counts.studentsWithoutGrades;
 }
 
-// `null` (não `GradeEntryMonitoring | undefined`) representa "nenhum
-// relatório informado ainda para esta turma/ano/bimestre" — a turma nasce
-// da coleção `turmas`, o documento de monitoramento é opcional (seção 9 do
-// plano: "mesmo sem documento, a turma deve aparecer").
-export function classifyTurmaGradeEntryStatus(monitoring: GradeEntryMonitoring | null): TurmaGradeEntryStatus {
+// `null` (não `GradeEntryCounts | undefined`) representa "nenhum relatório
+// informado ainda para esta turma/ano/bimestre" — a turma nasce da coleção
+// `turmas`, o documento de monitoramento é opcional (seção 9 do plano:
+// "mesmo sem documento, a turma deve aparecer"). Parâmetro tipado como
+// `GradeEntryCounts` (não `GradeEntryMonitoring`) de propósito — só os seis
+// contadores importam para a classificação, então a mesma função pura serve
+// tanto para um documento já gravado (GradeEntryMonitoringTable) quanto
+// para os totais ainda em edição no formulário, antes de salvar
+// (GradeEntryMonitoringFormModal — revisão do code review do PR #17, seção
+// 7: "situação resultante" em tempo real sem duplicar esta lógica).
+export function classifyTurmaGradeEntryStatus(monitoring: GradeEntryCounts | null): TurmaGradeEntryStatus {
   if (!monitoring) return 'nao_informado';
   if (!isMathematicallyConsistent(monitoring)) return 'inconsistente';
   if (monitoring.completedGradeEntries === 0) return 'sem_preenchimento';

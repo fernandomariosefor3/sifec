@@ -3,17 +3,28 @@
 // multiusuário, filtros, estados vazios, recarregamento após salvar, modo
 // demonstração, ano letivo). Usa o superintendentService.ts REAL (via
 // localStorage, mesmo padrão de tests/fluxoView.component.test.tsx) para
-// exercitar o escopo de verdade — só firebase.ts (auth) e
-// gradeEntryMonitoringService.ts são mockados. NotasView agora é o
-// acompanhamento AGREGADO por turma (nunca por estudante — ver
-// docs/descontinuacao-prototipo-notas-nominais.md); não há mais drill-down
-// por estudante, cada turma já tem sua própria ação "Registrar/Atualizar
-// acompanhamento" direto na tabela.
+// exercitar o escopo de verdade — só firebase.ts (auth), classService.ts
+// (listClassroomsForSchool) e gradeEntryMonitoringService.ts são mockados.
+// NotasView agora é o acompanhamento AGREGADO por turma (nunca por
+// estudante — ver docs/descontinuacao-prototipo-notas-nominais.md); não há
+// mais drill-down por estudante, cada turma já tem sua própria ação
+// "Registrar/Atualizar acompanhamento" direto na tabela.
+//
+// Revisão do code review do PR #17: turmas passam a vir de
+// listClassroomsForSchool (consulta escopada por escola — seção 2), nunca
+// mais de subscribeToCollection('turmas') completo. mockListClassrooms
+// simula esse comportamento filtrando SEED_TURMAS por escolaId, provando
+// que a consulta é escopada por escola (o mock só devolveria turma de
+// outra escola se o chamador pedisse o schoolId errado). Falha de leitura
+// de turmas OU de grade_entry_monitoring nunca é tratada como "nenhum
+// relatório informado" (seção 1).
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
 import NotasView from '../src/components/NotasView';
 import { getSuperintendents, saveSuperintendents, setActiveSuperintendentId, setAdminSchoolScope } from '../src/lib/superintendentService';
+import { SEED_TURMAS } from '../src/lib/firebaseService';
+import type { Turma } from '../src/types/classroom';
 
 const FIXED_NOW = new Date('2026-03-15T12:00:00.000Z');
 
@@ -23,7 +34,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const { authStateListeners, mockAuth, mockListMonitoring, mockSaveMonitoring } = vi.hoisted(() => {
+const { authStateListeners, mockAuth, mockListMonitoring, mockSaveMonitoring, mockListClassrooms } = vi.hoisted(() => {
   const listeners: Array<(user: unknown) => void> = [];
   return {
     authStateListeners: listeners,
@@ -39,18 +50,15 @@ const { authStateListeners, mockAuth, mockListMonitoring, mockSaveMonitoring } =
     },
     mockListMonitoring: vi.fn(),
     mockSaveMonitoring: vi.fn(),
+    mockListClassrooms: vi.fn(),
   };
 });
 
 vi.mock('../src/lib/firebase', () => ({ auth: mockAuth }));
 
-// subscribeToCollection('turmas', ...) real tentaria abrir um onSnapshot
-// contra o Firestore de verdade — nestes testes as turmas continuam vindo
-// de SEED_TURMAS, preservando os demais exports reais (SEED_SCHOOLS/
-// SEED_TURMAS).
-vi.mock('../src/lib/firebaseService', async importOriginal => {
-  const actual = await importOriginal<typeof import('../src/lib/firebaseService')>();
-  return { ...actual, subscribeToCollection: () => () => {} };
+vi.mock('../src/lib/classService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/lib/classService')>();
+  return { ...actual, listClassroomsForSchool: (...args: unknown[]) => mockListClassrooms(...args) };
 });
 
 vi.mock('../src/lib/gradeEntryMonitoringService', async importOriginal => {
@@ -110,6 +118,12 @@ describe('NotasView', () => {
     mockAuth.currentUser = null;
     mockListMonitoring.mockReset().mockResolvedValue([]);
     mockSaveMonitoring.mockReset();
+    // Comportamento padrão: filtra SEED_TURMAS por escolaId, provando que a
+    // consulta é escopada — nunca a coleção inteira (seção 2 do code
+    // review do PR #17).
+    mockListClassrooms.mockReset().mockImplementation(async (schoolId: string) =>
+      (SEED_TURMAS as unknown as Turma[]).filter(t => t.escolaId === schoolId)
+    );
   });
 
   it('sem escola selecionada, nenhum acompanhamento é carregado', async () => {
@@ -151,6 +165,158 @@ describe('NotasView', () => {
     expect(screen.getByText('3º Ano B - Vespertino')).toBeInTheDocument();
     expect(screen.getAllByText('Relatório não informado').length).toBe(2);
     expect(screen.getAllByRole('button', { name: 'Registrar acompanhamento' })).toHaveLength(2);
+  });
+
+  // Revisão do code review do PR #17, seção 2: turmas consultadas por UMA
+  // escola de cada vez (nunca a coleção inteira) — a escola A nunca vê
+  // turma da escola B, e a consulta é sempre feita com o schoolId correto.
+  it('escola A não carrega turma da escola B — consulta escopada por schoolId', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral', 'EEM Figueiredo Correia'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+
+    await waitFor(() => expect(mockListClassrooms).toHaveBeenCalledWith(DIVA_SCHOOL_ID));
+    await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
+    // mockListClassrooms nunca foi chamado com o schoolId da outra escola —
+    // a consulta é sempre escopada à escola selecionada.
+    expect(mockListClassrooms).not.toHaveBeenCalledWith('figueiredo-correia');
+  });
+
+  it('superintendente com uma única escola: consulta de turmas é feita só com o schoolId dessa escola', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+
+    await waitFor(() => expect(mockListClassrooms).toHaveBeenCalledTimes(1));
+    expect(mockListClassrooms).toHaveBeenCalledWith(DIVA_SCHOOL_ID);
+  });
+
+  it('trocar de escola dispara uma nova consulta escopada de turmas', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral', 'EEM Figueiredo Correia'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+    await waitFor(() => expect(mockListClassrooms).toHaveBeenCalledWith(DIVA_SCHOOL_ID));
+
+    await selectSchool('EEM Figueiredo Correia');
+    await waitFor(() => expect(mockListClassrooms).toHaveBeenCalledWith('figueiredo-correia'));
+    await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
+  });
+
+  describe('falha de leitura de turmas (seção 2 do code review do PR #17)', () => {
+    it('falha ao carregar turmas mostra aviso com "Tentar novamente" — nunca "nenhuma turma cadastrada"', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListClassrooms.mockRejectedValueOnce(new Error('Missing or insufficient permissions.'));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      await waitFor(() => expect(screen.getByText(/Não foi possível carregar as turmas desta escola/)).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument();
+      expect(screen.queryByText('Nenhuma turma cadastrada para esta escola e ano letivo — cadastre a turma em Gestão de Escolas.')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Registrar acompanhamento' })).not.toBeInTheDocument();
+    });
+
+    it('falha ao carregar turmas nunca restaura SEED_TURMAS', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListClassrooms.mockRejectedValueOnce(new Error('unavailable'));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      await waitFor(() => expect(screen.getByText(/Não foi possível carregar as turmas desta escola/)).toBeInTheDocument());
+      expect(screen.queryByText('3º Ano A - Matutino')).not.toBeInTheDocument();
+    });
+
+    it('retry bem-sucedido depois de uma falha de turmas restaura a tabela normal', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListClassrooms.mockRejectedValueOnce(new Error('unavailable'));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(screen.getByText(/Não foi possível carregar as turmas desta escola/)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+
+      await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
+      expect(screen.queryByText(/Não foi possível carregar as turmas desta escola/)).not.toBeInTheDocument();
+    });
+  });
+
+  describe('falha de leitura de grade_entry_monitoring (seção 1 do code review do PR #17)', () => {
+    it('falha nunca classifica turma como "Relatório não informado" nem mostra 0%, e desabilita o registro', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockRejectedValueOnce(new Error('Missing or insufficient permissions.'));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      await waitFor(() => expect(screen.getByText('Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.')).toBeInTheDocument());
+      expect(screen.queryByText('Relatório não informado')).not.toBeInTheDocument();
+      expect(screen.queryByText('0%')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Registrar acompanhamento' })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Atualizar acompanhamento' })).not.toBeInTheDocument();
+    });
+
+    it('retry bem-sucedido depois de uma falha de grade_entry_monitoring restaura tabela e indicadores normais', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockRejectedValueOnce(new Error('unavailable'));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(screen.getByText('Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.')).toBeInTheDocument());
+
+      mockListMonitoring.mockResolvedValueOnce([]);
+      fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
+
+      await waitFor(() => expect(screen.getAllByText('Relatório não informado').length).toBe(2));
+      expect(screen.queryByText('Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.')).not.toBeInTheDocument();
+      expect(screen.getAllByRole('button', { name: 'Registrar acompanhamento' })).toHaveLength(2);
+    });
+
+    // Revisão do code review do PR #17, seção 1: trocar de escola enquanto o
+    // acompanhamento está carregando nunca mostra a tabela da escola
+    // ANTERIOR — o estado de carregamento cobre a transição inteira.
+    it('trocar de escola nunca mostra o acompanhamento da escola anterior enquanto o novo carrega', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral', 'EEM Figueiredo Correia'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
+
+      let resolveNext: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockReturnValue(new Promise(resolve => { resolveNext = resolve; }));
+
+      await selectSchool('EEM Figueiredo Correia');
+
+      // Enquanto a nova consulta está em andamento, a turma da escola
+      // ANTERIOR nunca continua visível — a tabela mostra "Carregando".
+      expect(screen.queryByText('3º Ano B - Vespertino')).not.toBeInTheDocument();
+      expect(screen.getByText('Carregando turmas...')).toBeInTheDocument();
+
+      resolveNext([]);
+      await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
+    });
   });
 
   it('turma com relatório completo mostra os totais e a ação "Atualizar acompanhamento"', async () => {

@@ -79,6 +79,40 @@ describe('classifyTurmaGradeEntryStatus', () => {
     const monitoring = buildMonitoring({ completedGradeEntries: 130, expectedGradeEntries: 120 });
     expect(classifyTurmaGradeEntryStatus(monitoring)).toBe('inconsistente');
   });
+
+  // Revisão do code review do PR #17, seção 8: mesmo que firestore.rules já
+  // impeça a CRIAÇÃO de um documento inválido, o painel ainda precisa
+  // classificar corretamente um documento legado/corrompido inserido fora
+  // do fluxo normal (ex.: console do Firebase, migração, versão anterior
+  // das regras) — qualquer contador negativo, fracionário, NaN ou Infinity
+  // é sempre "inconsistente", mesmo quando a comparação numérica "parece"
+  // fechar.
+  describe('classifica como inconsistente qualquer contador inválido (revisão do PR #17, seção 8)', () => {
+    it('contador negativo', () => {
+      const monitoring = buildMonitoring({ studentsWithoutGrades: -1, totalStudents: 29 });
+      expect(classifyTurmaGradeEntryStatus(monitoring)).toBe('inconsistente');
+    });
+
+    it('contador fracionário', () => {
+      const monitoring = buildMonitoring({ completedGradeEntries: 60.5, expectedGradeEntries: 120 });
+      expect(classifyTurmaGradeEntryStatus(monitoring)).toBe('inconsistente');
+    });
+
+    it('contador NaN', () => {
+      const monitoring = buildMonitoring({ completedGradeEntries: NaN });
+      expect(classifyTurmaGradeEntryStatus(monitoring)).toBe('inconsistente');
+    });
+
+    it('contador Infinity — nunca comparado como "sempre menor" ou "sempre maior" sem checagem explícita', () => {
+      const monitoring = buildMonitoring({ completedGradeEntries: Infinity, expectedGradeEntries: 120 });
+      expect(classifyTurmaGradeEntryStatus(monitoring)).toBe('inconsistente');
+    });
+
+    it('expectedGradeEntries Infinity com completedGradeEntries finito também é inconsistente', () => {
+      const monitoring = buildMonitoring({ completedGradeEntries: 60, expectedGradeEntries: Infinity });
+      expect(classifyTurmaGradeEntryStatus(monitoring)).toBe('inconsistente');
+    });
+  });
 });
 
 describe('consolidateGradeEntryMonitoring', () => {

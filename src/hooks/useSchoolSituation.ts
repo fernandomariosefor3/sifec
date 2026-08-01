@@ -1,13 +1,21 @@
 // Fase 2D — carrega a Sala de Situação para o conjunto de escolas visível
 // (carteira ou visão global, já resolvido pelo chamador via
-// getSchoolsForCurrentScope — este hook não decide escopo). Notas
-// bimestrais (a única fonte com dado quase-nominal) só são carregadas para
-// TODAS as escolas do conjunto quando o escopo é 'carteira' (poucas
-// escolas, deliberadamente acompanhadas); na visão 'global' só a escola
-// selecionada tem notas carregadas (seção 13 do plano) — as demais ficam
-// com `notas: null`, nunca com nomes/turmas de estudantes de 56 escolas de
-// uma vez. Modo demonstração usa só DEMO_SCHOOL_SITUATIONS (nunca dado
-// real), e nunca é usado depois de autenticado.
+// getSchoolsForCurrentScope — este hook não decide escopo). Modo
+// demonstração usa só DEMO_SCHOOL_SITUATIONS (nunca dado real), e nunca é
+// usado depois de autenticado.
+//
+// Revisão do code review do PR #17, seção 4: grade_entry_monitoring é uma
+// fonte AGREGADA (nunca nominal — nunca nome/matrícula/CPF/nota individual
+// de estudante, ver docs/descontinuacao-prototipo-notas-nominais.md), então
+// deixou de existir motivo para restringi-la à carteira ou à escola
+// selecionada. Notas são carregadas para TODAS as escolas do conjunto
+// visível, carteira OU visão global, com o mesmo pool de concorrência já
+// usado para as demais fontes (fetchPortfolioSituations, uma escola por vez
+// com schoolId, nunca where-in com as 56 escolas). `scopeMode`/
+// `selectedSchoolId` não entram mais nas dependências deste hook — o
+// primeiro só influenciava esta decisão (agora removida), e o segundo
+// serve só à UI para abrir/fechar o painel de detalhe (ver
+// SalaDeSituacaoView.tsx), nunca para decidir o que buscar.
 //
 // Revisão do code review do PR #16: turmas/visitas são buscadas uma única
 // vez por ciclo de carregamento, já escopadas às escolas visíveis
@@ -17,10 +25,9 @@
 // do code review) nem impede o restante do carregamento de continuar.
 import { useCallback, useEffect, useState } from 'react';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
-import type { SchoolScopeMode, SchoolSituation } from '../types/schoolSituation';
+import type { SchoolSituation } from '../types/schoolSituation';
 import {
   fetchPortfolioSituations,
-  fetchSchoolSituation,
   fetchTurmasForSchools,
   fetchVisitasForSchools,
   type SchoolSituationSchoolInput,
@@ -31,8 +38,6 @@ export interface UseSchoolSituationInput {
   schools: readonly SchoolSituationSchoolInput[];
   anoLetivo: number;
   bimestre: Bimestre;
-  scopeMode: SchoolScopeMode;
-  selectedSchoolId: string | null;
   isFirebaseMode: boolean;
 }
 
@@ -44,7 +49,7 @@ export interface UseSchoolSituationResult {
 }
 
 export function useSchoolSituation(input: UseSchoolSituationInput): UseSchoolSituationResult {
-  const { schools, anoLetivo, bimestre, scopeMode, selectedSchoolId, isFirebaseMode } = input;
+  const { schools, anoLetivo, bimestre, isFirebaseMode } = input;
 
   const [situations, setSituations] = useState<Record<string, SchoolSituation>>({});
   const [loading, setLoading] = useState(true);
@@ -97,32 +102,17 @@ export function useSchoolSituation(input: UseSchoolSituationInput): UseSchoolSit
         ]);
         if (cancelled) return;
 
-        // Carteira: poucas escolas deliberadamente acompanhadas, notas
-        // carregadas para todas de uma vez (concorrência já limitada por
-        // fetchPortfolioSituations). Visão global: notas nunca carregadas
-        // para o conjunto inteiro — só a escola selecionada, abaixo.
-        const includeGradesForAll = scopeMode === 'carteira';
-        const baseline = await fetchPortfolioSituations(schools, turmasResult, visitasResults, anoLetivo, {
-          includeGrades: includeGradesForAll,
+        // grade_entry_monitoring é agregada (nunca nominal) — carregada
+        // para TODAS as escolas do conjunto visível de uma vez só, carteira
+        // ou visão global, com o mesmo pool de concorrência das demais
+        // fontes (seção 4 do code review do PR #17).
+        const situationsResult = await fetchPortfolioSituations(schools, turmasResult, visitasResults, anoLetivo, {
+          includeGrades: true,
           bimestre,
         });
         if (cancelled) return;
 
-        let merged = baseline;
-        if (!includeGradesForAll && selectedSchoolId) {
-          const selectedSchool = schools.find(s => s.id === selectedSchoolId);
-          if (selectedSchool) {
-            const visitasResult = visitasResults[selectedSchoolId] ?? { status: 'not_requested' as const };
-            const withGrades = await fetchSchoolSituation(selectedSchool, turmasResult, visitasResult, anoLetivo, {
-              includeGrades: true,
-              bimestre,
-            });
-            if (cancelled) return;
-            merged = { ...baseline, [selectedSchoolId]: withGrades };
-          }
-        }
-
-        if (!cancelled) setSituations(merged);
+        if (!cancelled) setSituations(situationsResult);
       } catch (err) {
         if (!cancelled) {
           setSituations({});
@@ -138,7 +128,7 @@ export function useSchoolSituation(input: UseSchoolSituationInput): UseSchoolSit
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- schoolIdsKey substitui `schools` de propósito (ver comentário acima)
-  }, [schoolIdsKey, anoLetivo, bimestre, scopeMode, selectedSchoolId, isFirebaseMode, refreshTick]);
+  }, [schoolIdsKey, anoLetivo, bimestre, isFirebaseMode, refreshTick]);
 
   return { situations, loading, loadError, refresh };
 }

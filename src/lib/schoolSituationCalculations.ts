@@ -325,6 +325,8 @@ export function calculateGradeEntryMonitoringIndicators(
     turmasCompletas: consolidated.turmasCompletas,
     turmasParciais: consolidated.turmasParciais,
     turmasSemPreenchimento: consolidated.turmasSemPreenchimento,
+    expectedGradeEntries: consolidated.expectedGradeEntries,
+    completedGradeEntries: consolidated.completedGradeEntries,
     percentualPreenchimentoGeral: consolidated.percentualPreenchimentoGeral,
     dataQuality,
   };
@@ -369,12 +371,16 @@ export function calculateVisitIndicators(
 
 // --- Resumo consolidado da carteira/visão global (seção 14 do plano) ---
 
-// percentualPreenchimentoNotas é a média simples do percentual de cada
-// escola que já teve notas carregadas (nunca uma média ponderada por
-// matrícula, que exigiria carregar notas de todas as escolas mesmo na
-// visão global — ver seção 13 do plano) — null quando nenhuma escola do
-// conjunto teve notas carregadas ainda (nunca 0, que seria um resultado
-// real e diferente de "ainda não carregado").
+// percentualPreenchimentoNotas é a soma de completedGradeEntries / soma de
+// expectedGradeEntries de todas as escolas com notas disponíveis (revisão
+// do code review do PR #17, seção 5) — NUNCA a média simples do percentual
+// de cada escola, que pesaria uma escola pequena (poucos lançamentos
+// esperados) exatamente igual a uma grande. Exemplo: escola A com 10
+// lançamentos esperados e 100% preenchido, escola B com 1000 lançamentos
+// esperados e 50% preenchido — a média simples diria 75%, mas o preenchimento
+// real da carteira é (10 + 500) / (10 + 1000) ≈ 50.5%. null só quando a soma
+// de expectedGradeEntries do conjunto considerado é zero (nunca 0%
+// automático).
 export function calculatePortfolioSituationSummary(
   situations: readonly SchoolSituation[]
 ): PortfolioSituationSummary {
@@ -386,20 +392,22 @@ export function calculatePortfolioSituationSummary(
     s => s.estrutura.anoLetivoConfigurado && s.matricula.quantidadeMesesPendentes === 0
   ).length;
 
-  // notas == null já exclui tanto "não carregadas" quanto "fonte falhou" (o
-  // serviço nunca calcula notas a partir de grade_entry_monitoring parcial —
-  // ver schoolSituationService.ts), então esta média já ignora fontes
-  // indisponíveis sem precisar de um filtro extra (seção 9 do code review).
-  // Além disso, notas.percentualPreenchimentoGeral pode ser null mesmo com
-  // notas carregadas (nenhuma turma com relatório tem expectedGradeEntries
-  // > 0) — essa escola também fica fora da média, nunca tratada como 0%.
-  const comPercentualCalculavel = situations.filter(
-    (s): s is SchoolSituation & { notas: NonNullable<SchoolSituation['notas']> & { percentualPreenchimentoGeral: number } } =>
-      s.notas != null && s.notas.percentualPreenchimentoGeral != null
+  // notas == null (fonte falhou) e notas.dataQuality === 'indisponivel'
+  // (grade_entry_monitoring OK, mas turmas falhou — ver
+  // schoolSituationService.ts) ficam FORA da soma — uma fonte indisponível
+  // nunca contribui com um valor calculado a partir de dado parcial (seção
+  // 9 do code review do PR #16, mesmo cuidado extendido aqui à soma
+  // ponderada).
+  const comNotasDisponiveis = situations.filter(
+    (s): s is SchoolSituation & { notas: NonNullable<SchoolSituation['notas']> } =>
+      s.notas != null && s.notas.dataQuality !== 'indisponivel'
   );
-  const percentualPreenchimentoNotas = comPercentualCalculavel.length === 0
+  const totalExpectedGradeEntries = comNotasDisponiveis.reduce((sum, s) => sum + s.notas.expectedGradeEntries, 0);
+  const totalCompletedGradeEntries = comNotasDisponiveis.reduce((sum, s) => sum + s.notas.completedGradeEntries, 0);
+  const percentualPreenchimentoNotas = totalExpectedGradeEntries === 0
     ? null
-    : comPercentualCalculavel.reduce((sum, s) => sum + s.notas.percentualPreenchimentoGeral, 0) / comPercentualCalculavel.length;
+    : (totalCompletedGradeEntries / totalExpectedGradeEntries) * 100;
+  const escolasComNotasConsideradas = comNotasDisponiveis.length;
 
   // Revisão do code review do PR #16, seção 9: uma falha de leitura do
   // fluxo nunca conta como "fluxo não informado" — dataQuality
@@ -418,6 +426,7 @@ export function calculatePortfolioSituationSummary(
     matriculaAtual,
     escolasComRegistroMensalEmDia,
     percentualPreenchimentoNotas,
+    escolasComNotasConsideradas,
     escolasComFluxoInformado,
     escolasComPendencias,
     escolasComFontesIndisponiveis,

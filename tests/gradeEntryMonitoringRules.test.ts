@@ -35,6 +35,13 @@ const MONITORING_ID = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}`;
 
 let testEnv: RulesTestEnvironment;
 
+// Timeout explícito de 30s (padrão do Vitest é 10s): este é o 5º arquivo de
+// regras conectado ao MESMO emulador local dentro de `npm run test:rules`
+// (depois de firestore.rules/schoolYearRules/schoolFlowRules/
+// schoolFlowAuditAtomicity, com centenas de testes já executados) —
+// initializeTestEnvironment ocasionalmente passa dos 10s default sob essa
+// carga acumulada, mesmo a suíte inteira sempre terminando bem dentro de
+// 30s quando este arquivo roda sozinho.
 beforeAll(async () => {
   testEnv = await initializeTestEnvironment({
     projectId: 'sifec-rules-test-fase2c1',
@@ -44,7 +51,7 @@ beforeAll(async () => {
       port: 8090,
     },
   });
-});
+}, 30000);
 
 afterAll(async () => {
   await testEnv.cleanup();
@@ -381,6 +388,36 @@ describe('Fase 2C.1 — grade_entry_monitoring', () => {
     await assertFails(updateDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload({ turmaId: TURMA_B_ID })));
     await assertFails(updateDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload({ anoLetivo: 2027 })));
     await assertFails(updateDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload({ bimestre: 2 })));
+  });
+
+  // Revisão do code review do PR #17, seção 3: turmaNome faz parte da
+  // identidade do acompanhamento tanto quanto turmaId — sem esta trava, uma
+  // correção podia renomear a turma exibida sem tocar turmaId.
+  it('troca de turmaNome no update é bloqueada', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'grade_entry_monitoring', MONITORING_ID), monitoringPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      updateDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload({ turmaNome: 'Turma A - Renomeada' }))
+    );
+  });
+
+  it('troca somente dos totais (turmaNome e demais campos de identidade preservados) é permitida', async () => {
+    await testEnv.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'grade_entry_monitoring', MONITORING_ID), monitoringPayload());
+    });
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertSucceeds(
+      updateDoc(
+        doc(db, 'grade_entry_monitoring', MONITORING_ID),
+        monitoringPayload({
+          totalStudents: 25, studentsWithCompleteGrades: 20, studentsWithPartialGrades: 5, studentsWithoutGrades: 0,
+          expectedGradeEntries: 100, completedGradeEntries: 90,
+          updatedAt: '2026-03-16T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      )
+    );
   });
 
   it('alteração de createdAt/createdBy é bloqueada', async () => {

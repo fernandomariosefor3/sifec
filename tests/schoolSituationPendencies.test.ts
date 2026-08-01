@@ -33,6 +33,7 @@ const FLUXO_CONFIRMADO: SchoolFlowIndicators = {
 const NOTAS_COMPLETAS: GradeEntryMonitoringIndicators = {
   turmasCadastradas: 2, turmasComRelatorio: 2, turmasSemRelatorio: 0,
   turmasCompletas: 2, turmasParciais: 0, turmasSemPreenchimento: 0,
+  expectedGradeEntries: 200, completedGradeEntries: 200,
   percentualPreenchimentoGeral: 100, dataQuality: 'atualizado',
 };
 const VISITA_OK: VisitIndicators = {

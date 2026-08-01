@@ -228,6 +228,91 @@ describe('GradeEntryMonitoringFormModal', () => {
     expect(mockSave.mock.calls[0][0].observation).toBeNull();
   });
 
+  // Revisão do code review do PR #17, seção 6: mesma semântica de
+  // undefined/null já aplicada a observation, estendida a
+  // sourceReportTitle/sourceFileName.
+  it('apagar o título existente envia null (nunca undefined)', async () => {
+    mockSave.mockResolvedValue(undefined);
+    renderForm({ existing: monitoring({ sourceReportTitle: 'Relatório a apagar' }) });
+
+    fireEvent.change(screen.getByLabelText('Título do relatório (opcional)'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar acompanhamento' }));
+
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][0].sourceReportTitle).toBeNull();
+  });
+
+  it('apagar o nome do arquivo existente envia null (nunca undefined)', async () => {
+    mockSave.mockResolvedValue(undefined);
+    renderForm({ existing: monitoring({ sourceFileName: 'relatorio-antigo.csv' }) });
+
+    fireEvent.change(screen.getByLabelText('Nome do arquivo (opcional)'), { target: { value: '' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar acompanhamento' }));
+
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][0].sourceFileName).toBeNull();
+  });
+
+  it('editar só o título preserva os demais metadados (nome do arquivo/observação)', async () => {
+    mockSave.mockResolvedValue(undefined);
+    renderForm({ existing: monitoring({ sourceReportTitle: 'Título antigo', sourceFileName: 'arquivo.csv', observation: 'Obs original' }) });
+
+    fireEvent.change(screen.getByLabelText('Título do relatório (opcional)'), { target: { value: 'Título novo' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Salvar acompanhamento' }));
+
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1));
+    expect(mockSave.mock.calls[0][0].sourceReportTitle).toBe('Título novo');
+    expect(mockSave.mock.calls[0][0].sourceFileName).toBe('arquivo.csv');
+    expect(mockSave.mock.calls[0][0].observation).toBe('Obs original');
+  });
+
+  // Revisão do code review do PR #17, seção 7: "situação resultante"
+  // calculada em tempo real, sem duplicar a lógica de
+  // classifyTurmaGradeEntryStatus no componente.
+  describe('situação resultante (seção 7 do code review do PR #17)', () => {
+    it('antes de todos os totais preenchidos, mostra "Não informado"', () => {
+      renderForm();
+      expect(screen.getByText('Situação resultante')).toBeInTheDocument();
+      // "Não informado" aparece duas vezes antes do preenchimento completo
+      // (tile de "Preenchimento" + badge de "Situação resultante") —
+      // getAllByText em vez de getByText.
+      expect(screen.getAllByText('Não informado').length).toBe(2);
+    });
+
+    it('totais completos e batendo mostram "Preenchimento completo"', async () => {
+      renderForm();
+      fillAllTotals(VALID_TOTALS);
+      await waitFor(() => expect(screen.getByText('Preenchimento completo')).toBeInTheDocument());
+    });
+
+    it('totais parciais mostram "Preenchimento parcial" em tempo real', async () => {
+      renderForm();
+      fillAllTotals({ ...VALID_TOTALS, 'Estudantes com notas completas': '10', 'Estudantes com preenchimento parcial': '22', 'Total de lançamentos realizados': '60' });
+      await waitFor(() => expect(screen.getByText('Preenchimento parcial')).toBeInTheDocument());
+    });
+
+    it('completedGradeEntries zero com relatório informado mostra "Sem preenchimento"', async () => {
+      renderForm();
+      fillAllTotals({
+        ...VALID_TOTALS,
+        'Estudantes com notas completas': '0', 'Estudantes com preenchimento parcial': '0', 'Estudantes sem notas': '32',
+        'Total de lançamentos realizados': '0',
+      });
+      await waitFor(() => expect(screen.getByText('Sem preenchimento')).toBeInTheDocument());
+    });
+
+    it('soma de estudantes divergente do total mostra "Inconsistente"', async () => {
+      renderForm();
+      fillAllTotals({ ...VALID_TOTALS, 'Estudantes com notas completas': '10', 'Estudantes com preenchimento parcial': '10', 'Estudantes sem notas': '5' });
+      await waitFor(() => expect(screen.getByText('Inconsistente')).toBeInTheDocument());
+    });
+
+    it('pré-carregado a partir de um relatório existente já reflete a situação correspondente', () => {
+      renderForm({ existing: monitoring() }); // monitoring() default é 32/32 completo, 128/128 lançamentos.
+      expect(screen.getByText('Preenchimento completo')).toBeInTheDocument();
+    });
+  });
+
   it('pré-carrega os totais existentes ao corrigir um relatório já registrado', () => {
     renderForm({ existing: monitoring({ totalStudents: 32, completedGradeEntries: 128 }) });
     expect((screen.getByLabelText('Total de estudantes') as HTMLInputElement).value).toBe('32');
