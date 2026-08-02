@@ -88,10 +88,27 @@ export function resolveRowMatch(row: SigeReportRowDraft, existingTurmas: readonl
   if (row.selectedTurmaId === '__nova__') {
     return { resolvedTurmaId: null, isNovaTurmaConfirmada: row.confirmNovaTurma, needsUserChoice: !row.confirmNovaTurma };
   }
-  if (row.selectedTurmaId) {
+  // Item 2 do code review do PR #18: selectedTurmaId só é válido quando
+  // pertence aos candidatos ATUAIS — uma escolha feita para um texto
+  // anterior (antes do usuário editar turmaNome/turno) nunca pode
+  // "sobreviver" silenciosamente à alteração. Na prática o componente já
+  // limpa selectedTurmaId sempre que turmaNome/turno mudam (ver
+  // SigeReportRowEditor), mas esta checagem é a defesa em profundidade —
+  // nunca confia cegamente num ID armazenado.
+  if (row.selectedTurmaId && match.candidates.some(c => c.id === row.selectedTurmaId)) {
     return { resolvedTurmaId: row.selectedTurmaId, isNovaTurmaConfirmada: false, needsUserChoice: false };
   }
   return { resolvedTurmaId: null, isNovaTurmaConfirmada: false, needsUserChoice: true };
+}
+
+// Turma canônica (objeto completo, não só o ID) já resolvida para esta
+// linha — null enquanto pendente ou quando será uma turma nova. Usado pela
+// UI para mostrar dados REAIS da turma (ex.: matrícula atual cadastrada),
+// nunca o texto solto digitado pelo usuário.
+export function resolveRowTurma(row: SigeReportRowDraft, existingTurmas: readonly Turma[]): Turma | null {
+  const resolution = resolveRowMatch(row, existingTurmas);
+  if (!resolution.resolvedTurmaId) return null;
+  return existingTurmas.find(t => t.id === resolution.resolvedTurmaId) ?? null;
 }
 
 export interface RowComputed {
@@ -156,9 +173,19 @@ export default function SigeReportRowEditor({
 }: SigeReportRowEditorProps) {
   const computed = computeRow(row, existingTurmas);
   const { match, resolution } = computed;
+  const resolvedTurma = resolveRowTurma(row, existingTurmas);
 
   function set<K extends keyof SigeReportRowDraft>(key: K, value: SigeReportRowDraft[K]) {
     onChange(index, { ...row, [key]: value });
+  }
+
+  // Item 2 do code review do PR #18: alterar o nome ou o turno invalida
+  // qualquer escolha manual anterior — uma correspondência ou confirmação
+  // feita para o texto ANTERIOR nunca pode sobreviver silenciosamente à
+  // edição (resolveRowMatch também defende isso, mas aqui já evita que o
+  // rascunho fique com um selectedTurmaId/confirmNovaTurma obsoleto).
+  function setIdentity(key: 'turmaNome' | 'turno', value: string) {
+    onChange(index, { ...row, [key]: value, selectedTurmaId: '', confirmNovaTurma: false });
   }
 
   return (
@@ -170,7 +197,7 @@ export default function SigeReportRowEditor({
             <input
               id={`sige-row-${index}-nome`}
               type="text" value={row.turmaNome}
-              onChange={e => set('turmaNome', e.target.value)}
+              onChange={e => setIdentity('turmaNome', e.target.value)}
               className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs rounded-lg"
             />
           </div>
@@ -179,7 +206,7 @@ export default function SigeReportRowEditor({
             <input
               id={`sige-row-${index}-turno`}
               type="text" value={row.turno}
-              onChange={e => set('turno', e.target.value)}
+              onChange={e => setIdentity('turno', e.target.value)}
               className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs rounded-lg"
             />
           </div>
@@ -187,10 +214,19 @@ export default function SigeReportRowEditor({
             <label htmlFor={`sige-row-${index}-matricula`} className="text-[9px] font-black uppercase text-slate-600 block">Matrícula atual</label>
             <input
               id={`sige-row-${index}-matricula`}
-              type="text" inputMode="numeric" value={row.matriculaAtual}
+              type="text" inputMode="numeric"
+              // Item 6 do code review do PR #18: só tem efeito real ao
+              // CRIAR uma turma nova. Para turma já existente, o campo
+              // nunca fica "editável sem efeito" — vira somente
+              // informativo, mostrando o valor REAL já cadastrado.
+              value={resolvedTurma ? String(resolvedTurma.matriculaAtual ?? '—') : row.matriculaAtual}
+              disabled={!!resolvedTurma}
               onChange={e => set('matriculaAtual', e.target.value)}
-              className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs rounded-lg font-mono"
+              className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs rounded-lg font-mono disabled:bg-slate-100 disabled:text-slate-500"
             />
+            {resolvedTurma && (
+              <p className="text-[8px] text-slate-400">Turma existente — edite a matrícula em Gestão de Escolas.</p>
+            )}
           </div>
           <div className="space-y-1">
             <label htmlFor={`sige-row-${index}-status`} className="text-[9px] font-black uppercase text-slate-600 block">Status</label>

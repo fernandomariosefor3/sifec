@@ -295,6 +295,10 @@ describe('NotasView', () => {
 
       await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
       expect(screen.queryByText(/Não foi possível carregar as turmas desta escola/)).not.toBeInTheDocument();
+      // Item 4 do code review do PR #18: recuperada a fonte, o botão volta
+      // a ficar disponível (turmasStatus e monitoringStatus voltam a
+      // 'success').
+      expect(screen.getByRole('button', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument();
     });
   });
 
@@ -313,6 +317,10 @@ describe('NotasView', () => {
       expect(screen.queryByText('0%')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Registrar acompanhamento' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Atualizar acompanhamento' })).not.toBeInTheDocument();
+      // Item 4 do code review do PR #18: falha de grade_entry_monitoring
+      // também esconde "Registrar relatório do SIGE" — nunca abre o modal
+      // com existingMonitoringByTurmaId desconhecido.
+      expect(screen.queryByRole('button', { name: 'Registrar relatório do SIGE' })).not.toBeInTheDocument();
     });
 
     it('retry bem-sucedido depois de uma falha de grade_entry_monitoring restaura tabela e indicadores normais', async () => {
@@ -331,6 +339,29 @@ describe('NotasView', () => {
       await waitFor(() => expect(screen.getAllByText('Relatório não informado').length).toBe(2));
       expect(screen.queryByText('Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.')).not.toBeInTheDocument();
       expect(screen.getAllByRole('button', { name: 'Registrar acompanhamento' })).toHaveLength(2);
+      // Item 4 do code review do PR #18: retry bem-sucedido habilita
+      // "Registrar relatório do SIGE" de novo.
+      expect(screen.getByRole('button', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument();
+    });
+
+    // Item 4 do code review do PR #18: enquanto QUALQUER uma das duas
+    // fontes ainda está carregando, o botão fica indisponível — não basta
+    // "não ter falhado ainda".
+    it('carregamento em andamento (grade_entry_monitoring) desabilita "Registrar relatório do SIGE" até a consulta terminar', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      let resolveMonitoring: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockReturnValue(new Promise(resolve => { resolveMonitoring = resolve; }));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      await waitFor(() => expect(screen.getByText('Carregando turmas...')).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: 'Registrar relatório do SIGE' })).not.toBeInTheDocument();
+
+      resolveMonitoring([]);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument());
     });
 
     // Revisão do code review do PR #17, seção 1: trocar de escola enquanto o

@@ -169,12 +169,20 @@ export default function NotasView() {
   // sem nenhuma turma cadastrada, sem acompanhamento anterior, ou com a
   // tabela vazia — nunca depende de uma linha existir. Ano letivo e
   // bimestre sempre têm um valor selecionado (nunca vazio nestes selects),
-  // então a única condição real além de escola+autorização é a escola
-  // selecionada. `!turmasUnavailable` é uma proteção adicional (não pedida
-  // explicitamente, mas necessária): sem a lista real de turmas já
-  // carregada, a correspondência do relatório não tem como saber quais
-  // turmas já existem, arriscando criar uma turma duplicada por engano.
-  const showRegistrarRelatorioButton = !!selectedSchool && canWrite && !turmasUnavailable;
+  // então as condições reais são escola+autorização+fontes seguras.
+  //
+  // Item 4 do code review do PR #18: "seguro" exige as duas fontes
+  // (turmas E grade_entry_monitoring) em status 'success' — nunca só "não
+  // falhou". 'loading'/'idle' também desabilitam: sem a lista real de
+  // turmas E do acompanhamento já carregados, a correspondência do
+  // relatório não tem como saber quais turmas já existem nem quais já têm
+  // registro neste bimestre, arriscando criar uma turma duplicada ou abrir
+  // o modal com existingMonitoringByTurmaId desconhecido. Consulta
+  // bem-sucedida e vazia (0 turmas, 0 acompanhamentos) CONTINUA habilitando
+  // — 'success' não exige nenhum resultado, só que a consulta tenha
+  // terminado sem erro.
+  const sourcesSafe = turmasStatus === 'success' && monitoringStatus === 'success';
+  const showRegistrarRelatorioButton = !!selectedSchool && canWrite && sourcesSafe;
 
   return (
     <div className="space-y-6">
@@ -332,6 +340,7 @@ export default function NotasView() {
           existingMonitoringByTurmaId={monitoringByTurmaId}
           onClose={() => setShowSigeReportModal(false)}
           onSaved={handleRelatorioSaved}
+          onRefreshSources={handleRelatorioSaved}
         />
       )}
     </div>

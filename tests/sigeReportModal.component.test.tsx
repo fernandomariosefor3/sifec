@@ -11,6 +11,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import SigeReportModal from '../src/components/notas/SigeReportModal';
+import { SigeReportPartialSaveError } from '../src/lib/sigeReportService';
 import type { Turma } from '../src/types/classroom';
 
 afterEach(() => {
@@ -50,6 +51,7 @@ function renderModal(overrides: Partial<Parameters<typeof SigeReportModal>[0]> =
       existingMonitoringByTurmaId={new Map()}
       onClose={vi.fn()}
       onSaved={vi.fn()}
+      onRefreshSources={vi.fn()}
       {...overrides}
     />
   );
@@ -237,5 +239,159 @@ describe('SigeReportModal', () => {
     fireEvent.click(screen.getByRole('button', { name: /Voltar e corrigir/ }));
     expect(screen.getByText(/Etapa 1 de 3/)).toBeInTheDocument();
     expect((screen.getByLabelText('Data de referência') as HTMLInputElement).value).toBe('2026-03-10');
+  });
+
+  // Item 2 do code review do PR #18: uma escolha manual feita para o texto
+  // ANTERIOR nunca pode sobreviver silenciosamente à edição do nome/turno.
+  describe('limpeza de seleção ao editar identidade da turma (item 2)', () => {
+    it('editar o nome depois de escolher manualmente entre candidatos ambíguos limpa a seleção anterior', () => {
+      const existentes = [
+        turma({ id: 't1', nome: '3º Ano A', turno: 'Matutino' }),
+        turma({ id: 't2', nome: '3º Ano A', turno: 'Vespertino' }),
+      ];
+      renderModal({ existingTurmas: existentes });
+      goToStep2WithDate();
+      fireEvent.change(screen.getByLabelText('Nome da turma'), { target: { value: '3º Ano A' } });
+      fireEvent.change(screen.getByLabelText(/Escolha a turma correta/), { target: { value: 't2' } });
+      fillNumericFields(VALID_TOTALS);
+      // A escolha manual já resolve a linha — avançar funciona normalmente.
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+      expect(screen.getByText(/Etapa 3 de 3/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Voltar e corrigir/ }));
+
+      // Edita o nome (mesmo texto + espaço extra — ainda ambíguo entre as
+      // mesmas duas turmas) — a escolha anterior (t2) nunca pode
+      // "sobreviver" a essa edição.
+      fireEvent.change(screen.getByLabelText('Nome da turma'), { target: { value: '3º Ano A  ' } });
+      expect((screen.getByLabelText(/Escolha a turma correta/) as HTMLSelectElement).value).toBe('');
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+      expect(screen.getByText(/Resolva a correspondência/)).toBeInTheDocument();
+    });
+
+    it('editar o turno depois de escolher manualmente entre candidatos ambíguos limpa a seleção anterior', () => {
+      const existentes = [
+        turma({ id: 't1', nome: '3º Ano A', turno: 'Matutino' }),
+        turma({ id: 't2', nome: '3º Ano A', turno: 'Vespertino' }),
+      ];
+      renderModal({ existingTurmas: existentes });
+      goToStep2WithDate();
+      fireEvent.change(screen.getByLabelText('Nome da turma'), { target: { value: '3º Ano A' } });
+      fireEvent.change(screen.getByLabelText(/Escolha a turma correta/), { target: { value: 't1' } });
+      fillNumericFields(VALID_TOTALS);
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+      expect(screen.getByText(/Etapa 3 de 3/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Voltar e corrigir/ }));
+
+      fireEvent.change(screen.getByLabelText('Turno (quando disponível)'), { target: { value: 'Noturno' } });
+      expect((screen.getByLabelText(/Escolha a turma correta/) as HTMLSelectElement).value).toBe('');
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+      expect(screen.getByText(/Resolva a correspondência/)).toBeInTheDocument();
+    });
+
+    it('editar o nome de uma turma nova já confirmada exige nova confirmação humana explícita', () => {
+      renderModal({ existingTurmas: [] });
+      goToStep2WithDate();
+      fireEvent.change(screen.getByLabelText('Nome da turma'), { target: { value: '3º Ano Nova' } });
+      fillNumericFields(VALID_TOTALS);
+      fireEvent.click(screen.getByLabelText(/Confirmo a criação desta turma/));
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+      expect(screen.getByText(/Etapa 3 de 3/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /Voltar e corrigir/ }));
+
+      fireEvent.change(screen.getByLabelText('Nome da turma'), { target: { value: '3º Ano Nova Editada' } });
+      expect((screen.getByLabelText(/Confirmo a criação desta turma/) as HTMLInputElement).checked).toBe(false);
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+      expect(screen.getByText(/Resolva a correspondência/)).toBeInTheDocument();
+    });
+  });
+
+  // Item 3 do code review do PR #18: SigeReportPartialSaveError — a fase 1
+  // (turmas novas) já foi commitada, mas a fase 2 falhou. O modal nunca pode
+  // permitir um novo clique imediato, nem fingir que nada foi criado.
+  describe('recuperação de falha parcial — SigeReportPartialSaveError (item 3)', () => {
+    it('bloqueia nova tentativa, aciona onRefreshSources, e só libera de novo quando a turma criada aparecer em existingTurmas', async () => {
+      const onRefreshSources = vi.fn();
+      const partialError = new SigeReportPartialSaveError(
+        [{ id: 'turma-nova-1', nome: '3º Ano Nova' }],
+        new Error('permission-denied')
+      );
+      mockSaveSigeReport.mockRejectedValue(partialError);
+
+      const { rerender } = renderModal({ existingTurmas: [], onRefreshSources });
+      goToStep2WithDate();
+      fireEvent.change(screen.getByLabelText('Nome da turma'), { target: { value: '3º Ano Nova' } });
+      fillNumericFields(VALID_TOTALS);
+      fireEvent.click(screen.getByLabelText(/Confirmo a criação desta turma/));
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+
+      fireEvent.click(screen.getByRole('button', { name: 'Confirmar registro' }));
+
+      await waitFor(() => expect(screen.getByText(/Turmas já criadas: 3º Ano Nova/)).toBeInTheDocument());
+      expect(onRefreshSources).toHaveBeenCalledTimes(1);
+      const blockedButton = screen.getByRole('button', { name: /Atualizando lista/ });
+      expect(blockedButton).toBeDisabled();
+
+      // Um novo clique nesse estado nunca reenvia — o botão está desabilitado.
+      mockSaveSigeReport.mockClear();
+      fireEvent.click(blockedButton);
+      expect(mockSaveSigeReport).not.toHaveBeenCalled();
+
+      // O pai (NotasView) atualiza existingTurmas depois de onRefreshSources
+      // — simulado aqui via rerender com a turma criada já presente na
+      // lista real.
+      rerender(
+        <SigeReportModal
+          school={SCHOOL}
+          anoLetivo={2026}
+          bimestre={1}
+          existingTurmas={[turma({ id: 'turma-nova-1', nome: '3º Ano Nova' })]}
+          existingMonitoringByTurmaId={new Map()}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          onRefreshSources={onRefreshSources}
+        />
+      );
+
+      await waitFor(() => expect(screen.getByText(/lista de turmas foi atualizada/)).toBeInTheDocument());
+      expect(screen.queryByText(/Turmas já criadas:/)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Confirmar registro' })).not.toBeDisabled();
+    });
+
+    it('turmas ainda não presentes em existingTurmas mantêm o bloqueio mesmo depois de onRefreshSources ser chamado', async () => {
+      const onRefreshSources = vi.fn();
+      const partialError = new SigeReportPartialSaveError(
+        [{ id: 'turma-nova-1', nome: '3º Ano Nova' }],
+        new Error('unavailable')
+      );
+      mockSaveSigeReport.mockRejectedValue(partialError);
+
+      const { rerender } = renderModal({ existingTurmas: [], onRefreshSources });
+      goToStep2WithDate();
+      fireEvent.change(screen.getByLabelText('Nome da turma'), { target: { value: '3º Ano Nova' } });
+      fillNumericFields(VALID_TOTALS);
+      fireEvent.click(screen.getByLabelText(/Confirmo a criação desta turma/));
+      fireEvent.click(screen.getByRole('button', { name: /Avançar/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Confirmar registro' }));
+      await waitFor(() => expect(onRefreshSources).toHaveBeenCalledTimes(1));
+
+      // O pai já tentou atualizar, mas a lista devolvida ainda não inclui a
+      // turma criada (ex.: leitura ainda desatualizada, ou outra falha) —
+      // o bloqueio continua até a lista REALMENTE confirmar.
+      rerender(
+        <SigeReportModal
+          school={SCHOOL}
+          anoLetivo={2026}
+          bimestre={1}
+          existingTurmas={[]}
+          existingMonitoringByTurmaId={new Map()}
+          onClose={vi.fn()}
+          onSaved={vi.fn()}
+          onRefreshSources={onRefreshSources}
+        />
+      );
+
+      expect(screen.getByRole('button', { name: /Atualizando lista/ })).toBeDisabled();
+      expect(screen.getByText(/Turmas já criadas: 3º Ano Nova/)).toBeInTheDocument();
+    });
   });
 });

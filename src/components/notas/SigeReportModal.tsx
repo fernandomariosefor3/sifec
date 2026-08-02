@@ -8,10 +8,16 @@
 // observação). Etapa 2 — turmas do relatório (uma ou mais linhas, cada uma
 // com correspondência de turma e cálculo em tempo real). Etapa 3 — preview
 // agregado antes de salvar. Nada é gravado antes de "Confirmar registro".
-import { useMemo, useState } from 'react';
-import { ArrowLeft, ArrowRight, ClipboardCheck, Plus, X } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, ArrowLeft, ArrowRight, ClipboardCheck, Plus, X } from 'lucide-react';
 import { auth } from '../../lib/firebase';
-import { saveSigeReport, SigeReportValidationError, type SigeReportRowInput } from '../../lib/sigeReportService';
+import {
+  saveSigeReport,
+  SigeReportPartialSaveError,
+  SigeReportValidationError,
+  type CreatedTurmaInfo,
+  type SigeReportRowInput,
+} from '../../lib/sigeReportService';
 import { GradeEntryMonitoringValidationError } from '../../lib/gradeEntryMonitoringService';
 import { ClassroomValidationError } from '../../lib/classService';
 import { calculateCompletionPercentage } from '../../lib/gradeEntryMonitoringCalculations';
@@ -33,17 +39,28 @@ interface SigeReportModalProps {
   existingMonitoringByTurmaId: ReadonlyMap<string, GradeEntryMonitoring>;
   onClose: () => void;
   onSaved: () => void;
+  // Chamado quando a fase 1 (turmas novas) foi commitada mas a fase 2
+  // falhou — o modal PRECISA de dados atualizados (existingTurmas) antes de
+  // liberar uma nova tentativa, para nunca recriar a mesma turma (item 3 do
+  // code review do PR #18).
+  onRefreshSources: () => void;
 }
 
 type Step = 1 | 2 | 3;
 
 function toRowInput(row: SigeReportRowDraft, existingTurmas: readonly Turma[]): SigeReportRowInput {
   const { resolution } = computeRow(row, existingTurmas);
+  const isExistingTurma = resolution.resolvedTurmaId != null;
   return {
     turmaId: resolution.resolvedTurmaId ?? undefined,
     turmaNome: row.turmaNome.trim(),
     turno: row.turno.trim() === '' ? undefined : row.turno.trim(),
-    matriculaAtual: row.matriculaAtual.trim() === '' ? undefined : Number(row.matriculaAtual),
+    // Item 6 do code review do PR #18: matrícula atual só é enviada (e só
+    // tem efeito) ao criar uma turma NOVA — para turma existente o campo é
+    // só informativo na interface (ver SigeReportRowEditor), então nunca é
+    // enviado, mesmo que reste algum valor digitado antes de a linha
+    // resolver para uma turma já cadastrada.
+    matriculaAtual: isExistingTurma || row.matriculaAtual.trim() === '' ? undefined : Number(row.matriculaAtual),
     isNovaTurmaConfirmada: resolution.isNovaTurmaConfirmada,
     totalStudents: Number(row.totalStudents),
     studentsWithCompleteGrades: Number(row.studentsWithCompleteGrades),
@@ -56,7 +73,7 @@ function toRowInput(row: SigeReportRowDraft, existingTurmas: readonly Turma[]): 
 }
 
 export default function SigeReportModal({
-  school, anoLetivo, bimestre, existingTurmas, existingMonitoringByTurmaId, onClose, onSaved,
+  school, anoLetivo, bimestre, existingTurmas, existingMonitoringByTurmaId, onClose, onSaved, onRefreshSources,
 }: SigeReportModalProps) {
   // Ano letivo e bimestre vêm bloqueados pela seleção atual da tela
   // principal (mesmo tratamento de "escola" — nunca editáveis aqui): a
@@ -72,6 +89,22 @@ export default function SigeReportModal({
   const [rows, setRows] = useState<SigeReportRowDraft[]>([buildEmptyRowDraft()]);
   const [formError, setFormError] = useState('');
   const [saving, setSaving] = useState(false);
+  // Item 3 do code review do PR #18: quando a fase 1 (turmas novas) já foi
+  // commitada mas a fase 2 falhou, o serviço lança SigeReportPartialSaveError
+  // com as turmas já criadas. Enquanto isto não é null, um novo clique em
+  // "Confirmar registro" fica bloqueado — só libera depois que
+  // existingTurmas (atualizado pelo pai via onRefreshSources) confirmar que
+  // TODAS as turmas criadas já aparecem na lista real, evitando recriá-las.
+  const [partialSave, setPartialSave] = useState<{ createdTurmas: readonly CreatedTurmaInfo[] } | null>(null);
+
+  useEffect(() => {
+    if (!partialSave) return;
+    const allPresent = partialSave.createdTurmas.every(ct => existingTurmas.some(t => t.id === ct.id));
+    if (allPresent) {
+      setPartialSave(null);
+      setFormError('A lista de turmas foi atualizada — revise as linhas e confirme novamente.');
+    }
+  }, [existingTurmas, partialSave]);
 
   const computedRows = useMemo(() => rows.map(row => computeRow(row, existingTurmas)), [rows, existingTurmas]);
 
@@ -135,6 +168,11 @@ export default function SigeReportModal({
       setFormError('Resolva a correspondência e corrija os totais de todas as turmas antes de confirmar.');
       return;
     }
+    if (partialSave) {
+      // Já bloqueado pelo disabled do botão, mas nunca confia só nisso.
+      setFormError('Aguarde a lista de turmas terminar de atualizar antes de tentar novamente.');
+      return;
+    }
 
     setSaving(true);
     try {
@@ -153,13 +191,21 @@ export default function SigeReportModal({
           actingUserEmail: email,
           now: new Date().toISOString(),
         },
-        existingTurmas,
         existingMonitoringByTurmaId
       );
       onSaved();
       onClose();
     } catch (err) {
-      if (err instanceof SigeReportValidationError || err instanceof GradeEntryMonitoringValidationError || err instanceof ClassroomValidationError) {
+      if (err instanceof SigeReportPartialSaveError) {
+        // Item 3 do code review do PR #18: nunca fecha o modal nem afirma
+        // sucesso — bloqueia um novo clique e pede ao pai (NotasView) para
+        // recarregar turmas/acompanhamento. O efeito acima libera o botão
+        // de novo só quando existingTurmas confirmar que as turmas criadas
+        // já estão na lista real (nunca antes disso).
+        setPartialSave({ createdTurmas: err.createdTurmas });
+        setFormError(err.message);
+        onRefreshSources();
+      } else if (err instanceof SigeReportValidationError || err instanceof GradeEntryMonitoringValidationError || err instanceof ClassroomValidationError) {
         setFormError(err.message);
       } else {
         setFormError('Erro ao salvar o relatório: ' + (err instanceof Error ? err.message : String(err)));
@@ -187,6 +233,16 @@ export default function SigeReportModal({
         <div className="p-6 space-y-3 overflow-y-auto">
           {formError && (
             <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 text-[11px] rounded-lg font-bold">{formError}</div>
+          )}
+
+          {partialSave && (
+            <div className="p-2.5 bg-amber-50 border border-amber-300 text-amber-800 text-[11px] rounded-lg font-bold flex items-start gap-1.5">
+              <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+              <span>
+                Turmas já criadas: {partialSave.createdTurmas.map(t => t.nome).join(', ')}. Atualizando a lista antes
+                de permitir uma nova tentativa — elas não serão recriadas.
+              </span>
+            </div>
           )}
 
           {step === 1 && (
@@ -354,10 +410,10 @@ export default function SigeReportModal({
             </button>
           ) : (
             <button
-              type="button" onClick={handleConfirm} disabled={saving || preview.linhasInconsistentes > 0}
+              type="button" onClick={handleConfirm} disabled={saving || preview.linhasInconsistentes > 0 || !!partialSave}
               className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase rounded-xl shadow-sm transition disabled:opacity-50 flex items-center justify-center gap-1.5"
             >
-              <ClipboardCheck size={14} /> {saving ? 'Salvando...' : 'Confirmar registro'}
+              <ClipboardCheck size={14} /> {saving ? 'Salvando...' : partialSave ? 'Atualizando lista...' : 'Confirmar registro'}
             </button>
           )}
         </div>
