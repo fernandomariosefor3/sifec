@@ -319,6 +319,140 @@ describe('NotasView', () => {
     });
   });
 
+  // Revisão do code review do PR #17, seção 4: useGradeEntryMonitoring e
+  // useSchoolClassrooms guardam uma chave de contexto
+  // (escola+ano+bimestre+modo) e nunca dependem só do useEffect para
+  // limpar a tela — o valor exposto pelo hook já reflete o novo contexto
+  // (monitoring vazio, status loading) desde o primeiro render depois da
+  // troca, sem esperar a nova Promise resolver.
+  describe('proteção contra contexto obsoleto (seção 4 do code review do PR #17)', () => {
+    function monitoringDocCompleto(overrides: Record<string, unknown> = {}) {
+      return {
+        id: 'diva-cabral_2026_b1_turma-3a-diva',
+        schoolId: DIVA_SCHOOL_ID, codInep: '23067918', escolaNome: 'EEM Diva Cabral',
+        turmaId: 'turma-3a-diva', turmaNome: '3º Ano A - Matutino', anoLetivo: 2026, bimestre: 1,
+        totalStudents: 32, studentsWithCompleteGrades: 32, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+        expectedGradeEntries: 128, completedGradeEntries: 128, status: 'confirmado', sourceSystem: 'SIGE Escola',
+        referenceDate: '2026-03-10',
+        createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
+        createdBy: SUPER_A_EMAIL, updatedBy: SUPER_A_EMAIL,
+        ...overrides,
+      };
+    }
+
+    it('trocar o bimestre nunca mostra o relatório do bimestre anterior enquanto o novo carrega', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockResolvedValueOnce([monitoringDocCompleto({ expectedGradeEntries: 130, completedGradeEntries: 128 })]);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      // "128" (completedGradeEntries, distinto de expectedGradeEntries:
+      // 130 para evitar ambiguidade) só aparece na célula "Realizados" da
+      // linha da turma quando o relatório do bimestre 1 está carregado —
+      // nunca colide com os cartões-resumo (que mostram CONTAGEM de
+      // turmas, não o total de lançamentos).
+      await waitFor(() => expect(screen.getByText('128')).toBeInTheDocument());
+      expect(mockListMonitoring).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2026, 1);
+
+      let resolveNext: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockImplementation(() => new Promise(resolve => { resolveNext = resolve; }));
+
+      fireEvent.change(screen.getByLabelText('Bimestre'), { target: { value: '2' } });
+
+      // Enquanto a consulta do bimestre 2 está pendente, o relatório do
+      // bimestre 1 nunca continua visível.
+      expect(screen.queryByText('128')).not.toBeInTheDocument();
+      expect(screen.getByText('Carregando turmas...')).toBeInTheDocument();
+
+      resolveNext([]);
+      await waitFor(() => expect(mockListMonitoring).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2026, 2));
+      await waitFor(() => expect(screen.getAllByText('Relatório não informado').length).toBeGreaterThan(0));
+    });
+
+    it('trocar o ano letivo nunca mostra o relatório do ano anterior enquanto o novo carrega', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockResolvedValueOnce([monitoringDocCompleto({ expectedGradeEntries: 130, completedGradeEntries: 128 })]);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(screen.getByText('128')).toBeInTheDocument());
+
+      let resolveNext: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockImplementation(() => new Promise(resolve => { resolveNext = resolve; }));
+
+      fireEvent.change(screen.getByLabelText('Ano letivo'), { target: { value: '2025' } });
+
+      expect(screen.queryByText('128')).not.toBeInTheDocument();
+      expect(screen.getByText('Carregando turmas...')).toBeInTheDocument();
+
+      resolveNext([]);
+      await waitFor(() => expect(mockListMonitoring).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2025, 1));
+    });
+
+    it('trocar de escola nunca mostra a turma da escola anterior enquanto só a consulta de turmas está pendente', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral', 'EEM Figueiredo Correia'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockResolvedValue([]);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      // "3º Ano B - Vespertino" só existe em EEM Diva Cabral — marcador
+      // inequívoco de que a escola ANTERIOR ainda está na tela.
+      await waitFor(() => expect(screen.getByText('3º Ano B - Vespertino')).toBeInTheDocument());
+
+      let resolveNext: (value: Turma[]) => void = () => {};
+      mockListClassrooms.mockImplementation(() => new Promise(resolve => { resolveNext = resolve; }));
+
+      await selectSchool('EEM Figueiredo Correia');
+
+      expect(screen.queryByText('3º Ano B - Vespertino')).not.toBeInTheDocument();
+      expect(screen.getByText('Carregando turmas...')).toBeInTheDocument();
+
+      resolveNext((SEED_TURMAS as unknown as Turma[]).filter(t => t.escolaId === 'figueiredo-correia'));
+      await waitFor(() => expect(mockListClassrooms).toHaveBeenCalledWith('figueiredo-correia'));
+    });
+
+    // Item 4 do plano: resolver a Promise do bimestre ANTERIOR depois de já
+    // ter trocado de bimestre nunca pode sobrescrever o contexto atual —
+    // protegido pela flag `cancelled` do useEffect mais a chave de
+    // contexto do próprio hook.
+    it('resolver a Promise do bimestre anterior depois de já ter trocado de bimestre nunca sobrescreve o contexto atual', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      let resolveBimestre1: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockImplementationOnce(() => new Promise(resolve => { resolveBimestre1 = resolve; }));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(mockListMonitoring).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2026, 1));
+
+      let resolveBimestre2: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockImplementationOnce(() => new Promise(resolve => { resolveBimestre2 = resolve; }));
+
+      fireEvent.change(screen.getByLabelText('Bimestre'), { target: { value: '2' } });
+      await waitFor(() => expect(mockListMonitoring).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2026, 2));
+
+      // Resolve a Promise ANTIGA (bimestre 1) só DEPOIS de já estar no
+      // bimestre 2 — a resposta desatualizada nunca pode sobrescrever o
+      // contexto atual, mesmo chegando fora de ordem.
+      resolveBimestre1([monitoringDocCompleto()]);
+      resolveBimestre2([]);
+
+      await waitFor(() => expect(screen.getAllByText('Relatório não informado').length).toBeGreaterThan(0));
+      // "128" (completedGradeEntries do documento do bimestre 1, obsoleto)
+      // nunca aparece — a resposta antiga foi descartada mesmo chegando
+      // depois da resposta atual.
+      expect(screen.queryByText('128')).not.toBeInTheDocument();
+    });
+  });
+
   it('turma com relatório completo mostra os totais e a ação "Atualizar acompanhamento"', async () => {
     saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
     setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);

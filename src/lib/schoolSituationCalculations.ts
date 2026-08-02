@@ -318,6 +318,18 @@ export function calculateGradeEntryMonitoringIndicators(
     dataQuality = 'incompleto';
   }
 
+  // Revisão do code review do PR #17, seção 1: com ao menos uma turma
+  // inconsistente, o percentual desta escola vira null — mesmo que
+  // consolidateGradeEntryMonitoring já exclua a turma inconsistente da
+  // soma (nunca contamina o número), apresentar um percentual calculado só
+  // com as turmas restantes ainda passaria a falsa impressão de que TODO o
+  // conjunto da escola é confiável. dataQuality 'inconsistente' já sinaliza
+  // isso na interface; o percentual precisa concordar (null), não um
+  // número parcial "escondido" atrás do badge.
+  const percentualPreenchimentoGeral = consolidated.turmasInconsistentes > 0
+    ? null
+    : consolidated.percentualPreenchimentoGeral;
+
   return {
     turmasCadastradas: consolidated.turmasCadastradas,
     turmasComRelatorio: consolidated.turmasComRelatorio,
@@ -327,7 +339,7 @@ export function calculateGradeEntryMonitoringIndicators(
     turmasSemPreenchimento: consolidated.turmasSemPreenchimento,
     expectedGradeEntries: consolidated.expectedGradeEntries,
     completedGradeEntries: consolidated.completedGradeEntries,
-    percentualPreenchimentoGeral: consolidated.percentualPreenchimentoGeral,
+    percentualPreenchimentoGeral,
     dataQuality,
   };
 }
@@ -392,15 +404,31 @@ export function calculatePortfolioSituationSummary(
     s => s.estrutura.anoLetivoConfigurado && s.matricula.quantidadeMesesPendentes === 0
   ).length;
 
-  // notas == null (fonte falhou) e notas.dataQuality === 'indisponivel'
-  // (grade_entry_monitoring OK, mas turmas falhou — ver
-  // schoolSituationService.ts) ficam FORA da soma — uma fonte indisponível
-  // nunca contribui com um valor calculado a partir de dado parcial (seção
-  // 9 do code review do PR #16, mesmo cuidado extendido aqui à soma
-  // ponderada).
+  // Revisão do code review do PR #17, seções 1 e 2: uma escola só entra na
+  // soma ponderada (e no contador escolasComNotasConsideradas — o MESMO
+  // conjunto filtrado alimenta os dois, nunca dois filtros divergentes)
+  // quando:
+  //   - notas != null (fonte grade_entry_monitoring carregou);
+  //   - dataQuality !== 'indisponivel' (grade_entry_monitoring OK, mas
+  //     turmas falhou — ver schoolSituationService.ts — nunca soma dado
+  //     calculado a partir de fonte parcial, seção 9 do code review do PR
+  //     #16, agora também aplicado à soma ponderada);
+  //   - dataQuality !== 'inconsistente' (ao menos uma turma da escola tem
+  //     contadores que não fecham matematicamente — mesmo com
+  //     consolidateGradeEntryMonitoring já excluindo a turma inconsistente
+  //     da soma da própria escola, a escola inteira fica de fora da
+  //     carteira/visão global até a inconsistência ser corrigida, nunca
+  //     silenciosamente incluída com um número parcial);
+  //   - expectedGradeEntries > 0 (uma escola sem nenhum lançamento
+  //     esperado — sem turma, ou nenhuma turma com relatório — não
+  //     "contribui" com nada real à soma; contá-la como considerada
+  //     sugeriria um dado que não existe).
   const comNotasDisponiveis = situations.filter(
     (s): s is SchoolSituation & { notas: NonNullable<SchoolSituation['notas']> } =>
-      s.notas != null && s.notas.dataQuality !== 'indisponivel'
+      s.notas != null &&
+      s.notas.dataQuality !== 'indisponivel' &&
+      s.notas.dataQuality !== 'inconsistente' &&
+      s.notas.expectedGradeEntries > 0
   );
   const totalExpectedGradeEntries = comNotasDisponiveis.reduce((sum, s) => sum + s.notas.expectedGradeEntries, 0);
   const totalCompletedGradeEntries = comNotasDisponiveis.reduce((sum, s) => sum + s.notas.completedGradeEntries, 0);

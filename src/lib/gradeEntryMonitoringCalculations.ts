@@ -161,12 +161,25 @@ export function consolidateGradeEntryMonitoring(
         turmasSemPreenchimento += 1;
         break;
       case 'inconsistente':
+        // Conta como "com relatório" (um documento foi de fato submetido),
+        // mas NUNCA soma seus contadores aos totais — um documento
+        // inconsistente pode ter negativo/NaN/Infinity/fracionário em
+        // qualquer campo (ver isMathematicallyConsistent), e somar isso
+        // contaminaria totalStudents/expectedGradeEntries/
+        // completedGradeEntries e, por consequência,
+        // percentualPreenchimentoGeral (revisão do code review do PR #17,
+        // seção 1). Só um documento matematicamente válido entra nos
+        // totais.
         turmasComRelatorio += 1;
         turmasInconsistentes += 1;
-        break;
+        continue;
     }
-    // status !== 'nao_informado' aqui — monitoring nunca é null (garantido
-    // pelo próprio classifyTurmaGradeEntryStatus).
+    // status !== 'nao_informado'/'inconsistente' aqui — monitoring nunca é
+    // null (garantido pelo próprio classifyTurmaGradeEntryStatus) e seus
+    // seis contadores já são inteiros não-negativos consistentes entre si
+    // (garantido por isMathematicallyConsistent, chamado dentro de
+    // classifyTurmaGradeEntryStatus antes de qualquer status que não seja
+    // 'inconsistente').
     const monitoring = row.monitoring as GradeEntryMonitoring;
     totals.totalStudents += monitoring.totalStudents;
     totals.studentsWithCompleteGrades += monitoring.studentsWithCompleteGrades;

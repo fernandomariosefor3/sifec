@@ -31,12 +31,21 @@ export interface UseGradeEntryMonitoringResult {
   refresh: () => void;
 }
 
+// Identifica de forma única a combinação escola+ano+bimestre+modo que
+// `monitoring`/`status` abaixo foram carregados para — ver comentário de
+// `resolvedKey`.
+function buildContextKey(schoolId: string | null, anoLetivo: number, bimestre: Bimestre, isFirebaseMode: boolean): string {
+  return `${schoolId}_${anoLetivo}_${bimestre}_${isFirebaseMode}`;
+}
+
 export function useGradeEntryMonitoring(
   schoolId: string | null,
   anoLetivo: number,
   bimestre: Bimestre,
   isFirebaseMode: boolean
 ): UseGradeEntryMonitoringResult {
+  const contextKey = buildContextKey(schoolId, anoLetivo, bimestre, isFirebaseMode);
+
   const [monitoring, setMonitoring] = useState<GradeEntryMonitoring[]>([]);
   const [status, setStatus] = useState<MonitoringLoadStatus>('idle');
   const [loadError, setLoadError] = useState('');
@@ -45,6 +54,28 @@ export function useGradeEntryMonitoring(
   // useSchoolClassrooms).
   const [refreshTick, setRefreshTick] = useState(0);
   const refresh = useCallback(() => setRefreshTick(t => t + 1), []);
+
+  // Chave do contexto para o qual `monitoring`/`status`/`loadError` acima
+  // foram de fato resolvidos (ou estão em resolução). Revisão do code
+  // review do PR #17, seção 4: limpar só dentro do useEffect não basta — um
+  // efeito roda DEPOIS do commit, então a primeira renderização após trocar
+  // escola/ano/bimestre ainda devolveria monitoring/status do contexto
+  // ANTERIOR por pelo menos um frame. Padrão oficial do React para "ajustar
+  // estado quando uma prop muda" (https://react.dev/learn/you-might-not-
+  // need-an-effect#adjusting-some-state-when-a-prop-changes): comparar a
+  // chave durante o PRÓPRIO render e, se divergente, chamar setState direto
+  // no corpo da função — React descarta este render e refaz com o estado
+  // já corrigido, antes de pintar a tela. `contextKey !== resolvedKey` só
+  // é verdadeiro no primeiro render depois de uma mudança real (o
+  // setResolvedKey abaixo já resolve a divergência para os renders
+  // seguintes), então isto nunca entra em loop.
+  const [resolvedKey, setResolvedKey] = useState(contextKey);
+  if (contextKey !== resolvedKey) {
+    setResolvedKey(contextKey);
+    setMonitoring([]);
+    setStatus(schoolId ? 'loading' : 'idle');
+    setLoadError('');
+  }
 
   useEffect(() => {
     let cancelled = false;

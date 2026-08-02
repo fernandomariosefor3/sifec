@@ -21,12 +21,38 @@ export interface UseSchoolClassroomsResult {
   refresh: () => void;
 }
 
+// Identifica de forma única a combinação escola+modo que `turmas`/`status`
+// abaixo foram carregados para — ver comentário de `resolvedKey`.
+function buildContextKey(schoolId: string | null, isFirebaseMode: boolean): string {
+  return `${schoolId}_${isFirebaseMode}`;
+}
+
 export function useSchoolClassrooms(schoolId: string | null, isFirebaseMode: boolean): UseSchoolClassroomsResult {
+  const contextKey = buildContextKey(schoolId, isFirebaseMode);
+
   const [turmas, setTurmas] = useState<Turma[]>([]);
   const [status, setStatus] = useState<ClassroomsLoadStatus>('idle');
   const [loadError, setLoadError] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
   const refresh = useCallback(() => setRefreshTick(t => t + 1), []);
+
+  // Mesmo padrão de resolvedKey de useGradeEntryMonitoring.ts (revisão do
+  // code review do PR #17, seção 4): sem esta correção durante o render, a
+  // primeira renderização depois de trocar de escola ainda devolveria as
+  // turmas da escola ANTERIOR por um frame — o useEffect abaixo só roda
+  // DEPOIS do commit. Comparar a chave durante o próprio render e ajustar
+  // o estado diretamente no corpo da função é o padrão oficial do React
+  // para isto (https://react.dev/learn/you-might-not-need-an-effect#
+  // adjusting-some-state-when-a-prop-changes); `contextKey !== resolvedKey`
+  // só é verdadeiro no primeiro render depois de uma mudança real, então
+  // isto nunca entra em loop.
+  const [resolvedKey, setResolvedKey] = useState(contextKey);
+  if (contextKey !== resolvedKey) {
+    setResolvedKey(contextKey);
+    setTurmas([]);
+    setStatus(isFirebaseMode && schoolId ? 'loading' : 'idle');
+    setLoadError('');
+  }
 
   useEffect(() => {
     let cancelled = false;

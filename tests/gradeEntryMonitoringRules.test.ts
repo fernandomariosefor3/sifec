@@ -256,9 +256,43 @@ describe('Fase 2C.1 — grade_entry_monitoring', () => {
     await assertFails(getDocs(collection(db, 'grade_entry_monitoring')));
   });
 
+  // monitoringPayload() usa turmaNome: 'Turma A - Teste', o nome EXATO
+  // cadastrado em `turmas` para TURMA_A_ID (linha do beforeEach) — este
+  // teste já cobre "criação com turmaNome canônico permitida" (revisão do
+  // code review do PR #17, seção 3), além da autorização básica.
   it('acompanhamento válido é permitido', async () => {
     const db = ctxFor(ACTIVE_A_EMAIL).firestore();
     await assertSucceeds(setDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload()));
+  });
+
+  // Revisão do code review do PR #17, seção 3:
+  // isCanonicalTurmaOfSchoolYearAndName precisa bloquear a criação quando
+  // turmaId/schoolId/anoLetivo estão corretos mas turmaNome diverge do nome
+  // real cadastrado em `turmas` — antes só schoolId/anoLetivo eram
+  // verificados, e um turmaNome adulterado passava despercebido.
+  it('turmaId correto com turmaNome adulterado é bloqueado', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload({ turmaNome: 'Turma Inventada' }))
+    );
+  });
+
+  // Comparação por igualdade estrita de string (turma.get('nome', '') ==
+  // turmaNome): diferença de caixa ou espaço não pode ser tolerada
+  // silenciosamente — mesmo padrão de rigor de isCanonicalSchoolMatch para
+  // codInep/escolaNome.
+  it('diferença de caixa no turmaNome não é aceita silenciosamente', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload({ turmaNome: 'turma a - teste' }))
+    );
+  });
+
+  it('diferença de espaço no turmaNome não é aceita silenciosamente', async () => {
+    const db = ctxFor(ACTIVE_A_EMAIL).firestore();
+    await assertFails(
+      setDoc(doc(db, 'grade_entry_monitoring', MONITORING_ID), monitoringPayload({ turmaNome: 'Turma A - Teste ' }))
+    );
   });
 
   it('escola incorreta (schoolId de outra escola) é bloqueada', async () => {

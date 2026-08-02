@@ -25,7 +25,12 @@ export async function listClassroomsForSchool(schoolId: string): Promise<Turma[]
   const byId = new Map<string, Turma>();
   for (const snap of [byEscolaId, bySchoolId]) {
     for (const d of snap.docs) {
-      const turma = d.data() as Turma;
+      // Revisão do code review do PR #17, seção 5: d.id (a chave real do
+      // documento no Firestore) precisa prevalecer sobre qualquer campo
+      // `id` interno divergente em d.data() — um `id` interno desatualizado
+      // ou ausente nunca pode fazer duas turmas diferentes colapsarem sob a
+      // mesma chave (ou sob `undefined`) neste Map de deduplicação.
+      const turma = { ...d.data(), id: d.id } as Turma;
       byId.set(turma.id, turma);
     }
   }

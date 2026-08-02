@@ -280,6 +280,28 @@ service cloud.firestore {
         turma.get('anoLetivo', null) == anoLetivo;
     }
 
+    // Mesma integridade de isCanonicalTurmaOfSchoolYear, mais o nome exibido
+    // da turma (revisão do code review do PR #17, seção 3): sem esta
+    // checagem, um create de grade_entry_monitoring podia informar um
+    // turmaId/schoolId/anoLetivo corretos mas um turmaNome adulterado (ou
+    // com diferença de caixa/espaço), divergindo do nome real cadastrado em
+    // `turmas` sem que nenhuma regra barrasse — só isCanonicalTurmaOfSchoolYear
+    // (sem checar nome) era usado no create. Comparação por igualdade
+    // estrita de string: turma.get('nome', '') == turmaNome NÃO tolera
+    // diferença de caixa nem espaço, de propósito — o nome recebido precisa
+    // bater exatamente com o documento em `turmas`, nunca "parecido".
+    // Função própria (não uma variação por parâmetro opcional) para não
+    // alterar o comportamento dos outros usos existentes de
+    // isCanonicalTurmaOfSchoolYear (student_rosters) e para fazer só UM
+    // get() de `turmas` — mesmo orçamento de leitura, checagem extra sem
+    // custo adicional de sub-expressão de rede.
+    function isCanonicalTurmaOfSchoolYearAndName(turmaId, schoolId, anoLetivo, turmaNome) {
+      let turma = get(/databases/$(database)/documents/turmas/$(turmaId)).data;
+      return (turma.get('schoolId', '') == schoolId || turma.get('escolaId', '') == schoolId) &&
+        turma.get('anoLetivo', null) == anoLetivo &&
+        turma.get('nome', '') == turmaNome;
+    }
+
     // --- Superintendentes ---
     // Hierarquia: admin raiz > admin cadastrado > superintendente comum.
     // Get: o próprio usuário lê seu registro, ou qualquer admin lê qualquer um.
@@ -856,10 +878,14 @@ service cloud.firestore {
       // depende do MESMO campo usado no where().
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
 
+      // isCanonicalTurmaOfSchoolYearAndName (não a variante sem nome): a
+      // revisão do code review do PR #17, seção 3, exige que turmaNome
+      // corresponda EXATAMENTE ao nome real cadastrado em `turmas`, não só
+      // schoolId/anoLetivo — ver comentário do helper.
       allow create: if isValidId(monitoringId) &&
         canWriteEscola(incoming().escolaNome) &&
         isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
-        isCanonicalTurmaOfSchoolYear(incoming().turmaId, incoming().schoolId, incoming().anoLetivo) &&
+        isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
         isValidGradeEntryMonitoringShape(monitoringId);
 
       // Update = correção do MESMO acompanhamento (mesma escola/turma/ano/

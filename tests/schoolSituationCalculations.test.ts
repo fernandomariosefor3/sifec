@@ -329,6 +329,21 @@ describe('calculateGradeEntryMonitoringIndicators', () => {
     const result = calculateGradeEntryMonitoringIndicators(turmas, monitoring);
     expect(result.percentualPreenchimentoGeral).toBeNull();
   });
+
+  // Revisão do code review do PR #17, seção 1: com ao menos uma turma
+  // inconsistente, o percentual da ESCOLA vira null — mesmo quando as
+  // demais turmas são válidas e teriam um percentual calculável — para
+  // nunca sugerir que todo o conjunto da escola é confiável.
+  it('escola com ao menos uma turma inconsistente: dataQuality inconsistente e percentual null, mesmo com turma válida', () => {
+    const turmas = [buildTurma({ id: 't1' }), buildTurma({ id: 't2' })];
+    const monitoring = [
+      buildMonitoring({ turmaId: 't1', expectedGradeEntries: 100, completedGradeEntries: 100 }), // válida, 100%
+      buildMonitoring({ turmaId: 't2', expectedGradeEntries: 100, completedGradeEntries: 999 }), // inconsistente
+    ];
+    const result = calculateGradeEntryMonitoringIndicators(turmas, monitoring);
+    expect(result.dataQuality).toBe('inconsistente');
+    expect(result.percentualPreenchimentoGeral).toBeNull();
+  });
 });
 
 describe('calculateVisitIndicators / filterVisitasForSchool', () => {
@@ -443,6 +458,83 @@ describe('calculatePortfolioSituationSummary', () => {
     });
     const summary = calculatePortfolioSituationSummary([semLancamentos]);
     expect(summary.percentualPreenchimentoNotas).toBeNull();
+    // Revisão do code review do PR #17, seção 2: expectedGradeEntries igual
+    // a zero significa que a escola não contribuiu de fato — ela não deve
+    // ser contada, mesmo tendo um documento `notas` não nulo.
+    expect(summary.escolasComNotasConsideradas).toBe(0);
+  });
+
+  // Revisão do code review do PR #17, seção 2: escola sem NENHUM relatório
+  // de turma (turmasComRelatorio: 0) é o caso mais comum de
+  // expectedGradeEntries zero — precisa ficar de fora tanto do contador
+  // quanto da soma ponderada, e não apenas contribuir com zero.
+  it('escola sem relatório de nenhuma turma não conta como escola considerada', () => {
+    const semRelatorio = buildSituation({
+      schoolId: 'esc1',
+      notas: notasComTotais({
+        turmasComRelatorio: 0, turmasCompletas: 0, turmasParciais: 0, turmasSemPreenchimento: 0,
+        turmasSemRelatorio: 1, expectedGradeEntries: 0, completedGradeEntries: 0,
+        percentualPreenchimentoGeral: null, dataQuality: 'incompleto',
+      }),
+    });
+    const comRelatorio = buildSituation({
+      schoolId: 'esc2',
+      notas: notasComTotais({ expectedGradeEntries: 100, completedGradeEntries: 100 }),
+    });
+    const summary = calculatePortfolioSituationSummary([semRelatorio, comRelatorio]);
+    expect(summary.escolasComNotasConsideradas).toBe(1);
+    expect(summary.percentualPreenchimentoNotas).toBe(100);
+  });
+
+  // Revisão do code review do PR #17, seção 1: escola com dataQuality
+  // `inconsistente` (ao menos uma turma inconsistente) precisa ficar de
+  // fora do percentual consolidado da carteira — mesmo que ela ainda
+  // carregue um expectedGradeEntries/completedGradeEntries residual de
+  // turmas válidas, incluí-la sugeriria confiabilidade que o conjunto não
+  // tem.
+  it('escola com dataQuality inconsistente fica fora do percentual da carteira', () => {
+    const consistente = buildSituation({
+      schoolId: 'esc1',
+      notas: notasComTotais({ expectedGradeEntries: 100, completedGradeEntries: 100 }),
+    });
+    const inconsistente = buildSituation({
+      schoolId: 'esc2',
+      notas: notasComTotais({
+        expectedGradeEntries: 1000, completedGradeEntries: 1000,
+        percentualPreenchimentoGeral: null, dataQuality: 'inconsistente',
+      }),
+    });
+    const summary = calculatePortfolioSituationSummary([consistente, inconsistente]);
+    // Se a escola inconsistente entrasse na soma, o resultado se aproximaria
+    // de 100% só por coincidência de valores — o teste força um cenário
+    // onde incluí-la mudaria o resultado numérico (o que já seria errado
+    // por si só, dataQuality inconsistente não deveria ditar o percentual
+    // de ninguém) e confirma que ela é excluída tanto do percentual quanto
+    // do contador.
+    expect(summary.percentualPreenchimentoNotas).toBe(100);
+    expect(summary.escolasComNotasConsideradas).toBe(1);
+  });
+
+  // Revisão do code review do PR #17, seção 2: cenário explícito do plano —
+  // muitas escolas consultadas, mas só uma realmente contribuiu.
+  it('56 escolas consultadas, apenas uma com expectedGradeEntries > 0: escolasComNotasConsideradas é 1', () => {
+    const escolaValida = buildSituation({
+      schoolId: 'esc-valida',
+      notas: notasComTotais({ expectedGradeEntries: 100, completedGradeEntries: 50, percentualPreenchimentoGeral: 50 }),
+    });
+    const escolasSemContribuicao = Array.from({ length: 55 }, (_, i) =>
+      buildSituation({
+        schoolId: `esc-vazia-${i}`,
+        notas: i % 2 === 0 ? null : notasComTotais({
+          turmasComRelatorio: 0, expectedGradeEntries: 0, completedGradeEntries: 0,
+          percentualPreenchimentoGeral: null, dataQuality: 'incompleto',
+        }),
+      })
+    );
+    const summary = calculatePortfolioSituationSummary([escolaValida, ...escolasSemContribuicao]);
+    expect(summary.escolasAcompanhadas).toBe(56);
+    expect(summary.escolasComNotasConsideradas).toBe(1);
+    expect(summary.percentualPreenchimentoNotas).toBe(50);
   });
 
   it('escola com notas indisponível (fonte de turmas falhou) fica fora da soma ponderada', () => {
