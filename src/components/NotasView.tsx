@@ -15,6 +15,7 @@
 // uma falha real esconde a tabela por trás de um aviso com "Tentar
 // novamente", em vez de renderizar zeros ou classificações inventadas.
 import { useEffect, useMemo, useState } from 'react';
+import { ClipboardPlus } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
@@ -36,6 +37,7 @@ import GradeEntryMonitoringTable, {
   type StatusFilter,
 } from './notas/GradeEntryMonitoringTable';
 import GradeEntryMonitoringFormModal from './notas/GradeEntryMonitoringFormModal';
+import SigeReportModal from './notas/SigeReportModal';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
 
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
@@ -58,6 +60,7 @@ export default function NotasView() {
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('todos');
   const [modalRow, setModalRow] = useState<GradeEntryMonitoringRow | null>(null);
+  const [showSigeReportModal, setShowSigeReportModal] = useState(false);
 
   function handleAnoLetivoChange(nextAnoLetivo: number) {
     setAnoLetivo(nextAnoLetivo);
@@ -157,6 +160,22 @@ export default function NotasView() {
 
   const canWrite = selectedSchool ? hasSchoolWriteAccess(selectedSchool.nome) : false;
 
+  function handleRelatorioSaved() {
+    refreshTurmas();
+    refreshMonitoring();
+  }
+
+  // Botão permanente (correção funcional pós-PR #17): precisa existir mesmo
+  // sem nenhuma turma cadastrada, sem acompanhamento anterior, ou com a
+  // tabela vazia — nunca depende de uma linha existir. Ano letivo e
+  // bimestre sempre têm um valor selecionado (nunca vazio nestes selects),
+  // então a única condição real além de escola+autorização é a escola
+  // selecionada. `!turmasUnavailable` é uma proteção adicional (não pedida
+  // explicitamente, mas necessária): sem a lista real de turmas já
+  // carregada, a correspondência do relatório não tem como saber quais
+  // turmas já existem, arriscando criar uma turma duplicada por engano.
+  const showRegistrarRelatorioButton = !!selectedSchool && canWrite && !turmasUnavailable;
+
   return (
     <div className="space-y-6">
       {/* Cabeçalho */}
@@ -205,6 +224,15 @@ export default function NotasView() {
             <option value={3}>3º Bimestre</option>
             <option value={4}>4º Bimestre</option>
           </select>
+          {showRegistrarRelatorioButton && (
+            <button
+              type="button"
+              onClick={() => setShowSigeReportModal(true)}
+              className="py-1.5 px-3 bg-brand-turquoise hover:bg-brand-turquoise/90 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm whitespace-nowrap"
+            >
+              <ClipboardPlus size={14} /> Registrar relatório do SIGE
+            </button>
+          )}
         </div>
       </div>
 
@@ -251,6 +279,24 @@ export default function NotasView() {
             <div className="bg-white border border-rose-200 rounded-2xl p-10 text-center text-xs text-rose-500 font-bold">
               Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.
             </div>
+          ) : !isLoading && turmasDaEscola.length === 0 ? (
+            // Correção funcional pós-PR #17: nenhuma turma cadastrada não é
+            // mais um beco sem saída que exige sair para Gestão de Escolas —
+            // o relatório do SIGE pode nascer a própria turma, com
+            // confirmação humana (ver SigeReportModal).
+            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-xs">
+              <p className="text-slate-500 font-bold mb-1">Nenhum relatório registrado para esta escola, ano e bimestre.</p>
+              <p className="text-slate-400 mb-3">Registre os totais agregados do relatório do SIGE Escola para começar o acompanhamento.</p>
+              {showRegistrarRelatorioButton && (
+                <button
+                  type="button"
+                  onClick={() => setShowSigeReportModal(true)}
+                  className="px-3 py-1.5 bg-brand-turquoise hover:bg-brand-turquoise/90 rounded-lg text-[11px] font-bold text-white transition inline-flex items-center gap-1.5"
+                >
+                  <ClipboardPlus size={13} /> Registrar relatório do SIGE
+                </button>
+              )}
+            </div>
           ) : (
             <GradeEntryMonitoringTable
               rows={rows}
@@ -274,6 +320,18 @@ export default function NotasView() {
           existing={modalRow.monitoring}
           onClose={() => setModalRow(null)}
           onSaved={refreshMonitoring}
+        />
+      )}
+
+      {showSigeReportModal && selectedSchool && (
+        <SigeReportModal
+          school={selectedSchool}
+          anoLetivo={anoLetivo}
+          bimestre={bimestre}
+          existingTurmas={turmasDaEscola}
+          existingMonitoringByTurmaId={monitoringByTurmaId}
+          onClose={() => setShowSigeReportModal(false)}
+          onSaved={handleRelatorioSaved}
         />
       )}
     </div>

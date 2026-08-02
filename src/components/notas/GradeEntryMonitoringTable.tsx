@@ -106,7 +106,7 @@ export default function GradeEntryMonitoringTable({
                 <tr>
                   <td colSpan={12} className="py-8 text-center text-slate-400">
                     {rows.length === 0
-                      ? 'Nenhuma turma cadastrada para esta escola e ano letivo — cadastre a turma em Gestão de Escolas.'
+                      ? 'Nenhuma turma cadastrada para esta escola e ano letivo.'
                       : 'Nenhuma turma encontrada com a situação selecionada.'}
                   </td>
                 </tr>
