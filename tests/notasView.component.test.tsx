@@ -34,7 +34,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const { authStateListeners, mockAuth, mockListMonitoring, mockSaveMonitoring, mockListClassrooms } = vi.hoisted(() => {
+const { authStateListeners, mockAuth, mockListMonitoring, mockSaveMonitoring, mockListClassrooms, writeAccessOverride } = vi.hoisted(() => {
   const listeners: Array<(user: unknown) => void> = [];
   return {
     authStateListeners: listeners,
@@ -51,6 +51,10 @@ const { authStateListeners, mockAuth, mockListMonitoring, mockSaveMonitoring, mo
     mockListMonitoring: vi.fn(),
     mockSaveMonitoring: vi.fn(),
     mockListClassrooms: vi.fn(),
+    // null = usa a implementação real (comportamento de todos os testes
+    // existentes) — só um teste dedicado sobrescreve isto para simular
+    // "usuário sem autorização de escrita para esta escola".
+    writeAccessOverride: { current: null as ((schoolName: string) => boolean) | null },
   };
 });
 
@@ -67,6 +71,15 @@ vi.mock('../src/lib/gradeEntryMonitoringService', async importOriginal => {
     ...actual,
     listGradeEntryMonitoringForSchool: (...args: unknown[]) => mockListMonitoring(...args),
     saveGradeEntryMonitoring: (...args: unknown[]) => mockSaveMonitoring(...args),
+  };
+});
+
+vi.mock('../src/lib/superintendentService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/lib/superintendentService')>();
+  return {
+    ...actual,
+    hasSchoolWriteAccess: (schoolName: string) =>
+      writeAccessOverride.current ? writeAccessOverride.current(schoolName) : actual.hasSchoolWriteAccess(schoolName),
   };
 });
 
@@ -118,6 +131,7 @@ describe('NotasView', () => {
     mockAuth.currentUser = null;
     mockListMonitoring.mockReset().mockResolvedValue([]);
     mockSaveMonitoring.mockReset();
+    writeAccessOverride.current = null;
     // Comportamento padrão: filtra SEED_TURMAS por escolaId, provando que a
     // consulta é escopada — nunca a coleção inteira (seção 2 do code
     // review do PR #17).
@@ -137,7 +151,11 @@ describe('NotasView', () => {
     expect(mockListMonitoring).not.toHaveBeenCalled();
   });
 
-  it('escola sem turma cadastrada mostra orientação (nunca cria turma automaticamente)', async () => {
+  // Correção funcional pós-PR #17: escola sem turma cadastrada nunca mais
+  // fica sem saída — "Registrar relatório do SIGE" fica disponível mesmo
+  // aqui (item 9 do plano), sem orientar o usuário a sair para Gestão de
+  // Escolas.
+  it('escola sem turma cadastrada mostra o novo estado vazio com o botão de registro, nunca orienta para Gestão de Escolas (nunca cria turma automaticamente)', async () => {
     saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEMTI Estado do Amazonas'])]);
     setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
 
@@ -146,10 +164,28 @@ describe('NotasView', () => {
     await selectSchool('EEMTI Estado do Amazonas');
 
     await waitFor(() =>
-      expect(
-        screen.getByText('Nenhuma turma cadastrada para esta escola e ano letivo — cadastre a turma em Gestão de Escolas.')
-      ).toBeInTheDocument()
+      expect(screen.getByText('Nenhum relatório registrado para esta escola, ano e bimestre.')).toBeInTheDocument()
     );
+    expect(screen.getByText('Registre os totais agregados do relatório do SIGE Escola para começar o acompanhamento.')).toBeInTheDocument();
+    expect(screen.queryByText(/Gestão de Escolas/)).not.toBeInTheDocument();
+    // O botão aparece tanto no cabeçalho quanto dentro do bloco de estado
+    // vazio — getAllByRole em vez de getByRole.
+    expect(screen.getAllByRole('button', { name: 'Registrar relatório do SIGE' }).length).toBe(2);
+  });
+
+  // Item 12 do plano: "usuário sem autorização não pode registrar" — o
+  // botão (cabeçalho e estado vazio) nunca aparece sem hasSchoolWriteAccess.
+  it('usuário sem autorização de escrita para a escola nunca vê "Registrar relatório do SIGE"', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    writeAccessOverride.current = () => false;
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+
+    await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
+    expect(screen.queryByRole('button', { name: 'Registrar relatório do SIGE' })).not.toBeInTheDocument();
   });
 
   it('escola com turmas mas sem relatório informado mostra o estado real por turma (nunca dado fictício)', async () => {
@@ -223,8 +259,13 @@ describe('NotasView', () => {
 
       await waitFor(() => expect(screen.getByText(/Não foi possível carregar as turmas desta escola/)).toBeInTheDocument());
       expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument();
-      expect(screen.queryByText('Nenhuma turma cadastrada para esta escola e ano letivo — cadastre a turma em Gestão de Escolas.')).not.toBeInTheDocument();
+      expect(screen.queryByText('Nenhum relatório registrado para esta escola, ano e bimestre.')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Registrar acompanhamento' })).not.toBeInTheDocument();
+      // Sem a lista real de turmas carregada, "Registrar relatório do
+      // SIGE" também fica indisponível — evita risco de criar turma
+      // duplicada por engano (ver showRegistrarRelatorioButton em
+      // NotasView.tsx).
+      expect(screen.queryByRole('button', { name: 'Registrar relatório do SIGE' })).not.toBeInTheDocument();
     });
 
     it('falha ao carregar turmas nunca restaura SEED_TURMAS', async () => {
@@ -254,6 +295,10 @@ describe('NotasView', () => {
 
       await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
       expect(screen.queryByText(/Não foi possível carregar as turmas desta escola/)).not.toBeInTheDocument();
+      // Item 4 do code review do PR #18: recuperada a fonte, o botão volta
+      // a ficar disponível (turmasStatus e monitoringStatus voltam a
+      // 'success').
+      expect(screen.getByRole('button', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument();
     });
   });
 
@@ -272,6 +317,10 @@ describe('NotasView', () => {
       expect(screen.queryByText('0%')).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Registrar acompanhamento' })).not.toBeInTheDocument();
       expect(screen.queryByRole('button', { name: 'Atualizar acompanhamento' })).not.toBeInTheDocument();
+      // Item 4 do code review do PR #18: falha de grade_entry_monitoring
+      // também esconde "Registrar relatório do SIGE" — nunca abre o modal
+      // com existingMonitoringByTurmaId desconhecido.
+      expect(screen.queryByRole('button', { name: 'Registrar relatório do SIGE' })).not.toBeInTheDocument();
     });
 
     it('retry bem-sucedido depois de uma falha de grade_entry_monitoring restaura tabela e indicadores normais', async () => {
@@ -290,6 +339,29 @@ describe('NotasView', () => {
       await waitFor(() => expect(screen.getAllByText('Relatório não informado').length).toBe(2));
       expect(screen.queryByText('Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.')).not.toBeInTheDocument();
       expect(screen.getAllByRole('button', { name: 'Registrar acompanhamento' })).toHaveLength(2);
+      // Item 4 do code review do PR #18: retry bem-sucedido habilita
+      // "Registrar relatório do SIGE" de novo.
+      expect(screen.getByRole('button', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument();
+    });
+
+    // Item 4 do code review do PR #18: enquanto QUALQUER uma das duas
+    // fontes ainda está carregando, o botão fica indisponível — não basta
+    // "não ter falhado ainda".
+    it('carregamento em andamento (grade_entry_monitoring) desabilita "Registrar relatório do SIGE" até a consulta terminar', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      let resolveMonitoring: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockReturnValue(new Promise(resolve => { resolveMonitoring = resolve; }));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      await waitFor(() => expect(screen.getByText('Carregando turmas...')).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: 'Registrar relatório do SIGE' })).not.toBeInTheDocument();
+
+      resolveMonitoring([]);
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument());
     });
 
     // Revisão do code review do PR #17, seção 1: trocar de escola enquanto o

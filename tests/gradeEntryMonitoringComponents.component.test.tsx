@@ -42,9 +42,15 @@ describe('GradeEntryMonitoringTable', () => {
     expect(screen.getByText('Carregando turmas...')).toBeInTheDocument();
   });
 
-  it('nenhuma turma cadastrada mostra orientação para cadastrar em Gestão de Escolas', () => {
+  // Correção funcional pós-PR #17: a tabela nunca mais orienta o usuário a
+  // sair para Gestão de Escolas — a tela principal (NotasView) já
+  // substitui esta condição pelo bloco "Registrar relatório do SIGE" antes
+  // mesmo de a tabela ser renderizada; esta mensagem factual permanece só
+  // como fallback de quem usa a tabela isoladamente.
+  it('nenhuma turma cadastrada mostra mensagem factual, sem orientar para Gestão de Escolas', () => {
     render(<GradeEntryMonitoringTable rows={[]} loading={false} canWrite statusFilter="todos" onStatusFilterChange={noop} onRegistrar={noop} />);
-    expect(screen.getByText(/Nenhuma turma cadastrada para esta escola e ano letivo/)).toBeInTheDocument();
+    expect(screen.getByText('Nenhuma turma cadastrada para esta escola e ano letivo.')).toBeInTheDocument();
+    expect(screen.queryByText(/Gestão de Escolas/)).not.toBeInTheDocument();
   });
 
   it('turma sem relatório informado mostra "—" nos totais e badge "Relatório não informado"', () => {

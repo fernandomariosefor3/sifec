@@ -596,7 +596,7 @@ export function BuscaAtivaView() {
     setFaltas('5');
     setRisco('Alto');
     setStatus('Rastreamento Pendente');
-    setLogIntervencao(`Sinalizado automaticamente devido a rendimento crítico insatisfatório (< 6.0) no ${filterBimestre} na aba do Lançamento de Notas.`);
+    setLogIntervencao(`Sinalizado automaticamente devido a rendimento crítico insatisfatório (< 6.0) no ${filterBimestre} na aba do Acompanhamento de Notas.`);
     setFormError('');
     setShowForm(true);
   };

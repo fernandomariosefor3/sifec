@@ -532,7 +532,7 @@ export default function App() {
               }`}
             >
               <span className="flex items-center gap-2">
-                <FileSpreadsheet size={15} /> Lançamento de Notas
+                <FileSpreadsheet size={15} /> Acompanhamento de Notas
               </span>
               <ChevronRight size={12} className="opacity-60" />
             </button>
