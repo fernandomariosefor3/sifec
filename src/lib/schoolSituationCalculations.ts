@@ -318,18 +318,10 @@ export function calculateGradeEntryMonitoringIndicators(
     dataQuality = 'incompleto';
   }
 
-  // Revisão do code review do PR #17, seção 1: com ao menos uma turma
-  // inconsistente, o percentual desta escola vira null — mesmo que
-  // consolidateGradeEntryMonitoring já exclua a turma inconsistente da
-  // soma (nunca contamina o número), apresentar um percentual calculado só
-  // com as turmas restantes ainda passaria a falsa impressão de que TODO o
-  // conjunto da escola é confiável. dataQuality 'inconsistente' já sinaliza
-  // isso na interface; o percentual precisa concordar (null), não um
-  // número parcial "escondido" atrás do badge.
-  const percentualPreenchimentoGeral = consolidated.turmasInconsistentes > 0
-    ? null
-    : consolidated.percentualPreenchimentoGeral;
-
+  // consolidated.percentualPreenchimentoGeral já vem null quando há turma
+  // inconsistente (consolidateGradeEntryMonitoring — ajuste cirúrgico
+  // pós-PR #17: a regra saiu daqui e passou a valer para TODOS os
+  // consumidores, não só a Sala de Situação).
   return {
     turmasCadastradas: consolidated.turmasCadastradas,
     turmasComRelatorio: consolidated.turmasComRelatorio,
@@ -339,7 +331,7 @@ export function calculateGradeEntryMonitoringIndicators(
     turmasSemPreenchimento: consolidated.turmasSemPreenchimento,
     expectedGradeEntries: consolidated.expectedGradeEntries,
     completedGradeEntries: consolidated.completedGradeEntries,
-    percentualPreenchimentoGeral,
+    percentualPreenchimentoGeral: consolidated.percentualPreenchimentoGeral,
     dataQuality,
   };
 }

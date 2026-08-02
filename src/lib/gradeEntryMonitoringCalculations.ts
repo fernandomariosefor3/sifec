@@ -198,6 +198,16 @@ export function consolidateGradeEntryMonitoring(
     turmasSemPreenchimento,
     turmasInconsistentes,
     ...totals,
-    percentualPreenchimentoGeral: calculateCompletionPercentage(totals),
+    // Ajuste cirúrgico pós-PR #17: mesmo com os contadores das turmas
+    // inconsistentes já fora de `totals` (nunca contaminam a soma), um
+    // percentual calculado só com as turmas válidas ainda mentiria por
+    // omissão — NotasView/NotasSummaryCards usam este consolidado
+    // DIRETAMENTE (não passam por calculateGradeEntryMonitoringIndicators,
+    // que já fazia esta mesma correção só no nível da escola), então a
+    // regra precisa estar aqui, na função que TODOS os consumidores
+    // (NotasView, NotasSummaryCards, Sala de Situação) compartilham. Uma
+    // única turma inconsistente já é suficiente para o conjunto inteiro
+    // não ser "confiável o bastante" para exibir um percentual.
+    percentualPreenchimentoGeral: turmasInconsistentes > 0 ? null : calculateCompletionPercentage(totals),
   };
 }

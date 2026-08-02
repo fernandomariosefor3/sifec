@@ -480,6 +480,62 @@ describe('NotasView', () => {
     expect(document.body.textContent).not.toMatch(/Estudante/);
   });
 
+  // Ajuste cirúrgico pós-PR #17: consolidateGradeEntryMonitoring (usado
+  // DIRETAMENTE por NotasView, sem passar por
+  // calculateGradeEntryMonitoringIndicators) precisa esconder o percentual
+  // geral quando existe turma inconsistente — mesmo que os totais, olhados
+  // isoladamente, pareçam "100% preenchidos" só com a turma válida.
+  it('turma válida + turma inconsistente: tela principal de notas nunca mostra percentual enganoso, avisa da inconsistência e mantém a linha visível', async () => {
+    saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+    setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+    mockListMonitoring.mockResolvedValue([
+      {
+        id: 'diva-cabral_2026_b1_turma-3a-diva',
+        schoolId: DIVA_SCHOOL_ID, codInep: '23067918', escolaNome: 'EEM Diva Cabral',
+        turmaId: 'turma-3a-diva', turmaNome: '3º Ano A - Matutino', anoLetivo: 2026, bimestre: 1,
+        totalStudents: 32, studentsWithCompleteGrades: 32, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+        expectedGradeEntries: 100, completedGradeEntries: 100, status: 'confirmado', sourceSystem: 'SIGE Escola',
+        referenceDate: '2026-03-10',
+        createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
+        createdBy: SUPER_A_EMAIL, updatedBy: SUPER_A_EMAIL,
+      },
+      {
+        // completedGradeEntries > expectedGradeEntries: inconsistente.
+        id: 'diva-cabral_2026_b1_turma-3b-diva',
+        schoolId: DIVA_SCHOOL_ID, codInep: '23067918', escolaNome: 'EEM Diva Cabral',
+        turmaId: 'turma-3b-diva', turmaNome: '3º Ano B - Vespertino', anoLetivo: 2026, bimestre: 1,
+        totalStudents: 20, studentsWithCompleteGrades: 20, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+        expectedGradeEntries: 80, completedGradeEntries: 999, status: 'confirmado', sourceSystem: 'SIGE Escola',
+        referenceDate: '2026-03-10',
+        createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
+        createdBy: SUPER_A_EMAIL, updatedBy: SUPER_A_EMAIL,
+      },
+    ]);
+
+    render(<NotasView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchool('EEM Diva Cabral');
+
+    // Aviso agregado de inconsistência aparece (cartão-resumo + banner).
+    await waitFor(() => expect(screen.getByText('Revisar inconsistências')).toBeInTheDocument());
+    expect(screen.getByText(/1 turma com relatório inconsistente/)).toBeInTheDocument();
+    // "Inconsistente" aparece duas vezes (botão do filtro de situação +
+    // badge da linha da turma) — getAllByText em vez de getByText.
+    expect(screen.getAllByText('Inconsistente').length).toBe(2);
+
+    // O cartão-resumo "Preenchimento geral" nunca mostra um percentual
+    // calculado (nem "100%", que seria o resultado só com a turma válida,
+    // nem "Não informado", que sugeriria ausência de relatório em vez de
+    // um relatório presente porém inconsistente) — só "Revisar
+    // inconsistências", já confirmado acima.
+    expect(screen.queryByText('Não informado')).not.toBeInTheDocument();
+
+    // A linha da turma inconsistente continua visível na tabela, com ação
+    // de correção habilitada — nunca escondida ou filtrada.
+    expect(screen.getByText('3º Ano B - Vespertino')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Atualizar acompanhamento' }).length).toBe(2);
+  });
+
   it('sucesso no registro do acompanhamento (onSaved do modal) recarrega os dados', async () => {
     saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
     setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);

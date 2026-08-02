@@ -222,7 +222,17 @@ describe('consolidateGradeEntryMonitoring', () => {
       expect(result.percentualPreenchimentoGeral).not.toBe(Infinity);
     });
 
-    it('turma válida + turma inconsistente: percentual reflete só a turma válida, nunca um valor enganoso', () => {
+    // Ajuste cirúrgico pós-PR #17: mesmo com os TOTAIS refletindo só a
+    // turma válida (nunca a turma inconsistente contamina a soma), expor
+    // um percentual CALCULADO a partir desses totais parciais ainda seria
+    // enganoso — NotasView/NotasSummaryCards usam consolidateGradeEntryMonitoring
+    // diretamente (sem passar por calculateGradeEntryMonitoringIndicators,
+    // que já forçava null só no nível da escola), e mostrariam "100%" na
+    // tela principal de notas mesmo com uma turma inconsistente pendente
+    // de correção. Com turmasInconsistentes > 0, o percentual precisa ser
+    // null, não um número "tecnicamente correto" mas enganoso pelo
+    // contexto.
+    it('turma válida + turma inconsistente: totais refletem só a turma válida, mas o percentual vira null (nunca um número enganoso)', () => {
       const rows: TurmaGradeEntryRow[] = [
         { turmaId: 't1', turmaNome: 'Turma Válida', monitoring: buildMonitoring({
           turmaId: 't1', expectedGradeEntries: 100, completedGradeEntries: 100,
@@ -233,11 +243,12 @@ describe('consolidateGradeEntryMonitoring', () => {
       ];
       const result = consolidateGradeEntryMonitoring(rows);
       expect(result.turmasInconsistentes).toBe(1);
-      // Só a turma válida (100/100) entra na soma — nunca (100+999)/(100+100),
-      // que produziria um percentual > 100% sem sentido.
+      // Só a turma válida (100/100) entra nos totais — nunca (100+999)/(100+100).
       expect(result.expectedGradeEntries).toBe(100);
       expect(result.completedGradeEntries).toBe(100);
-      expect(result.percentualPreenchimentoGeral).toBe(100);
+      // Mas o percentual EXPOSTO nunca "esconde" a inconsistência atrás de
+      // um número que parece 100% confiável.
+      expect(result.percentualPreenchimentoGeral).toBeNull();
     });
   });
 });
