@@ -62,3 +62,16 @@ export function buildStudentRosterId(
 export function buildStudentBimesterGradeId(rosterId: string, bimestre: number): string {
   return `${rosterId}_b${bimestre}`;
 }
+
+// `grade_entry_monitoring/{schoolId_anoLetivo_bBimestre_turmaId}` — ex.:
+// "diva-cabral_2026_b1_turma-3a-diva" (Fase 2C.1). Chave por TURMA, nunca
+// por estudante — este acompanhamento é agregado, não nominal (ver
+// docs/descontinuacao-prototipo-notas-nominais.md).
+export function buildGradeEntryMonitoringId(
+  schoolId: string,
+  anoLetivo: number,
+  bimestre: number,
+  turmaId: string
+): string {
+  return `${schoolId}_${anoLetivo}_b${bimestre}_${turmaId}`;
+}

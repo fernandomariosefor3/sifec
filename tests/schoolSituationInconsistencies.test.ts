@@ -3,13 +3,12 @@
 import { describe, expect, it } from 'vitest';
 import { detectInconsistencies, type InconsistencyDetectionInput } from '../src/lib/schoolSituationInconsistencies';
 import type { EnrollmentSnapshot } from '../src/types/enrollment';
-import type { StudentBimesterGrade } from '../src/types/studentBimesterGrade';
-import type { StudentRosterEntry } from '../src/types/studentRoster';
+import type { GradeEntryMonitoring } from '../src/types/gradeEntryMonitoring';
 import type { SchoolFlowResult } from '../src/types/schoolFlow';
 import type { SchoolSituationSourceAvailability } from '../src/types/schoolSituation';
 
 const AVAILABILITY_ALL: SchoolSituationSourceAvailability = {
-  schoolYear: true, turmas: true, snapshots: true, flow: true, roster: true, grades: true, visitas: true,
+  schoolYear: true, turmas: true, snapshots: true, flow: true, gradeEntryMonitoring: true, visitas: true,
 };
 
 function buildSnapshot(overrides: Partial<EnrollmentSnapshot> = {}): EnrollmentSnapshot {
@@ -24,22 +23,13 @@ function buildSnapshot(overrides: Partial<EnrollmentSnapshot> = {}): EnrollmentS
   };
 }
 
-function buildRoster(overrides: Partial<StudentRosterEntry> = {}): StudentRosterEntry {
+function buildMonitoring(overrides: Partial<GradeEntryMonitoring> = {}): GradeEntryMonitoring {
   return {
-    id: 'esc1_2026_t1_s1', studentKey: 's1', schoolId: 'esc1', codInep: '123', escolaNome: 'Escola 1',
-    turmaId: 't1', turmaNome: 'Turma A', anoLetivo: 2026, studentName: 'Estudante Um', active: true,
-    createdAt: '2026-02-01T00:00:00.000Z', updatedAt: '2026-02-01T00:00:00.000Z',
-    createdBy: 'x@example.com', updatedBy: 'x@example.com',
-    ...overrides,
-  };
-}
-
-function buildGrade(overrides: Partial<StudentBimesterGrade> = {}): StudentBimesterGrade {
-  return {
-    id: 'esc1_2026_t1_s1_b1', rosterId: 'esc1_2026_t1_s1', studentKey: 's1',
-    schoolId: 'esc1', codInep: '123', escolaNome: 'Escola 1', turmaId: 't1', turmaNome: 'Turma A',
-    anoLetivo: 2026, bimestre: 1,
-    scores: { linguaPortuguesa: 8, matematica: 7, cienciasNatureza: 9, cienciasHumanas: 6 },
+    id: 'esc1_2026_b1_t1', schoolId: 'esc1', codInep: '123', escolaNome: 'Escola 1',
+    turmaId: 't1', turmaNome: 'Turma A', anoLetivo: 2026, bimestre: 1,
+    totalStudents: 30, studentsWithCompleteGrades: 30, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+    expectedGradeEntries: 120, completedGradeEntries: 120, status: 'confirmado', sourceSystem: 'SIGE Escola',
+    referenceDate: '2026-04-01',
     createdAt: '2026-04-01T00:00:00.000Z', updatedAt: '2026-04-01T00:00:00.000Z',
     createdBy: 'x@example.com', updatedBy: 'x@example.com',
     ...overrides,
@@ -65,8 +55,7 @@ function baseInput(overrides: Partial<InconsistencyDetectionInput> = {}): Incons
     turmasDoAno: [turma1],
     turmasById: new Map([['t1', turma1]]),
     snapshots: [],
-    roster: [],
-    grades: [],
+    monitoring: [],
     flowResult: null,
     availability: AVAILABILITY_ALL,
     schoolYearDocs: [{ id: 'esc1_2026' }],
@@ -79,8 +68,7 @@ describe('detectInconsistencies', () => {
   it('conjunto de dados íntegro não gera nenhuma inconsistência', () => {
     const input = baseInput({
       snapshots: [buildSnapshot()],
-      roster: [buildRoster()],
-      grades: [buildGrade()],
+      monitoring: [buildMonitoring()],
       flowResult: buildFlow(),
     });
     expect(detectInconsistencies(input)).toEqual([]);
@@ -111,32 +99,26 @@ describe('detectInconsistencies', () => {
     expect(result.some(i => i.type === 'snapshot_ano_diferente')).toBe(true);
   });
 
-  it('cadastro de estudante vinculado a turma de outro ano letivo é sinalizado', () => {
+  it('acompanhamento de notas vinculado a turma de outra escola é sinalizado', () => {
+    const turmaOutraEscola = { id: 't1', schoolId: 'esc2', anoLetivo: 2026, nome: 'Turma A' };
+    const input = baseInput({
+      turmasById: new Map([['t1', turmaOutraEscola]]),
+      monitoring: [buildMonitoring({ turmaId: 't1', schoolId: 'esc1' })],
+    });
+    const result = detectInconsistencies(input);
+    expect(result.some(i => i.type === 'grade_entry_monitoring_turma_outra_escola')).toBe(true);
+  });
+
+  it('acompanhamento de notas vinculado a turma de outro ano letivo é sinalizado', () => {
     const turmaOutroAno = { id: 't1', schoolId: 'esc1', anoLetivo: 2025, nome: 'Turma A' };
     const input = baseInput({
       turmasById: new Map([['t1', turmaOutroAno]]),
-      roster: [buildRoster({ anoLetivo: 2026 })],
+      monitoring: [buildMonitoring({ turmaId: 't1', anoLetivo: 2026 })],
     });
     const result = detectInconsistencies(input);
-    expect(result.some(i => i.type === 'roster_turma_ano_diferente')).toBe(true);
+    expect(result.some(i => i.type === 'grade_entry_monitoring_turma_ano_diferente')).toBe(true);
   });
 
-  it('nota sem roster correspondente é sinalizada, sem expor nome', () => {
-    const input = baseInput({ grades: [buildGrade({ rosterId: 'inexistente' })] });
-    const result = detectInconsistencies(input);
-    const item = result.find(i => i.type === 'nota_sem_roster');
-    expect(item).toBeDefined();
-    expect(JSON.stringify(item)).not.toContain('Estudante');
-  });
-
-  it('nota de estudante inativo é sinalizada', () => {
-    const input = baseInput({
-      roster: [buildRoster({ active: false })],
-      grades: [buildGrade()],
-    });
-    const result = detectInconsistencies(input);
-    expect(result.some(i => i.type === 'nota_estudante_inativo')).toBe(true);
-  });
 
   it('fluxo confirmado com total zero é sinalizado', () => {
     const input = baseInput({ flowResult: buildFlow({ aprovados: 0, reprovados: 0, abandono: 0, status: 'confirmado' }) });
@@ -271,42 +253,42 @@ describe('registro_duplicado — chave natural por coleção', () => {
     expect(result.some(i => i.type === 'registro_duplicado' && i.message.includes('enrollment_snapshots'))).toBe(false);
   });
 
-  it('student_rosters: dois documentos para a mesma turmaId+studentKey são duplicidade', () => {
-    const rosterA = buildRoster({ id: 'esc1_2026_t1_s1' });
-    const rosterB = buildRoster({ id: 'esc1_2026_t1_s1_legado' });
-    const result = detectInconsistencies(baseInput({ roster: [rosterA, rosterB] }));
-    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('student_rosters'));
+  it('grade_entry_monitoring: dois documentos para a mesma turmaId são duplicidade', () => {
+    const monA = buildMonitoring({ id: 'esc1_2026_b1_t1' });
+    const monB = buildMonitoring({ id: 'esc1_2026_b1_t1_legado' });
+    const result = detectInconsistencies(baseInput({ monitoring: [monA, monB] }));
+    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('grade_entry_monitoring'));
     expect(item).toBeDefined();
   });
 
-  it('student_bimester_grades: dois documentos para o mesmo rosterId+bimestre são duplicidade', () => {
-    const gradeA = buildGrade({ id: 'esc1_2026_t1_s1_b1' });
-    const gradeB = buildGrade({ id: 'esc1_2026_t1_s1_b1_legado' });
-    const result = detectInconsistencies(baseInput({ grades: [gradeA, gradeB] }));
-    const item = result.find(i => i.type === 'registro_duplicado' && i.message.includes('student_bimester_grades'));
-    expect(item).toBeDefined();
+  it('grade_entry_monitoring: turmas diferentes não são duplicidade', () => {
+    const monA = buildMonitoring({ id: 'esc1_2026_b1_t1', turmaId: 't1' });
+    const monB = buildMonitoring({ id: 'esc1_2026_b1_t2', turmaId: 't2' });
+    const result = detectInconsistencies(baseInput({ monitoring: [monA, monB] }));
+    expect(result.some(i => i.type === 'registro_duplicado' && i.message.includes('grade_entry_monitoring'))).toBe(false);
+  });
+
+  it('grade_entry_monitoring: duplicidade não é sinalizada quando a fonte falhou', () => {
+    const monA = buildMonitoring({ id: 'esc1_2026_b1_t1' });
+    const monB = buildMonitoring({ id: 'esc1_2026_b1_t1_legado' });
+    const result = detectInconsistencies(baseInput({
+      monitoring: [monA, monB],
+      availability: { ...AVAILABILITY_ALL, gradeEntryMonitoring: false },
+    }));
+    expect(result.some(i => i.type === 'registro_duplicado' && i.message.includes('grade_entry_monitoring'))).toBe(false);
   });
 });
 
 describe('disponibilidade das fontes — nenhum diagnóstico a partir de uma fonte que falhou', () => {
-  it('roster indisponível: nenhuma verificação de roster_turma_ano_diferente/duplicidade roda', () => {
+  it('grade_entry_monitoring indisponível: nenhuma verificação de turma outra escola/ano diferente/duplicidade roda', () => {
     const turmaOutroAno = { id: 't1', schoolId: 'esc1', anoLetivo: 2025, nome: 'Turma A' };
     const result = detectInconsistencies(baseInput({
       turmasById: new Map([['t1', turmaOutroAno]]),
-      roster: [buildRoster({ anoLetivo: 2026 })],
-      availability: { ...AVAILABILITY_ALL, roster: false },
+      monitoring: [buildMonitoring({ turmaId: 't1', anoLetivo: 2026 })],
+      availability: { ...AVAILABILITY_ALL, gradeEntryMonitoring: false },
     }));
-    expect(result.some(i => i.type === 'roster_turma_ano_diferente')).toBe(false);
-  });
-
-  it('roster ou grades indisponível: nota_sem_roster/nota_estudante_inativo nunca são falsos positivos', () => {
-    const result = detectInconsistencies(baseInput({
-      roster: [],
-      grades: [buildGrade({ rosterId: 'inexistente' })],
-      availability: { ...AVAILABILITY_ALL, roster: false },
-    }));
-    expect(result.some(i => i.type === 'nota_sem_roster')).toBe(false);
-    expect(result.some(i => i.type === 'nota_estudante_inativo')).toBe(false);
+    expect(result.some(i => i.type === 'grade_entry_monitoring_turma_ano_diferente')).toBe(false);
+    expect(result.some(i => i.type === 'grade_entry_monitoring_turma_outra_escola')).toBe(false);
   });
 
   it('turmas indisponível: registro_duplicado de turmas (mesmo nome normalizado) não roda', () => {

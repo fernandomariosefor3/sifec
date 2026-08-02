@@ -7,7 +7,7 @@
 // e nunca uma pontuação secreta.
 import type {
   EnrollmentMovementIndicators,
-  GradeFillIndicators,
+  GradeEntryMonitoringIndicators,
   SchoolFlowIndicators,
   SchoolSituationPendingItem,
   SchoolSituationSourceAvailability,
@@ -21,7 +21,7 @@ export interface PendingItemsInput {
   estrutura: SchoolStructureIndicators;
   matricula: EnrollmentMovementIndicators;
   fluxo: SchoolFlowIndicators;
-  notas: GradeFillIndicators | null;
+  notas: GradeEntryMonitoringIndicators | null;
   visitas: VisitIndicators;
   turmasSemAnoLetivo: number;
   // Revisão do code review do PR #16 (seção 3): disponibilidade das fontes
@@ -111,30 +111,36 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
     });
   }
   // notas == null já cobre "não solicitada" e "fonte falhou" (o serviço
-  // nunca calcula notas quando roster ou grades falha — ver
-  // schoolSituationService.ts); availability.roster/grades reforça o mesmo
-  // contrato aqui, para esta função continuar correta mesmo se algum
+  // nunca calcula notas quando grade_entry_monitoring falha — ver
+  // schoolSituationService.ts); availability.gradeEntryMonitoring reforça o
+  // mesmo contrato aqui, para esta função continuar correta mesmo se algum
   // chamador futuro passar um `notas` não-nulo por engano com uma fonte
   // indisponível.
-  if (notas != null && availability.roster && availability.grades) {
-    if (notas.semNotas > 0) {
+  if (notas != null && availability.gradeEntryMonitoring) {
+    if (notas.turmasSemRelatorio > 0) {
       items.push({
-        type: 'estudantes_sem_notas',
+        type: 'turmas_sem_relatorio_notas',
         schoolId,
-        message: `${notas.semNotas} estudante(s) ativo(s) sem nenhuma nota lançada.`,
+        message: `${notas.turmasSemRelatorio} turma(s) sem relatório de notas informado.`,
         period: null,
-        sourceCollection: 'student_bimester_grades',
-        resolutionAction: 'Lançar notas em Lançamento de Notas.',
+        sourceCollection: 'grade_entry_monitoring',
+        resolutionAction: 'Registrar o relatório de notas em Notas Bimestrais.',
       });
     }
-    if (notas.parciais > 0) {
+    // Parcial e sem preenchimento são tratados como a MESMA pendência
+    // (relatório informado, mas incompleto) — o tipo disponível
+    // (turmas_com_preenchimento_parcial) cobre as duas situações, já que
+    // ambas se resolvem da mesma forma: completar o lançamento no SIGE
+    // Escola e atualizar o relatório aqui.
+    const turmasComPreenchimentoParcial = notas.turmasParciais + notas.turmasSemPreenchimento;
+    if (turmasComPreenchimentoParcial > 0) {
       items.push({
-        type: 'notas_parcialmente_preenchidas',
+        type: 'turmas_com_preenchimento_parcial',
         schoolId,
-        message: `${notas.parciais} estudante(s) com preenchimento parcial de notas.`,
+        message: `${turmasComPreenchimentoParcial} turma(s) com relatório de notas incompleto.`,
         period: null,
-        sourceCollection: 'student_bimester_grades',
-        resolutionAction: 'Completar o lançamento de notas em Lançamento de Notas.',
+        sourceCollection: 'grade_entry_monitoring',
+        resolutionAction: 'Completar o lançamento de notas em Notas Bimestrais.',
       });
     }
   }

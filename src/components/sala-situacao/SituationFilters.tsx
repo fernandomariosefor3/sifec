@@ -1,7 +1,7 @@
 // Fase 2D — Sala de Situação: barra de filtros (carteira/global, escola,
 // ano letivo, bimestre, qualidade dos dados, tipo de pendência). Puramente
 // apresentacional — todo o estado vive em SalaDeSituacaoView.tsx.
-import type { Bimestre } from '../../types/studentBimesterGrade';
+import type { Bimestre } from '../../types/gradeEntryMonitoring';
 import type { DataQualityState, PendingItemType, SchoolScopeMode } from '../../types/schoolSituation';
 
 export interface SituationFilterSchool {
@@ -25,8 +25,8 @@ export const PENDING_ITEM_TYPE_LABELS: Record<PendingItemType, string> = {
   registro_mensal_pendente: 'Registro mensal pendente',
   fluxo_nao_informado: 'Fluxo não informado',
   fluxo_rascunho: 'Fluxo em rascunho',
-  estudantes_sem_notas: 'Estudantes sem notas',
-  notas_parcialmente_preenchidas: 'Notas parcialmente preenchidas',
+  turmas_sem_relatorio_notas: 'Turmas sem relatório de notas',
+  turmas_com_preenchimento_parcial: 'Turmas com preenchimento parcial',
   escola_sem_visita: 'Escola sem visita',
 };
 

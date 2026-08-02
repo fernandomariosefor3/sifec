@@ -2,12 +2,40 @@
 // Só ADICIONA/atualiza os campos novos (ver src/types/classroom.ts) — nunca
 // toca ano/periodo/lancamentosBimestre/mediaBimestre/alunosSinalizados, que
 // continuam pertencendo à Fase 1 (NotasView.tsx/CdgView.tsx).
-import { collection, doc, setDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
 import { updateDocument } from './firebaseService';
 import type { Turma, TurmaModalidade } from '../types/classroom';
 import { countActiveTurmas, isNonNegativeInteger } from './enrollmentCalculations';
 import { normalizeSchoolName, schoolNamesMatch, type SchoolRef } from './schoolIdentity';
+
+// Revisão do code review do PR #17, seção 2: turmas de UMA escola por vez
+// (nunca a coleção inteira — antes NotasView.tsx assinava a coleção
+// `turmas` completa via subscribeToCollection, mesmo autenticado, mesmo com
+// uma única escola selecionada). Consulta por `escolaId` (campo legado,
+// sempre presente — Fase 1) E por `schoolId` (campo novo, Fase 2A) em
+// paralelo, e deduplica por id: cobre tanto documentos legados (só
+// escolaId) quanto documentos novos (ambos os campos, ou só schoolId numa
+// futura migração) sem depender de qual dos dois foi preenchido.
+export async function listClassroomsForSchool(schoolId: string): Promise<Turma[]> {
+  const [byEscolaId, bySchoolId] = await Promise.all([
+    getDocs(query(collection(db, 'turmas'), where('escolaId', '==', schoolId))),
+    getDocs(query(collection(db, 'turmas'), where('schoolId', '==', schoolId))),
+  ]);
+  const byId = new Map<string, Turma>();
+  for (const snap of [byEscolaId, bySchoolId]) {
+    for (const d of snap.docs) {
+      // Revisão do code review do PR #17, seção 5: d.id (a chave real do
+      // documento no Firestore) precisa prevalecer sobre qualquer campo
+      // `id` interno divergente em d.data() — um `id` interno desatualizado
+      // ou ausente nunca pode fazer duas turmas diferentes colapsarem sob a
+      // mesma chave (ou sob `undefined`) neste Map de deduplicação.
+      const turma = { ...d.data(), id: d.id } as Turma;
+      byId.set(turma.id, turma);
+    }
+  }
+  return Array.from(byId.values());
+}
 
 // Reexportado para quem só precisa da contagem de turmas ativas de uma
 // escola (ver seção 6 do plano — o total de turmas é sempre calculado,

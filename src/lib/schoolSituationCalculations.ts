@@ -1,22 +1,22 @@
 // Fase 2D — Sala de Situação: cálculos puros, sem nenhum import do Firebase
 // (mesmo padrão de enrollmentCalculations.ts/schoolFlowCalculations.ts/
-// studentGradeCalculations.ts — testável sem emulador). Reaproveita ao
-// máximo os cálculos já existentes das fases anteriores em vez de duplicar
-// lógica: matrícula/cobertura mensal vem de enrollmentCalculations.ts,
-// fluxo de schoolFlowCalculations.ts, preenchimento de notas de
-// studentGradeCalculations.ts. Nada aqui persiste resultado algum — tudo é
-// recalculado a partir dos dados já gravados nas coleções existentes (ver
-// seção 6 do plano da Fase 2D).
+// gradeEntryMonitoringCalculations.ts — testável sem emulador). Reaproveita
+// ao máximo os cálculos já existentes das fases anteriores em vez de
+// duplicar lógica: matrícula/cobertura mensal vem de
+// enrollmentCalculations.ts, fluxo de schoolFlowCalculations.ts,
+// preenchimento de notas (agregado por turma, Fase 2C.1) de
+// gradeEntryMonitoringCalculations.ts. Nada aqui persiste resultado algum —
+// tudo é recalculado a partir dos dados já gravados nas coleções existentes
+// (ver seção 6 do plano da Fase 2D).
 import type { SchoolYear } from '../types/schoolYear';
 import type { Turma } from '../types/classroom';
 import type { EnrollmentSnapshot } from '../types/enrollment';
 import type { SchoolFlowResult } from '../types/schoolFlow';
-import type { StudentRosterEntry } from '../types/studentRoster';
-import type { StudentBimesterGrade } from '../types/studentBimesterGrade';
+import type { GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
 import type {
   DataQualityState,
   EnrollmentMovementIndicators,
-  GradeFillIndicators,
+  GradeEntryMonitoringIndicators,
   PortfolioSituationSummary,
   SchoolFlowIndicators,
   SchoolSituation,
@@ -31,7 +31,7 @@ import {
   type TurmaMatriculaLike,
 } from './enrollmentCalculations';
 import { calculateSchoolFlowPercentuais, calculateTotalResultados, type SchoolFlowCounts } from './schoolFlowCalculations';
-import { consolidateStudentFill, determineFillState, EMPTY_SCORES, type StudentFillEntry } from './studentGradeCalculations';
+import { consolidateGradeEntryMonitoring, type TurmaGradeEntryRow } from './gradeEntryMonitoringCalculations';
 import { schoolNamesMatch } from './schoolIdentity';
 
 // --- Qualidade dos dados (seção 10 do plano) ---
@@ -289,47 +289,49 @@ export function calculateFlowIndicators(flowResult: SchoolFlowResult | null): Sc
   };
 }
 
-// --- Notas bimestrais agregadas (seção 8.4) — NUNCA nome de estudante. ---
+// --- Notas bimestrais agregadas (seção 8.4, revisão Fase 2C.1) — agregado
+// por TURMA, nunca por estudante. `grade_entry_monitoring` só transcreve o
+// relatório de preenchimento já feito pela escola no SIGE Escola. ---
 
-export function calculateGradeFillIndicators(
-  roster: readonly StudentRosterEntry[],
-  grades: readonly StudentBimesterGrade[],
-  referenceAverage?: number
-): GradeFillIndicators {
-  const gradeByRosterId = new Map(grades.map(g => [g.rosterId, g] as const));
-  const entries: StudentFillEntry[] = roster.map(r => ({
-    studentKey: r.studentKey,
-    active: r.active,
-    scores: gradeByRosterId.get(r.id)?.scores ?? null,
+export function calculateGradeEntryMonitoringIndicators(
+  turmasDoAno: readonly Turma[],
+  monitoring: readonly GradeEntryMonitoring[]
+): GradeEntryMonitoringIndicators {
+  const monitoringByTurmaId = new Map(monitoring.map(m => [m.turmaId, m] as const));
+  const rows: TurmaGradeEntryRow[] = turmasDoAno.map(turma => ({
+    turmaId: turma.id,
+    turmaNome: turma.nome,
+    monitoring: monitoringByTurmaId.get(turma.id) ?? null,
   }));
-  const consolidated = consolidateStudentFill(entries, referenceAverage);
+  const consolidated = consolidateGradeEntryMonitoring(rows);
 
-  const turmaIds = Array.from(new Set(roster.filter(r => r.active).map(r => r.turmaId)));
-  let turmasComPreenchimentoCompleto = 0;
-  let turmasComPendencia = 0;
-  for (const turmaId of turmaIds) {
-    const ativosDaTurma = roster.filter(r => r.active && r.turmaId === turmaId);
-    const todosCompletos = ativosDaTurma.every(r => {
-      const scores = gradeByRosterId.get(r.id)?.scores ?? EMPTY_SCORES;
-      return determineFillState(scores) === 'completo';
-    });
-    if (todosCompletos) turmasComPreenchimentoCompleto += 1;
-    else turmasComPendencia += 1;
+  let dataQuality: DataQualityState;
+  if (consolidated.turmasCadastradas === 0) {
+    dataQuality = 'sem_dados';
+  } else if (consolidated.turmasInconsistentes > 0) {
+    dataQuality = 'inconsistente';
+  } else if (consolidated.turmasComRelatorio === 0) {
+    dataQuality = 'sem_dados';
+  } else if (consolidated.turmasSemRelatorio === 0 && consolidated.turmasParciais === 0 && consolidated.turmasSemPreenchimento === 0) {
+    dataQuality = 'atualizado';
+  } else {
+    dataQuality = 'incompleto';
   }
 
-  const dataQuality: DataQualityState = consolidated.estudantesAtivos === 0
-    ? 'sem_dados'
-    : (consolidated.percentualPreenchimento === 100 ? 'atualizado' : 'incompleto');
-
+  // consolidated.percentualPreenchimentoGeral já vem null quando há turma
+  // inconsistente (consolidateGradeEntryMonitoring — ajuste cirúrgico
+  // pós-PR #17: a regra saiu daqui e passou a valer para TODOS os
+  // consumidores, não só a Sala de Situação).
   return {
-    estudantesAtivos: consolidated.estudantesAtivos,
-    completos: consolidated.completos,
-    parciais: consolidated.parciais,
-    semNotas: consolidated.semNotas,
-    abaixoReferencia: consolidated.abaixoReferencia,
-    percentualPreenchimento: consolidated.percentualPreenchimento,
-    turmasComPreenchimentoCompleto,
-    turmasComPendencia,
+    turmasCadastradas: consolidated.turmasCadastradas,
+    turmasComRelatorio: consolidated.turmasComRelatorio,
+    turmasSemRelatorio: consolidated.turmasSemRelatorio,
+    turmasCompletas: consolidated.turmasCompletas,
+    turmasParciais: consolidated.turmasParciais,
+    turmasSemPreenchimento: consolidated.turmasSemPreenchimento,
+    expectedGradeEntries: consolidated.expectedGradeEntries,
+    completedGradeEntries: consolidated.completedGradeEntries,
+    percentualPreenchimentoGeral: consolidated.percentualPreenchimentoGeral,
     dataQuality,
   };
 }
@@ -373,12 +375,16 @@ export function calculateVisitIndicators(
 
 // --- Resumo consolidado da carteira/visão global (seção 14 do plano) ---
 
-// percentualPreenchimentoNotas é a média simples do percentual de cada
-// escola que já teve notas carregadas (nunca uma média ponderada por
-// matrícula, que exigiria carregar notas de todas as escolas mesmo na
-// visão global — ver seção 13 do plano) — null quando nenhuma escola do
-// conjunto teve notas carregadas ainda (nunca 0, que seria um resultado
-// real e diferente de "ainda não carregado").
+// percentualPreenchimentoNotas é a soma de completedGradeEntries / soma de
+// expectedGradeEntries de todas as escolas com notas disponíveis (revisão
+// do code review do PR #17, seção 5) — NUNCA a média simples do percentual
+// de cada escola, que pesaria uma escola pequena (poucos lançamentos
+// esperados) exatamente igual a uma grande. Exemplo: escola A com 10
+// lançamentos esperados e 100% preenchido, escola B com 1000 lançamentos
+// esperados e 50% preenchido — a média simples diria 75%, mas o preenchimento
+// real da carteira é (10 + 500) / (10 + 1000) ≈ 50.5%. null só quando a soma
+// de expectedGradeEntries do conjunto considerado é zero (nunca 0%
+// automático).
 export function calculatePortfolioSituationSummary(
   situations: readonly SchoolSituation[]
 ): PortfolioSituationSummary {
@@ -390,14 +396,38 @@ export function calculatePortfolioSituationSummary(
     s => s.estrutura.anoLetivoConfigurado && s.matricula.quantidadeMesesPendentes === 0
   ).length;
 
-  // notas == null já exclui tanto "não carregadas" quanto "fonte falhou"
-  // (o serviço nunca calcula notas a partir de roster/grades parcial — ver
-  // schoolSituationService.ts), então esta média já ignora fontes
-  // indisponíveis sem precisar de um filtro extra (seção 9 do code review).
-  const comNotasCarregadas = situations.filter((s): s is SchoolSituation & { notas: NonNullable<SchoolSituation['notas']> } => s.notas != null);
-  const percentualPreenchimentoNotas = comNotasCarregadas.length === 0
+  // Revisão do code review do PR #17, seções 1 e 2: uma escola só entra na
+  // soma ponderada (e no contador escolasComNotasConsideradas — o MESMO
+  // conjunto filtrado alimenta os dois, nunca dois filtros divergentes)
+  // quando:
+  //   - notas != null (fonte grade_entry_monitoring carregou);
+  //   - dataQuality !== 'indisponivel' (grade_entry_monitoring OK, mas
+  //     turmas falhou — ver schoolSituationService.ts — nunca soma dado
+  //     calculado a partir de fonte parcial, seção 9 do code review do PR
+  //     #16, agora também aplicado à soma ponderada);
+  //   - dataQuality !== 'inconsistente' (ao menos uma turma da escola tem
+  //     contadores que não fecham matematicamente — mesmo com
+  //     consolidateGradeEntryMonitoring já excluindo a turma inconsistente
+  //     da soma da própria escola, a escola inteira fica de fora da
+  //     carteira/visão global até a inconsistência ser corrigida, nunca
+  //     silenciosamente incluída com um número parcial);
+  //   - expectedGradeEntries > 0 (uma escola sem nenhum lançamento
+  //     esperado — sem turma, ou nenhuma turma com relatório — não
+  //     "contribui" com nada real à soma; contá-la como considerada
+  //     sugeriria um dado que não existe).
+  const comNotasDisponiveis = situations.filter(
+    (s): s is SchoolSituation & { notas: NonNullable<SchoolSituation['notas']> } =>
+      s.notas != null &&
+      s.notas.dataQuality !== 'indisponivel' &&
+      s.notas.dataQuality !== 'inconsistente' &&
+      s.notas.expectedGradeEntries > 0
+  );
+  const totalExpectedGradeEntries = comNotasDisponiveis.reduce((sum, s) => sum + s.notas.expectedGradeEntries, 0);
+  const totalCompletedGradeEntries = comNotasDisponiveis.reduce((sum, s) => sum + s.notas.completedGradeEntries, 0);
+  const percentualPreenchimentoNotas = totalExpectedGradeEntries === 0
     ? null
-    : comNotasCarregadas.reduce((sum, s) => sum + s.notas.percentualPreenchimento, 0) / comNotasCarregadas.length;
+    : (totalCompletedGradeEntries / totalExpectedGradeEntries) * 100;
+  const escolasComNotasConsideradas = comNotasDisponiveis.length;
 
   // Revisão do code review do PR #16, seção 9: uma falha de leitura do
   // fluxo nunca conta como "fluxo não informado" — dataQuality
@@ -416,6 +446,7 @@ export function calculatePortfolioSituationSummary(
     matriculaAtual,
     escolasComRegistroMensalEmDia,
     percentualPreenchimentoNotas,
+    escolasComNotasConsideradas,
     escolasComFluxoInformado,
     escolasComPendencias,
     escolasComFontesIndisponiveis,

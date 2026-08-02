@@ -3,10 +3,11 @@
 // (login/seed/desconectar manuais) exibia um texto hardcoded referenciando
 // o projeto Firebase de outro sistema (emdiafinanceiro-13483). A Fase 2C
 // removeu esse painel manual por completo ao reescrever NotasView.tsx
-// (substituição pelo módulo real de Notas Bimestrais — ver
-// docs/fase-2c-inventario-notas-legadas.md) — este arquivo agora confirma
-// que a proteção original continua válida: nenhum painel manual, nenhuma
-// referência ao projeto errado, em nenhum ambiente.
+// (substituição pelo módulo de Notas Bimestrais, na Fase 2C.1 corrigido
+// para o acompanhamento agregado por turma — ver
+// docs/descontinuacao-prototipo-notas-nominais.md) — este arquivo agora
+// confirma que a proteção original continua válida: nenhum painel manual,
+// nenhuma referência ao projeto errado, em nenhum ambiente.
 import '@testing-library/jest-dom/vitest';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
@@ -32,15 +33,10 @@ vi.mock('../src/lib/firebaseService', async importOriginal => {
   return { ...actual, subscribeToCollection: () => () => {} };
 });
 
-vi.mock('../src/lib/studentRosterService', () => ({
-  listStudentRosterForSchool: vi.fn().mockResolvedValue([]),
-  deactivateStudentRosterEntry: vi.fn(),
-  activateStudentRosterEntry: vi.fn(),
-}));
-
-vi.mock('../src/lib/studentBimesterGradeService', () => ({
-  listStudentBimesterGradesForSchool: vi.fn().mockResolvedValue([]),
-}));
+vi.mock('../src/lib/gradeEntryMonitoringService', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/lib/gradeEntryMonitoringService')>();
+  return { ...actual, listGradeEntryMonitoringForSchool: vi.fn().mockResolvedValue([]) };
+});
 
 describe('NotasView — sem painel manual de conexão Firebase (Fase 2C removeu essa UI)', () => {
   it('nunca renderiza um painel de conexão/seed manual, em produção', () => {

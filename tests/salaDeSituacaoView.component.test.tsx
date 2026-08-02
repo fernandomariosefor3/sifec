@@ -149,6 +149,63 @@ describe('SalaDeSituacaoView', () => {
     await waitFor(() => expect(screen.getByText('56 Escolas')).toBeInTheDocument());
   });
 
+  // Revisão do code review do PR #17, seção 4: grade_entry_monitoring é uma
+  // fonte AGREGADA (nunca nominal), então é carregada para TODAS as escolas
+  // visíveis, carteira OU visão global — nunca mais restrita à escola
+  // selecionada. A tabela global mostra o preenchimento de notas de cada
+  // escola sem exigir que ela seja selecionada primeiro.
+  describe('notas carregadas para toda a visão visível, sem exigir seleção (seção 4 do code review do PR #17)', () => {
+    it('visão carteira: fetchPortfolioSituations é chamado com includeGrades: true', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(SUPER_A_EMAIL);
+      await getTable();
+
+      expect(mockFetchPortfolioSituations).toHaveBeenCalledWith(
+        expect.anything(), expect.anything(), expect.anything(), expect.any(Number),
+        expect.objectContaining({ includeGrades: true })
+      );
+    });
+
+    it('visão global: fetchPortfolioSituations também é chamado com includeGrades: true, sem escola selecionada', async () => {
+      setAdminSchoolScope('global');
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(ADMIN_EMAIL);
+      await waitFor(() => expect(screen.getByText('56 Escolas')).toBeInTheDocument());
+
+      expect(mockFetchPortfolioSituations).toHaveBeenCalledWith(
+        expect.anything(), expect.anything(), expect.anything(), expect.any(Number),
+        expect.objectContaining({ includeGrades: true })
+      );
+      // fetchSchoolSituation (para uma única escola) nunca é chamado — notas
+      // vêm sempre do lote via fetchPortfolioSituations.
+      expect(mockFetchSchoolSituation).not.toHaveBeenCalled();
+    });
+
+    it('percentual de preenchimento de notas aparece nos cartões-resumo da visão global sem selecionar nenhuma escola', async () => {
+      setAdminSchoolScope('global');
+      mockFetchPortfolioSituations.mockImplementation(async (schools: Array<{ id: string; nome: string }>) =>
+        Object.fromEntries(schools.map(s => [s.id, buildSituation(s.id, s.nome, {
+          notas: {
+            turmasCadastradas: 2, turmasComRelatorio: 2, turmasSemRelatorio: 0,
+            turmasCompletas: 2, turmasParciais: 0, turmasSemPreenchimento: 0,
+            expectedGradeEntries: 100, completedGradeEntries: 100,
+            percentualPreenchimentoGeral: 100, dataQuality: 'atualizado',
+          },
+        })]))
+      );
+
+      render(<SalaDeSituacaoView />);
+      await loginAs(ADMIN_EMAIL);
+      await waitFor(() => expect(screen.getByText('56 Escolas')).toBeInTheDocument());
+
+      await waitFor(() => expect(screen.getByText('100.0%')).toBeInTheDocument());
+    });
+  });
+
   it('ação "Ver detalhes" abre o painel da escola e "Fechar detalhe" volta à tabela', async () => {
     saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
     setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
@@ -260,12 +317,17 @@ describe('SalaDeSituacaoView', () => {
   it('nenhuma informação nominal é exibida, mesmo no detalhe da escola', async () => {
     saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
     setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
-    // Superintendente comum sempre usa escopo 'carteira' (poucas escolas),
-    // então o detalhe vem de fetchPortfolioSituations, não de
-    // fetchSchoolSituation (só usada na visão global — ver useSchoolSituation.ts).
+    // Revisão do code review do PR #17: notas vem sempre de
+    // fetchPortfolioSituations, carteira ou visão global (useSchoolSituation.ts
+    // não chama mais fetchSchoolSituation para uma única escola).
     mockFetchPortfolioSituations.mockImplementation(async (schools: Array<{ id: string; nome: string }>) =>
       Object.fromEntries(schools.map(s => [s.id, buildSituation(s.id, s.nome, {
-        notas: { estudantesAtivos: 30, completos: 20, parciais: 8, semNotas: 2, abaixoReferencia: 5, percentualPreenchimento: 90, turmasComPreenchimentoCompleto: 1, turmasComPendencia: 1, dataQuality: 'incompleto' },
+        notas: {
+          turmasCadastradas: 3, turmasComRelatorio: 2, turmasSemRelatorio: 1,
+          turmasCompletas: 1, turmasParciais: 1, turmasSemPreenchimento: 0,
+          expectedGradeEntries: 100, completedGradeEntries: 90,
+          percentualPreenchimentoGeral: 90, dataQuality: 'incompleto',
+        },
       })]))
     );
 

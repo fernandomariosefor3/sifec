@@ -1,22 +1,22 @@
-// Fase 2C — Notas Bimestrais Seguras e Monitoramento de Preenchimento.
-// Substitui a versão anterior, que era puramente demonstrativa: usava a
-// coleção `grades` legado (sem schoolId/turmaId/anoLetivo, vínculo de
-// turma só por texto, o primeiro item da lista de turmas usado como
-// fallback perigoso quando a turma não era encontrada, exclusão
-// definitiva, classificação Aprovado/Recuperação/Retido, e os dados
-// fictícios de demonstração continuavam visíveis mesmo com Firebase
-// conectado quando a coleção real estava vazia — ver
-// docs/fase-2c-inventario-notas-legadas.md para o inventário completo.
-// Este módulo usa duas coleções novas (student_rosters +
-// student_bimester_grades), isoladas por schoolId/turmaId/anoLetivo/
-// bimestre, e NUNCA lê/grava na coleção legado.
+// Fase 2C.1 — correção de escopo: Notas Bimestrais deixa de ser um cadastro
+// nominal de estudantes (Fase 2C original) e passa a ser o acompanhamento
+// AGREGADO do preenchimento de notas que cada escola já faz no SIGE Escola,
+// por turma+ano letivo+bimestre — ver
+// docs/descontinuacao-prototipo-notas-nominais.md para o inventário da
+// correção. Este módulo NUNCA lê nem grava student_rosters/
+// student_bimester_grades/grades — só grade_entry_monitoring, sempre
+// filtrado por schoolId.
 //
-// Painel de acompanhamento de PREENCHIMENTO, não diário oficial nem
-// sistema de aprovação — nunca classifica estudante como aprovado,
-// reprovado, retido, em recuperação ou com defasagem confirmada.
-import React, { useEffect, useMemo, useState } from 'react';
+// Revisão do code review do PR #17: turmas passam a vir de
+// useSchoolClassrooms (consulta escopada por escola — seção 2), nunca mais
+// de subscribeToCollection('turmas') na coleção inteira. Falha de leitura
+// de turmas OU de grade_entry_monitoring nunca é tratada como "nenhum
+// relatório informado" (seção 1) — cada fonte expõe um status explícito, e
+// uma falha real esconde a tabela por trás de um aviso com "Tentar
+// novamente", em vez de renderizar zeros ou classificações inventadas.
+import { useEffect, useMemo, useState } from 'react';
 import { auth } from '../lib/firebase';
-import { SEED_SCHOOLS, SEED_TURMAS, subscribeToCollection } from '../lib/firebaseService';
+import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
   getSuperintendents,
   getActiveSuperintendentId,
@@ -26,17 +26,17 @@ import {
   hasSchoolWriteAccess,
 } from '../lib/superintendentService';
 import { getClassroomsForSchoolYear } from '../lib/classService';
-import { activateStudentRosterEntry, deactivateStudentRosterEntry } from '../lib/studentRosterService';
-import { useStudentRosterAndGrades } from '../hooks/useStudentRosterAndGrades';
-import { consolidateStudentFill, type StudentFillEntry } from '../lib/studentGradeCalculations';
+import { useSchoolClassrooms } from '../hooks/useSchoolClassrooms';
+import { useGradeEntryMonitoring } from '../hooks/useGradeEntryMonitoring';
+import { consolidateGradeEntryMonitoring } from '../lib/gradeEntryMonitoringCalculations';
 import { buildAnoLetivoOptions } from '../lib/anoLetivoOptions';
 import NotasSummaryCards from './notas/NotasSummaryCards';
-import ClassGradeCoverageTable, { type ClassCoverageRow } from './notas/ClassGradeCoverageTable';
-import StudentGradeTable, { type StudentGradeRow, type FillFilter } from './notas/StudentGradeTable';
-import StudentRegistrationModal from './notas/StudentRegistrationModal';
-import StudentBimesterGradeFormModal from './notas/StudentBimesterGradeFormModal';
-import type { Turma } from '../types/classroom';
-import type { Bimestre } from '../types/studentBimesterGrade';
+import GradeEntryMonitoringTable, {
+  type GradeEntryMonitoringRow,
+  type StatusFilter,
+} from './notas/GradeEntryMonitoringTable';
+import GradeEntryMonitoringFormModal from './notas/GradeEntryMonitoringFormModal';
+import type { Bimestre } from '../types/gradeEntryMonitoring';
 
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
 
@@ -50,38 +50,19 @@ export default function NotasView() {
   const [isFirebaseMode, setIsFirebaseMode] = useState(false);
   const [activeSuperId, setActiveSuperId] = useState('all');
   const [adminScope, setAdminScope] = useState(getAdminSchoolScope());
-  const [turmas, setTurmas] = useState<Turma[]>(SEED_TURMAS as unknown as Turma[]);
-  // Ano corrente de verdade (revisão do PR #15) — nunca mais um valor fixo
-  // no código-fonte. anoLetivoOptions vem de uma função pura testável
-  // (buildAnoLetivoOptions) para o módulo nunca ficar "preso" num ano
-  // específico conforme o tempo passa.
   const [anoLetivo, setAnoLetivo] = useState(() => new Date().getFullYear());
-  // Âncora sempre no ano corrente REAL (nunca no ano atualmente
-  // selecionado) — o conjunto de opções não "desliza" conforme o usuário
-  // navega entre anos, sempre os mesmos três: anterior/corrente/seguinte.
+  // Âncora sempre no ano corrente REAL — o conjunto de opções não "desliza"
+  // conforme o usuário navega entre anos, sempre os mesmos três.
   const anoLetivoOptions = buildAnoLetivoOptions();
   const [bimestre, setBimestre] = useState<Bimestre>(1);
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
-  const [drillTurmaId, setDrillTurmaId] = useState<string | null>(null);
-  const [filter, setFilter] = useState<FillFilter>('todos');
-  const [search, setSearch] = useState('');
-  const [registrationOpen, setRegistrationOpen] = useState(false);
-  const [gradeModalRow, setGradeModalRow] = useState<StudentGradeRow | null>(null);
-  const [pendingToggleKeys, setPendingToggleKeys] = useState<ReadonlySet<string>>(new Set());
-  const [toggleError, setToggleError] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('todos');
+  const [modalRow, setModalRow] = useState<GradeEntryMonitoringRow | null>(null);
 
-  // Trocar de ano letivo é trocar de conjunto de dados inteiro (seção de
-  // revisão do PR #15): turma selecionada, modais abertos e filtros/busca
-  // da tabela de estudantes nunca sobrevivem à troca — só roster/notas/
-  // turmas do ano recém-selecionado são carregados (useStudentRosterAndGrades
-  // já reage à mudança de `anoLetivo` na dependência do seu efeito).
   function handleAnoLetivoChange(nextAnoLetivo: number) {
     setAnoLetivo(nextAnoLetivo);
-    setDrillTurmaId(null);
-    setRegistrationOpen(false);
-    setGradeModalRow(null);
-    setFilter('todos');
-    setSearch('');
+    setModalRow(null);
+    setStatusFilter('todos');
   }
 
   useEffect(() => {
@@ -103,16 +84,6 @@ export default function NotasView() {
     };
   }, []);
 
-  // Turmas reais da Fase 2A — nunca uma lista própria recalculada aqui.
-  useEffect(() => {
-    if (!isFirebaseMode) {
-      setTurmas(SEED_TURMAS as unknown as Turma[]);
-      return;
-    }
-    const unsubscribe = subscribeToCollection('turmas', loaded => setTurmas(loaded as Turma[]));
-    return () => unsubscribe();
-  }, [isFirebaseMode]);
-
   const superintendents = getSuperintendents();
   const activeSuper = superintendents.find(s => s.id === activeSuperId) || (superintendents.length > 0 ? superintendents[0] : null);
   const visibleSchools = useMemo(
@@ -125,9 +96,8 @@ export default function NotasView() {
     [activeSuper, isFirebaseMode, adminScope]
   );
 
-  // Se a escola selecionada deixar de estar no escopo atual (troca de
-  // carteira/global, ou troca de superintendente), a seleção é limpa —
-  // nunca continua mostrando nomes de uma escola fora do escopo autorizado.
+  // Se a escola selecionada deixar de estar no escopo atual, a seleção é
+  // limpa — nunca continua mostrando uma escola fora do escopo autorizado.
   useEffect(() => {
     if (selectedSchoolId && !visibleSchools.some(s => s.id === selectedSchoolId)) {
       setSelectedSchoolId('');
@@ -136,50 +106,47 @@ export default function NotasView() {
 
   const selectedSchool: SchoolLike | null = visibleSchools.find(s => s.id === selectedSchoolId) ?? null;
 
+  // Turmas de UMA escola por vez (nunca a coleção inteira — seção 2 do code
+  // review do PR #17). Não depende de anoLetivo: as turmas da escola inteira
+  // são carregadas uma vez por escola/sessão, e o ano letivo filtra em
+  // memória via getClassroomsForSchoolYear, sem nova consulta ao Firestore.
+  const {
+    turmas, status: turmasStatus, loading: turmasLoading, loadError: turmasError, refresh: refreshTurmas,
+  } = useSchoolClassrooms(selectedSchool ? selectedSchool.id : null, isFirebaseMode);
+  const turmasUnavailable = turmasStatus === 'failure';
+
   // Identidade da turma resolvida pela cascata real da Fase 2A (codInep →
-  // schoolId/escolaId → nome normalizado só como último recurso — nunca só
-  // por texto, nunca a primeira turma da lista como fallback quando a
-  // busca falha). Sem escola selecionada, nenhuma turma é resolvida.
+  // schoolId/escolaId → nome normalizado só como último recurso).
   const turmasDaEscola = useMemo(
     () => (selectedSchool ? getClassroomsForSchoolYear(turmas, selectedSchool, anoLetivo) : []),
     [turmas, selectedSchool, anoLetivo]
   );
 
-  const { roster, grades, loading, loadError, refresh } = useStudentRosterAndGrades(
+  const {
+    monitoring, status: monitoringStatus, loading: monitoringLoading, loadError: monitoringError, refresh: refreshMonitoring,
+  } = useGradeEntryMonitoring(
     selectedSchool ? selectedSchool.id : null,
     anoLetivo,
     bimestre,
     isFirebaseMode
   );
+  const monitoringUnavailable = monitoringStatus === 'failure';
 
-  const gradesByRosterId = useMemo(() => {
-    const map = new Map<string, (typeof grades)[number]>();
-    grades.forEach(g => map.set(g.rosterId, g));
+  const monitoringByTurmaId = useMemo(() => {
+    const map = new Map<string, (typeof monitoring)[number]>();
+    monitoring.forEach(m => map.set(m.turmaId, m));
     return map;
-  }, [grades]);
+  }, [monitoring]);
 
-  const classCoverageRows: ClassCoverageRow[] = turmasDaEscola.map(turma => {
-    const entries: StudentFillEntry[] = roster
-      .filter(r => r.turmaId === turma.id)
-      .map(r => ({ studentKey: r.studentKey, active: r.active, scores: gradesByRosterId.get(r.id)?.scores ?? null }));
-    return { turmaId: turma.id, turmaNome: turma.nome, stats: consolidateStudentFill(entries) };
-  });
-
-  const schoolStats = consolidateStudentFill(
-    roster.map(r => ({ studentKey: r.studentKey, active: r.active, scores: gradesByRosterId.get(r.id)?.scores ?? null }))
-  );
-
-  const drillTurma = turmasDaEscola.find(t => t.id === drillTurmaId) ?? null;
-  const studentRows: StudentGradeRow[] = roster.map(r => ({
-    studentKey: r.studentKey,
-    studentName: r.studentName,
-    turmaId: r.turmaId,
-    turmaNome: r.turmaNome,
-    active: r.active,
-    scores: gradesByRosterId.get(r.id)?.scores ?? null,
-    observacao: gradesByRosterId.get(r.id)?.observacao,
+  const rows: GradeEntryMonitoringRow[] = turmasDaEscola.map(turma => ({
+    turmaId: turma.id,
+    turmaNome: turma.nome,
+    matriculaAtual: turma.matriculaAtual ?? null,
+    monitoring: monitoringByTurmaId.get(turma.id) ?? null,
   }));
-  const scopedStudentRows = drillTurmaId ? studentRows.filter(r => r.turmaId === drillTurmaId) : studentRows;
+
+  const consolidated = consolidateGradeEntryMonitoring(rows);
+  const isLoading = turmasLoading || monitoringLoading;
 
   const scopeLabel = getSchoolScopeLabel({
     superintendent: activeSuper,
@@ -190,46 +157,6 @@ export default function NotasView() {
 
   const canWrite = selectedSchool ? hasSchoolWriteAccess(selectedSchool.nome) : false;
 
-  // Impede cliques repetidos no mesmo estudante enquanto a ativação/
-  // inativação anterior ainda está em andamento (revisão do PR #15) — não
-  // bloqueia outras linhas, só a que já tem uma chamada pendente. Erros
-  // reais (ex.: falha de permissão) ficam visíveis na interface em vez de
-  // desaparecerem como uma rejeição de Promise não tratada.
-  async function handleToggleActive(row: StudentGradeRow) {
-    const email = auth.currentUser?.email;
-    if (!selectedSchool || !email) return;
-    if (pendingToggleKeys.has(row.studentKey)) return;
-
-    setToggleError('');
-    setPendingToggleKeys(prev => new Set(prev).add(row.studentKey));
-    const input = {
-      schoolId: selectedSchool.id,
-      anoLetivo,
-      turmaId: row.turmaId,
-      studentKey: row.studentKey,
-      actingUserEmail: email,
-      now: new Date().toISOString(),
-    };
-    try {
-      if (row.active) {
-        await deactivateStudentRosterEntry(input);
-      } else {
-        await activateStudentRosterEntry(input);
-      }
-      refresh();
-    } catch (err) {
-      setToggleError(
-        err instanceof Error ? err.message : 'Erro ao atualizar a situação do estudante.'
-      );
-    } finally {
-      setPendingToggleKeys(prev => {
-        const next = new Set(prev);
-        next.delete(row.studentKey);
-        return next;
-      });
-    }
-  }
-
   return (
     <div className="space-y-6">
       {/* Cabeçalho */}
@@ -238,7 +165,7 @@ export default function NotasView() {
           <span className="text-[10px] text-brand-turquoise tracking-wider uppercase font-black font-mono">SEFOR 3 — ACOMPANHAMENTO PEDAGÓGICO</span>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Notas Bimestrais</h2>
           <p className="text-xs text-slate-500 font-normal max-w-2xl">
-            Painel de acompanhamento de preenchimento — não é diário oficial nem sistema de aprovação.
+            Acompanhamento do preenchimento de notas no SIGE Escola por unidade e turma.
           </p>
           {!isFirebaseMode && (
             <span className="inline-flex items-center gap-1.5 mt-1.5 px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-md uppercase tracking-wide">
@@ -252,7 +179,7 @@ export default function NotasView() {
           </span>
           <select
             value={selectedSchoolId}
-            onChange={e => { setSelectedSchoolId(e.target.value); setDrillTurmaId(null); }}
+            onChange={e => setSelectedSchoolId(e.target.value)}
             aria-label="Escola"
             className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-xl max-w-[220px]"
           >
@@ -282,23 +209,37 @@ export default function NotasView() {
       </div>
 
       <div className="bg-brand-turquoise/5 border border-brand-turquoise/20 rounded-xl px-4 py-2.5 text-[11px] text-slate-600">
-        Dados nominais restritos aos usuários autorizados para esta escola.
+        Esta visão utiliza somente dados agregados dos relatórios do SIGE Escola. Nenhuma nota individual é armazenada neste painel.
       </div>
 
       {!selectedSchool ? (
         <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
           Selecione uma escola para carregar o acompanhamento de notas.
         </div>
+      ) : turmasUnavailable ? (
+        <div className="bg-white border border-rose-200 rounded-2xl p-10 text-center text-xs">
+          <p className="text-rose-500 font-bold mb-1">
+            Não foi possível carregar as turmas desta escola{turmasError ? `: ${turmasError}` : '.'}
+          </p>
+          <p className="text-slate-400 mb-3">Nenhum dado de turma é exibido enquanto esta falha não for resolvida.</p>
+          <button
+            type="button"
+            onClick={refreshTurmas}
+            className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition"
+          >
+            Tentar novamente
+          </button>
+        </div>
       ) : (
         <>
-          <NotasSummaryCards stats={schoolStats} loading={loading} />
+          <NotasSummaryCards stats={consolidated} loading={isLoading || monitoringUnavailable} />
 
-          {loadError && (
+          {monitoringError && (
             <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-              <span>{loadError}</span>
+              <span>{monitoringError}</span>
               <button
                 type="button"
-                onClick={refresh}
+                onClick={refreshMonitoring}
                 className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0"
               >
                 Tentar novamente
@@ -306,58 +247,33 @@ export default function NotasView() {
             </div>
           )}
 
-          {toggleError && (
-            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold">
-              {toggleError}
+          {monitoringUnavailable ? (
+            <div className="bg-white border border-rose-200 rounded-2xl p-10 text-center text-xs text-rose-500 font-bold">
+              Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.
             </div>
-          )}
-
-          {!drillTurmaId ? (
-            <ClassGradeCoverageTable rows={classCoverageRows} loading={loading} onVerEstudantes={setDrillTurmaId} />
           ) : (
-            <StudentGradeTable
-              students={scopedStudentRows}
-              loading={loading}
+            <GradeEntryMonitoringTable
+              rows={rows}
+              loading={isLoading}
               canWrite={canWrite}
-              filter={filter}
-              onFilterChange={setFilter}
-              search={search}
-              onSearchChange={setSearch}
-              turmaFilterName={drillTurma?.nome ?? null}
-              onClearTurmaFilter={() => setDrillTurmaId(null)}
-              onPreencherNotas={setGradeModalRow}
-              onToggleActive={handleToggleActive}
-              onCadastrarEstudante={() => setRegistrationOpen(true)}
-              pendingToggleKeys={pendingToggleKeys}
+              statusFilter={statusFilter}
+              onStatusFilterChange={setStatusFilter}
+              onRegistrar={setModalRow}
             />
           )}
         </>
       )}
 
-      {registrationOpen && selectedSchool && (
-        <StudentRegistrationModal
+      {modalRow && selectedSchool && (
+        <GradeEntryMonitoringFormModal
           school={selectedSchool}
-          turmas={turmasDaEscola}
-          anoLetivo={anoLetivo}
-          defaultTurmaId={drillTurmaId ?? undefined}
-          onClose={() => setRegistrationOpen(false)}
-          onSaved={refresh}
-        />
-      )}
-
-      {gradeModalRow && selectedSchool && (
-        <StudentBimesterGradeFormModal
-          school={selectedSchool}
-          turmaId={gradeModalRow.turmaId}
-          turmaNome={gradeModalRow.turmaNome}
+          turmaId={modalRow.turmaId}
+          turmaNome={modalRow.turmaNome}
           anoLetivo={anoLetivo}
           bimestre={bimestre}
-          studentKey={gradeModalRow.studentKey}
-          studentName={gradeModalRow.studentName}
-          existingScores={gradeModalRow.scores}
-          existingObservacao={gradeModalRow.observacao}
-          onClose={() => setGradeModalRow(null)}
-          onSaved={refresh}
+          existing={modalRow.monitoring}
+          onClose={() => setModalRow(null)}
+          onSaved={refreshMonitoring}
         />
       )}
     </div>

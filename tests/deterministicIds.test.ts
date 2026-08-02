@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildEnrollmentSnapshotId,
+  buildGradeEntryMonitoringId,
   buildSchoolFlowResultId,
   buildSchoolYearId,
   buildStudentBimesterGradeId,
@@ -137,5 +138,35 @@ describe('buildStudentBimesterGradeId', () => {
     const a = buildStudentBimesterGradeId('diva-cabral_2026_turma-3a-diva_key-a', 1);
     const b = buildStudentBimesterGradeId('diva-cabral_2026_turma-3a-diva_key-b', 1);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('buildGradeEntryMonitoringId', () => {
+  it('gera o ID no formato schoolId_anoLetivo_bBimestre_turmaId', () => {
+    expect(buildGradeEntryMonitoringId('diva-cabral', 2026, 1, 'turma-3a-diva')).toBe(
+      'diva-cabral_2026_b1_turma-3a-diva'
+    );
+  });
+
+  it('turmas diferentes na mesma escola/ano/bimestre geram IDs diferentes', () => {
+    const a = buildGradeEntryMonitoringId('diva-cabral', 2026, 1, 'turma-3a-diva');
+    const b = buildGradeEntryMonitoringId('diva-cabral', 2026, 1, 'turma-3b-diva');
+    expect(a).not.toBe(b);
+  });
+
+  it('bimestres diferentes da mesma turma geram IDs diferentes (histórico nunca colide)', () => {
+    const b1 = buildGradeEntryMonitoringId('diva-cabral', 2026, 1, 'turma-3a-diva');
+    const b2 = buildGradeEntryMonitoringId('diva-cabral', 2026, 2, 'turma-3a-diva');
+    expect(b1).not.toBe(b2);
+  });
+
+  it('anos letivos diferentes geram IDs diferentes', () => {
+    const a = buildGradeEntryMonitoringId('diva-cabral', 2026, 1, 'turma-3a-diva');
+    const b = buildGradeEntryMonitoringId('diva-cabral', 2027, 1, 'turma-3a-diva');
+    expect(a).not.toBe(b);
+  });
+
+  it('a chave é por TURMA, nunca por estudante — nenhum identificador de estudante entra no ID', () => {
+    expect(buildGradeEntryMonitoringId('diva-cabral', 2026, 1, 'turma-3a-diva')).not.toContain('student');
   });
 });
