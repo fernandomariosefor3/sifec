@@ -134,7 +134,7 @@ export default function SalaDeSituacaoView() {
           <span className="text-[10px] text-brand-turquoise tracking-wider uppercase font-black font-mono">SEFOR 3 - ACOMPANHAMENTO</span>
           <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Sala de Situação</h2>
           <p className="text-xs text-slate-500 font-normal">
-            Visão consolidada do acompanhamento escolar e da qualidade dos dados.
+            Ranking regional de urgência/risco — prioriza onde a coordenadoria deve olhar primeiro, nunca um julgamento da escola.
           </p>
           <p className="text-[11px] text-slate-400 mt-1">
             Esta visão apresenta somente dados agregados. Informações nominais permanecem restritas aos módulos autorizados.

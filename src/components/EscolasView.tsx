@@ -1,17 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { GraduationCap, PlusCircle, Search, MapPin, BarChart2, Plus, X, ClipboardList } from 'lucide-react';
 import { auth } from '../lib/firebase';
-import { subscribeToCollection, addDocument, updateDocument, SEED_SCHOOLS } from '../lib/firebaseService';
+import { subscribeToCollection, addDocument, updateDocument, SEED_SCHOOLS, SEED_TURMAS } from '../lib/firebaseService';
 import { isSchoolVisible, getActiveSuperintendentId, addSchoolToLoggedInSuperintendent, isCurrentUserAdmin } from '../lib/superintendentService';
-import { useSchoolEnrollmentSummaries } from '../hooks/useSchoolEnrollmentSummaries';
+import { getClassroomsForSchool, getActiveClassroomCount } from '../lib/classService';
 import SchoolEnrollmentPanel from './SchoolEnrollmentPanel';
 import SchoolsTable from './SchoolsTable';
+import type { Turma } from '../types/classroom';
+
+// Reestruturação SIFEC — Gestão de Escolas: campo cadastral novo "Região"
+// (4ª ou 5ª) exigido pelo plano. Opcional no tipo porque as 56 escolas
+// semeadas (SEED_SCHOOLS) nunca tiveram essa informação real cadastrada —
+// nunca inventar a região de uma escola real sem confirmação (ver
+// conhecimento_sifec.md); a interface mostra "Não informado" até alguém
+// preencher pela edição.
+export type SchoolRegiao = '4ª' | '5ª';
 
 interface School {
   id: string;
   nome: string;
   codInep: string;
   cidade: string;
+  regiao?: SchoolRegiao;
   matriculas: number;
   idebMedio: number;
   metaIdeb: number;
@@ -32,6 +42,7 @@ export default function EscolasView() {
   const [nome, setNome] = useState('');
   const [codInep, setCodInep] = useState('');
   const [cidade, setCidade] = useState('Fortaleza');
+  const [regiao, setRegiao] = useState<SchoolRegiao | ''>('');
   const [matriculas, setMatriculas] = useState('');
   const [idebMedio, setIdebMedio] = useState('');
   const [metaIdeb, setMetaIdeb] = useState('');
@@ -112,6 +123,7 @@ export default function EscolasView() {
         nome: editingSchool.nome,
         codInep: editingSchool.codInep,
         cidade,
+        ...(regiao ? { regiao } : {}),
         matriculas: parseInt(matriculas),
         idebMedio: parseFloat(idebMedio),
         metaIdeb: parseFloat(metaIdeb)
@@ -145,6 +157,7 @@ export default function EscolasView() {
         nome,
         codInep,
         cidade,
+        ...(regiao ? { regiao } : {}),
         matriculas: parseInt(matriculas),
         idebMedio: parseFloat(idebMedio),
         metaIdeb: parseFloat(metaIdeb),
@@ -174,6 +187,7 @@ export default function EscolasView() {
     setNome('');
     setCodInep('');
     setCidade('Fortaleza');
+    setRegiao('');
     setMatriculas('');
     setIdebMedio('');
     setMetaIdeb('');
@@ -185,6 +199,7 @@ export default function EscolasView() {
     setNome(school.nome);
     setCodInep(school.codInep);
     setCidade(school.cidade);
+    setRegiao(school.regiao ?? '');
     setMatriculas(school.matriculas.toString());
     setIdebMedio(school.idebMedio.toString());
     setMetaIdeb(school.metaIdeb.toString());
@@ -201,10 +216,24 @@ export default function EscolasView() {
     return matchesSearch && matchesCity;
   });
 
-  // Fase 2A — matrícula inicial/atual, turmas ativas, média por turma e
-  // entradas/saídas acumuladas, buscados por escola (nunca a coleção
-  // inteira sem filtro — ver useSchoolEnrollmentSummaries).
-  const { summaries, summariesLoading, summaryErrors, turmas: turmasFase2A, refresh: refreshEnrollmentSummaries } = useSchoolEnrollmentSummaries(filteredSchools, isFirebaseMode);
+  // Reestruturação SIFEC — Gestão de Escolas simplificada: turmas ativas por
+  // escola calculado direto de `turmas` (sem depender mais de
+  // school_years/enrollment_snapshots, removidos desta tela). Contagem
+  // síncrona — nunca precisa de um estado de "carregando" próprio, porque
+  // `turmasFase2A` já reflete a assinatura em tempo real abaixo.
+  const [turmasFase2A, setTurmasFase2A] = useState<Turma[]>(SEED_TURMAS as unknown as Turma[]);
+  useEffect(() => {
+    if (!isFirebaseMode) {
+      setTurmasFase2A(SEED_TURMAS as unknown as Turma[]);
+      return;
+    }
+    const unsubscribe = subscribeToCollection('turmas', loaded => setTurmasFase2A(loaded as Turma[]));
+    return () => unsubscribe();
+  }, [isFirebaseMode]);
+  const turmasAtivasPorEscola: Record<string, number> = {};
+  filteredSchools.forEach(school => {
+    turmasAtivasPorEscola[school.id] = getActiveClassroomCount(getClassroomsForSchool(turmasFase2A, school));
+  });
 
   return (
     <div className="space-y-6">
@@ -222,6 +251,7 @@ export default function EscolasView() {
               setNome('');
               setCodInep('');
               setCidade('Fortaleza');
+              setRegiao('');
               setMatriculas('');
               setIdebMedio('');
               setMetaIdeb('');
@@ -302,23 +332,20 @@ export default function EscolasView() {
         </div>
       </div>
 
-      {/* Faixa de orientação — antes o único caminho para preencher matrícula/
-          turmas/registro mensal era um ícone escondido na coluna Ações; o
-          usuário não descobria onde entrar. Discreta, aparece para admin e
-          superintendente, não repete por linha (correção de usabilidade). */}
+      {/* Faixa de orientação — o caminho para lançar a matrícula por
+          bimestre e cadastrar turmas. Discreta, aparece para admin e
+          superintendente, não repete por linha. */}
       <div className="bg-brand-turquoise/5 border border-brand-turquoise/20 rounded-xl px-4 py-2.5 text-[11px] text-slate-600 flex items-center gap-2">
         <ClipboardList size={14} className="text-brand-turquoise shrink-0" />
         <span>
-          Para informar matrícula inicial, cadastrar turmas ou lançar a movimentação mensal, clique em <strong>“Preencher dados 2026”</strong> na escola desejada.
+          Para lançar a matrícula por bimestre ou cadastrar turmas, clique em <strong>“Matrícula por bimestre”</strong> na escola desejada.
         </span>
       </div>
 
       {/* Schools List Render */}
       <SchoolsTable
         schools={filteredSchools}
-        summaries={summaries}
-        summariesLoading={summariesLoading}
-        summaryErrors={summaryErrors}
+        turmasAtivasPorEscola={turmasAtivasPorEscola}
         onEdit={handleOpenEdit}
         onOpenEnrollmentPanel={setPanelSchool}
       />
@@ -393,6 +420,19 @@ export default function EscolasView() {
                 </div>
               </div>
 
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-700 block">Região</label>
+                <select
+                  value={regiao}
+                  onChange={(e) => setRegiao(e.target.value as SchoolRegiao | '')}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl"
+                >
+                  <option value="">Não informado</option>
+                  <option value="4ª">4ª</option>
+                  <option value="5ª">5ª</option>
+                </select>
+              </div>
+
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1">
                   <label className="text-[10px] font-black uppercase text-slate-700 block">Matrículas *</label>
@@ -455,7 +495,6 @@ export default function EscolasView() {
           turmas={turmasFase2A}
           isFirebaseMode={isFirebaseMode}
           onClose={() => setPanelSchool(null)}
-          onDataChanged={refreshEnrollmentSummaries}
         />
       )}
     </div>

@@ -75,3 +75,15 @@ export function buildGradeEntryMonitoringId(
 ): string {
   return `${schoolId}_${anoLetivo}_b${bimestre}_${turmaId}`;
 }
+
+// `bimonthly_enrollments/{schoolId_anoLetivo_bBimestre}` — ex.:
+// "diva-cabral_2026_b1". Reestruturação SIFEC: matrícula por ESCOLA e por
+// bimestre (nunca por turma) — mesmo formato de buildGradeEntryMonitoringId
+// sem o sufixo de turma.
+export function buildBimonthlyEnrollmentId(
+  schoolId: string,
+  anoLetivo: number,
+  bimestre: number
+): string {
+  return `${schoolId}_${anoLetivo}_b${bimestre}`;
+}

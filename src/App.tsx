@@ -34,8 +34,10 @@ import FluxoView from './components/FluxoView';
 import NotasView from './components/NotasView';
 import CdgView from './components/CdgView';
 import SalaDeSituacaoView from './components/SalaDeSituacaoView';
-import { BuscaAtivaView, PpdtView, RecomposicaoView } from './components/ExtraViews';
+import FarolEstudanteView from './components/FarolEstudanteView';
+import RecomposicaoView from './components/RecomposicaoView';
 import SuperintendentesView from './components/SuperintendentesView';
+import ParecerBimestralView from './components/ParecerBimestralView';
 import DevPanel from './components/DevPanel';
 
 import {
@@ -60,7 +62,7 @@ import { SEED_SCHOOLS } from './lib/firebaseService';
 // count against the true total instead of their own empty list.
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
 
-type TabType = 'escolas' | 'fluxo' | 'notas' | 'situacao' | 'cdg' | 'busca' | 'recomposicao' | 'ppdt' | 'superintendentes';
+type TabType = 'escolas' | 'fluxo' | 'notas' | 'situacao' | 'cdg' | 'farol' | 'recomposicao' | 'parecer' | 'superintendentes';
 
 // Painel técnico (DevPanel) só existe em build de desenvolvimento.
 // import.meta.env.DEV é substituído por uma constante em tempo de build pelo
@@ -296,9 +298,9 @@ export default function App() {
       case 'notas': return 'border-t-brand-green';
       case 'situacao': return 'border-t-brand-turquoise';
       case 'cdg': return 'border-[#26b2b7]';
-      case 'busca': return 'border-t-brand-orange';
+      case 'farol': return 'border-t-brand-orange';
       case 'recomposicao': return 'border-t-brand-coral';
-      case 'ppdt': return 'border-t-brand-green';
+      case 'parecer': return 'border-t-brand-green';
       case 'superintendentes': return 'border-t-brand-turquoise';
       default: return 'border-t-brand-turquoise';
     }
@@ -568,15 +570,15 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('busca')}
+              onClick={() => setActiveTab('farol')}
               className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                activeTab === 'busca' 
-                  ? 'bg-brand-orange text-white shadow-md border border-brand-orange-dark/20' 
+                activeTab === 'farol'
+                  ? 'bg-brand-orange text-white shadow-md border border-brand-orange-dark/20'
                   : 'text-slate-650 hover:bg-brand-orange/10 hover:text-brand-orange-dark'
               }`}
             >
               <span className="flex items-center gap-2">
-                <AlertTriangle size={15} /> Busca Ativa
+                <AlertTriangle size={15} /> Alunos com Baixo Desempenho (Farol do Estudante)
               </span>
               <ChevronRight size={12} className="opacity-60" />
             </button>
@@ -584,8 +586,8 @@ export default function App() {
             <button
               onClick={() => setActiveTab('recomposicao')}
               className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                activeTab === 'recomposicao' 
-                  ? 'bg-brand-coral text-white shadow-md border border-brand-coral-dark/20' 
+                activeTab === 'recomposicao'
+                  ? 'bg-brand-coral text-white shadow-md border border-brand-coral-dark/20'
                   : 'text-slate-650 hover:bg-brand-coral/10 hover:text-brand-coral-dark'
               }`}
             >
@@ -596,29 +598,31 @@ export default function App() {
             </button>
 
             <button
-              onClick={() => setActiveTab('ppdt')}
-              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                activeTab === 'ppdt' 
-                  ? 'bg-brand-green text-white shadow-md border border-brand-green-dark/25' 
-                  : 'text-slate-650 hover:bg-brand-green/10 hover:text-brand-green-dark'
-              }`}
-            >
-              <span className="flex items-center gap-2">
-                <Users size={15} /> Equipe PPDT
-              </span>
-              <ChevronRight size={12} className="opacity-60" />
-            </button>
-
-            <button
               onClick={() => setActiveTab('superintendentes')}
               className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
-                activeTab === 'superintendentes' 
-                  ? 'bg-brand-turquoise text-white shadow-md border border-brand-turquoise-dark/20' 
+                activeTab === 'superintendentes'
+                  ? 'bg-brand-turquoise text-white shadow-md border border-brand-turquoise-dark/20'
                   : 'text-slate-650 hover:bg-brand-turquoise/10 hover:text-brand-turquoise-dark'
               }`}
             >
               <span className="flex items-center gap-2">
                 <Users size={15} /> Superintendentes
+              </span>
+              <ChevronRight size={12} className="opacity-60" />
+            </button>
+
+            <span className="text-[10px] font-black uppercase text-brand-green-dark tracking-widest px-3 py-1 block mt-3 mb-1">Relatório Final</span>
+
+            <button
+              onClick={() => setActiveTab('parecer')}
+              className={`w-full text-left px-3.5 py-2.5 rounded-xl text-xs font-bold transition flex items-center justify-between ${
+                activeTab === 'parecer'
+                  ? 'bg-brand-green text-white shadow-md border border-brand-green-dark/25'
+                  : 'text-slate-650 hover:bg-brand-green/10 hover:text-brand-green-dark'
+              }`}
+            >
+              <span className="flex items-center gap-2">
+                <Presentation size={15} /> Parecer Bimestral
               </span>
               <ChevronRight size={12} className="opacity-60" />
             </button>
@@ -631,10 +635,10 @@ export default function App() {
             {activeTab === 'notas' && <ErrorBoundary><NotasView /></ErrorBoundary>}
             {activeTab === 'situacao' && <ErrorBoundary><SalaDeSituacaoView /></ErrorBoundary>}
             {activeTab === 'cdg' && <ErrorBoundary><CdgView /></ErrorBoundary>}
-            {activeTab === 'busca' && <ErrorBoundary><BuscaAtivaView /></ErrorBoundary>}
+            {activeTab === 'farol' && <ErrorBoundary><FarolEstudanteView /></ErrorBoundary>}
             {activeTab === 'recomposicao' && <ErrorBoundary><RecomposicaoView /></ErrorBoundary>}
-            {activeTab === 'ppdt' && <ErrorBoundary><PpdtView /></ErrorBoundary>}
             {activeTab === 'superintendentes' && <ErrorBoundary><SuperintendentesView /></ErrorBoundary>}
+            {activeTab === 'parecer' && <ErrorBoundary><ParecerBimestralView /></ErrorBoundary>}
           </div>
         </section>
       </div>

@@ -93,6 +93,68 @@ export function classifyTurmaGradeEntryStatus(monitoring: GradeEntryCounts | nul
   return 'inconsistente';
 }
 
+// Reestruturação SIFEC — faixas de alerta visual do percentual de
+// preenchimento de notas (item "Lançamento de Notas" do plano):
+//   > 95%        → 'otimo'    (Ótimo / Concluído)
+//   75% – 95%    → 'bom'      (Bom / Em andamento)
+//   50% – 75%    → 'atencao'  (Atenção / Parcial)
+//   ≤ 50%        → 'critico'  (Crítico)
+// Convenção de fronteira (o plano não define os limites como abertos ou
+// fechados dos dois lados ao mesmo tempo): cada faixa inclui seu próprio
+// limite SUPERIOR, exceto a mais alta (> 95, estritamente maior) — garante
+// uma partição sem sobreposição nem lacuna para qualquer percentual real.
+// `null` (nenhum relatório informado) tem faixa própria, nunca cai em
+// 'critico' por omissão.
+export type CompletionColorBand = 'otimo' | 'bom' | 'atencao' | 'critico' | 'sem_dado';
+
+export interface CompletionColorBandInfo {
+  label: string;
+  badgeClassName: string;
+  textClassName: string;
+  dotClassName: string;
+}
+
+export const COMPLETION_COLOR_BAND_INFO: Record<CompletionColorBand, CompletionColorBandInfo> = {
+  otimo: {
+    label: 'Ótimo / Concluído',
+    badgeClassName: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+    textClassName: 'text-emerald-700',
+    dotClassName: 'bg-emerald-500',
+  },
+  bom: {
+    label: 'Bom / Em andamento',
+    badgeClassName: 'bg-emerald-50 text-emerald-600 border-emerald-200',
+    textClassName: 'text-emerald-600',
+    dotClassName: 'bg-emerald-400',
+  },
+  atencao: {
+    label: 'Atenção / Parcial',
+    badgeClassName: 'bg-amber-50 text-amber-700 border-amber-200',
+    textClassName: 'text-amber-600',
+    dotClassName: 'bg-amber-400',
+  },
+  critico: {
+    label: 'Crítico',
+    badgeClassName: 'bg-rose-50 text-rose-700 border-rose-200',
+    textClassName: 'text-rose-600',
+    dotClassName: 'bg-rose-500',
+  },
+  sem_dado: {
+    label: 'Não informado',
+    badgeClassName: 'bg-slate-100 text-slate-500 border-slate-200',
+    textClassName: 'text-slate-400',
+    dotClassName: 'bg-slate-300',
+  },
+};
+
+export function classifyCompletionColorBand(percentage: number | null): CompletionColorBand {
+  if (percentage == null) return 'sem_dado';
+  if (percentage > 95) return 'otimo';
+  if (percentage > 75) return 'bom';
+  if (percentage > 50) return 'atencao';
+  return 'critico';
+}
+
 export interface TurmaGradeEntryRow {
   turmaId: string;
   turmaNome: string;
@@ -209,5 +271,72 @@ export function consolidateGradeEntryMonitoring(
     // única turma inconsistente já é suficiente para o conjunto inteiro
     // não ser "confiável o bastante" para exibir um percentual.
     percentualPreenchimentoGeral: turmasInconsistentes > 0 ? null : calculateCompletionPercentage(totals),
+  };
+}
+
+// Reestruturação SIFEC — visões "1º Período" (1º+2º bimestre), "2º Período"
+// (3º+4º bimestre), "Consolidado" (1º ao 4º) e "agregados regionais"
+// (soma de várias escolas). Deliberadamente NÃO reaproveita
+// consolidateGradeEntryMonitoring: aquela função assume um único documento
+// de monitoramento por turma (um bimestre), e `totalStudents`/
+// `studentsWithCompleteGrades`/etc são uma FOTOGRAFIA da turma naquele
+// bimestre — somar essas colunas entre bimestres diferentes contaria a
+// mesma matrícula mais de uma vez. Esta função soma só o que É aditivo por
+// natureza entre bimestres: lançamentos esperados/realizados (cada bimestre
+// tem seus próprios lançamentos, nunca se sobrepõem). Documentos
+// inconsistentes (ver isMathematicallyConsistent) são contados mas nunca
+// somados aos totais, mesmo princípio de consolidateGradeEntryMonitoring.
+export interface PeriodGradeEntryAggregate {
+  turmasNoEscopo: number;
+  turmasComAoMenosUmRelatorio: number;
+  turmasSemNenhumRelatorio: number;
+  turmasComInconsistencia: number;
+  totalExpectedGradeEntries: number;
+  totalCompletedGradeEntries: number;
+  percentualGeral: number | null;
+}
+
+// `monitoringByTurma` — para cada turma no escopo, a lista de documentos de
+// monitoramento encontrados nos bimestres do período (pode ter de 0 a N
+// entradas por turma; N = quantidade de bimestres do período, nunca mais).
+export function aggregateGradeEntriesForPeriod(
+  monitoringByTurma: readonly (readonly GradeEntryCounts[])[]
+): PeriodGradeEntryAggregate {
+  let turmasComAoMenosUmRelatorio = 0;
+  let turmasSemNenhumRelatorio = 0;
+  let turmasComInconsistencia = 0;
+  let totalExpectedGradeEntries = 0;
+  let totalCompletedGradeEntries = 0;
+
+  for (const monitoringDocs of monitoringByTurma) {
+    if (monitoringDocs.length === 0) {
+      turmasSemNenhumRelatorio += 1;
+      continue;
+    }
+    turmasComAoMenosUmRelatorio += 1;
+    const turmaTemInconsistencia = monitoringDocs.some(doc => !isMathematicallyConsistent(doc));
+    if (turmaTemInconsistencia) {
+      turmasComInconsistencia += 1;
+      continue;
+    }
+    for (const doc of monitoringDocs) {
+      totalExpectedGradeEntries += doc.expectedGradeEntries;
+      totalCompletedGradeEntries += doc.completedGradeEntries;
+    }
+  }
+
+  return {
+    turmasNoEscopo: monitoringByTurma.length,
+    turmasComAoMenosUmRelatorio,
+    turmasSemNenhumRelatorio,
+    turmasComInconsistencia,
+    totalExpectedGradeEntries,
+    totalCompletedGradeEntries,
+    percentualGeral: turmasComInconsistencia > 0
+      ? null
+      : calculateCompletionPercentage({
+          expectedGradeEntries: totalExpectedGradeEntries,
+          completedGradeEntries: totalCompletedGradeEntries,
+        }),
   };
 }

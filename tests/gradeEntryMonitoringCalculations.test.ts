@@ -7,8 +7,11 @@ import {
   calculatePendingStudents,
   calculateStudentsCompletePercentage,
   classifyTurmaGradeEntryStatus,
+  classifyCompletionColorBand,
+  aggregateGradeEntriesForPeriod,
   consolidateGradeEntryMonitoring,
   type TurmaGradeEntryRow,
+  type GradeEntryCounts,
 } from '../src/lib/gradeEntryMonitoringCalculations';
 import type { GradeEntryMonitoring } from '../src/types/gradeEntryMonitoring';
 
@@ -249,6 +252,95 @@ describe('consolidateGradeEntryMonitoring', () => {
       // Mas o percentual EXPOSTO nunca "esconde" a inconsistência atrás de
       // um número que parece 100% confiável.
       expect(result.percentualPreenchimentoGeral).toBeNull();
+    });
+  });
+
+  // Reestruturação SIFEC — item "Lançamento de Notas": faixas de alerta
+  // visual do percentual de preenchimento.
+  describe('classifyCompletionColorBand', () => {
+    it('null (nenhum relatório informado) é sem_dado', () => {
+      expect(classifyCompletionColorBand(null)).toBe('sem_dado');
+    });
+
+    it('> 95% é otimo', () => {
+      expect(classifyCompletionColorBand(96)).toBe('otimo');
+      expect(classifyCompletionColorBand(100)).toBe('otimo');
+    });
+
+    it('exatamente 95% é bom (o limite superior de 95 pertence à faixa de baixo)', () => {
+      expect(classifyCompletionColorBand(95)).toBe('bom');
+    });
+
+    it('75% a 95% (exclusive 75) é bom', () => {
+      expect(classifyCompletionColorBand(80)).toBe('bom');
+    });
+
+    it('exatamente 75% é atencao (o limite superior de 75 pertence à faixa de baixo)', () => {
+      expect(classifyCompletionColorBand(75)).toBe('atencao');
+    });
+
+    it('50% a 75% (exclusive 50) é atencao', () => {
+      expect(classifyCompletionColorBand(60)).toBe('atencao');
+    });
+
+    it('exatamente 50% ou menos é critico', () => {
+      expect(classifyCompletionColorBand(50)).toBe('critico');
+      expect(classifyCompletionColorBand(0)).toBe('critico');
+    });
+  });
+
+  // Reestruturação SIFEC — visões "1º Período"/"2º Período"/"Consolidado" e
+  // agregados regionais: soma só o que é aditivo entre bimestres
+  // (lançamentos), nunca totalStudents (fotografia por bimestre).
+  describe('aggregateGradeEntriesForPeriod', () => {
+    function counts(overrides: Partial<GradeEntryCounts> = {}): GradeEntryCounts {
+      return {
+        totalStudents: 30, studentsWithCompleteGrades: 30, studentsWithPartialGrades: 0, studentsWithoutGrades: 0,
+        expectedGradeEntries: 100, completedGradeEntries: 100,
+        ...overrides,
+      };
+    }
+
+    it('turma sem nenhum relatório no período conta como turmasSemNenhumRelatorio', () => {
+      const result = aggregateGradeEntriesForPeriod([[]]);
+      expect(result.turmasNoEscopo).toBe(1);
+      expect(result.turmasSemNenhumRelatorio).toBe(1);
+      expect(result.turmasComAoMenosUmRelatorio).toBe(0);
+    });
+
+    it('soma lançamentos esperados/realizados de vários bimestres da mesma turma', () => {
+      const result = aggregateGradeEntriesForPeriod([
+        [counts({ expectedGradeEntries: 100, completedGradeEntries: 50 }), counts({ expectedGradeEntries: 100, completedGradeEntries: 100 })],
+      ]);
+      expect(result.totalExpectedGradeEntries).toBe(200);
+      expect(result.totalCompletedGradeEntries).toBe(150);
+      expect(result.percentualGeral).toBe(75);
+      expect(result.turmasComAoMenosUmRelatorio).toBe(1);
+    });
+
+    it('soma entre turmas diferentes (uso regional — várias escolas/turmas)', () => {
+      const result = aggregateGradeEntriesForPeriod([
+        [counts({ expectedGradeEntries: 100, completedGradeEntries: 100 })],
+        [counts({ expectedGradeEntries: 50, completedGradeEntries: 0 })],
+      ]);
+      expect(result.totalExpectedGradeEntries).toBe(150);
+      expect(result.totalCompletedGradeEntries).toBe(100);
+    });
+
+    it('turma com documento inconsistente em qualquer bimestre do período nunca entra nos totais', () => {
+      const result = aggregateGradeEntriesForPeriod([
+        [counts({ expectedGradeEntries: 100, completedGradeEntries: 100 }), counts({ expectedGradeEntries: 100, completedGradeEntries: 999 })],
+      ]);
+      expect(result.turmasComInconsistencia).toBe(1);
+      expect(result.totalExpectedGradeEntries).toBe(0);
+      expect(result.totalCompletedGradeEntries).toBe(0);
+      expect(result.percentualGeral).toBeNull();
+    });
+
+    it('nenhuma turma no escopo: percentual null, nunca 0%', () => {
+      const result = aggregateGradeEntriesForPeriod([]);
+      expect(result.turmasNoEscopo).toBe(0);
+      expect(result.percentualGeral).toBeNull();
     });
   });
 });
