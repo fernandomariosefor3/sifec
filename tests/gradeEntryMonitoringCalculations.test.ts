@@ -271,16 +271,20 @@ describe('consolidateGradeEntryMonitoring', () => {
       expect(classifyCompletionColorBand(95)).toBe('bom');
     });
 
-    it('75% a 95% (exclusive 75) é bom', () => {
+    it('75% a 95% é bom', () => {
       expect(classifyCompletionColorBand(80)).toBe('bom');
     });
 
-    it('exatamente 75% é atencao (o limite superior de 75 pertence à faixa de baixo)', () => {
-      expect(classifyCompletionColorBand(75)).toBe('atencao');
+    // Auditoria da reestruturação SIFEC, seção 5: limite de 75 é INCLUSIVO
+    // do lado de "bom" (>=75 e <=95), ao contrário do limite de 95 (que é
+    // exclusivo do lado de baixo — exatamente 95 já é "bom", não "ótimo").
+    it('exatamente 75% é bom (limite inferior inclusivo da faixa Bom)', () => {
+      expect(classifyCompletionColorBand(75)).toBe('bom');
     });
 
-    it('50% a 75% (exclusive 50) é atencao', () => {
+    it('50% a 75% (exclusive 50 e exclusive 75) é atencao', () => {
       expect(classifyCompletionColorBand(60)).toBe('atencao');
+      expect(classifyCompletionColorBand(74)).toBe('atencao');
     });
 
     it('exatamente 50% ou menos é critico', () => {

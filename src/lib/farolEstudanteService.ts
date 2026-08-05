@@ -5,9 +5,20 @@
 import { collection, deleteDoc, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
-import { FAROL_ACERTO_LIMITE, type FarolEstudanteItem } from '../types/farolEstudante';
+import {
+  FAROL_ACERTO_LIMITE,
+  FAROL_SOURCE_SYSTEM,
+  FAROL_STATUS_ACOMPANHAMENTO,
+  type FarolEstudanteItem,
+  type FarolStatusAcompanhamento,
+} from '../types/farolEstudante';
 
 const COLLECTION = 'farol_estudante';
+
+// YYYY-MM-DD — mesma checagem simples já usada para referenceDate em
+// gradeEntryMonitoringDisciplineService.ts (nunca aceita um Date bruto, para
+// nunca gravar um formato ambíguo de fuso horário).
+const REFERENCE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
 export class FarolEstudanteValidationError extends Error {}
 
@@ -23,6 +34,10 @@ export interface SaveFarolEstudanteInput {
   bimestre: Bimestre;
   estudanteNome: string;
   percentualAcerto: number;
+  // Data do relatório do SISEDU Analytics transcrito (YYYY-MM-DD) — nunca a
+  // data de hoje: precisa refletir quando o dado foi realmente extraído.
+  referenceDate: string;
+  status: FarolStatusAcompanhamento;
   observacao?: string;
   actingUserEmail: string;
   now: string;
@@ -50,6 +65,12 @@ export function validateFarolEstudanteInput(input: SaveFarolEstudanteInput): voi
       `O percentual de acerto deve ser um número inteiro entre 0 e ${FAROL_ACERTO_LIMITE - 1} — esta listagem é exclusiva para estudantes abaixo de ${FAROL_ACERTO_LIMITE}%.`
     );
   }
+  if (!REFERENCE_DATE_PATTERN.test(input.referenceDate)) {
+    throw new FarolEstudanteValidationError('Informe a data de referência do relatório do SISEDU Analytics (AAAA-MM-DD).');
+  }
+  if (!FAROL_STATUS_ACOMPANHAMENTO.includes(input.status)) {
+    throw new FarolEstudanteValidationError('Selecione um status de acompanhamento válido.');
+  }
 }
 
 export function buildFarolEstudanteId(): string {
@@ -73,6 +94,9 @@ export function buildFarolEstudantePayload(
     bimestre: input.bimestre,
     estudanteNome: input.estudanteNome.trim(),
     percentualAcerto: input.percentualAcerto,
+    sourceSystem: FAROL_SOURCE_SYSTEM,
+    referenceDate: input.referenceDate,
+    status: input.status,
     ...(input.observacao?.trim() ? { observacao: input.observacao.trim() } : {}),
     createdAt: existing?.createdAt ?? input.now,
     updatedAt: input.now,

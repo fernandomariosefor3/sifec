@@ -140,7 +140,16 @@ export default function CdgView() {
     }
     load();
     return () => { cancelled = true; };
-  }, [selectedSchool, anoLetivo, isFirebaseMode, reloadTick]);
+    // selectedSchoolId (primitivo) substitui selectedSchool (objeto) de
+    // propósito: getSuperintendents() devolve um array NOVO a cada render, e
+    // selectedSchool nunca é referencialmente estável entre renders — usá-lo
+    // direto aqui faria este efeito refazer a busca a cada re-render que ELE
+    // MESMO provoca via setPlan/setTasks (setState → re-render → novo
+    // selectedSchool → efeito dispara de novo → nunca estabiliza — bug real
+    // encontrado na auditoria da reestruturação, mesmo padrão de
+    // visibleSchoolIdsKey em NotasView.tsx).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedSchoolId substitui selectedSchool de propósito (ver comentário acima)
+  }, [selectedSchoolId, anoLetivo, isFirebaseMode, reloadTick]);
 
   async function handleSavePlanField(field: 'situacao' | 'statusExecucao', value: string) {
     setPlanError('');

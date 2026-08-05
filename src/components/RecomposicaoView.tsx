@@ -115,7 +115,14 @@ export default function RecomposicaoView() {
     }
     load();
     return () => { cancelled = true; };
-  }, [selectedSchool, anoLetivo, bimestre, isFirebaseMode, reloadTick]);
+    // selectedSchoolId (primitivo) substitui selectedSchool (objeto) de
+    // propósito — selectedSchool nunca é referencialmente estável entre
+    // renders (getSuperintendents() sempre devolve um array novo), o que
+    // faria este efeito refazer a busca a cada re-render que ELE MESMO
+    // provoca via setPlanos (bug real encontrado na auditoria da
+    // reestruturação — mesmo padrão de visibleSchoolIdsKey em NotasView.tsx).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedSchoolId substitui selectedSchool de propósito (ver comentário acima)
+  }, [selectedSchoolId, anoLetivo, bimestre, isFirebaseMode, reloadTick]);
 
   function openCreate() {
     setEditingPlan(null);

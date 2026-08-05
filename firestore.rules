@@ -991,6 +991,7 @@ service cloud.firestore {
       return data.keys().hasOnly([
           'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
           'disciplina', 'anoLetivo', 'bimestre', 'estudanteNome', 'percentualAcerto',
+          'sourceSystem', 'referenceDate', 'status',
           'observacao', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
         ]) &&
         data.id == itemId &&
@@ -1004,6 +1005,11 @@ service cloud.firestore {
         data.bimestre in [1, 2, 3, 4] &&
         data.estudanteNome is string && data.estudanteNome.size() > 0 && data.estudanteNome.size() <= 150 &&
         data.percentualAcerto is int && data.percentualAcerto >= 0 && data.percentualAcerto < 25 &&
+        // Fonte sempre fixa 'SISEDU Analytics' — nunca outra origem (nunca
+        // afirma sincronização automática, ver farolEstudante.ts).
+        data.sourceSystem == 'SISEDU Analytics' &&
+        data.referenceDate is string && data.referenceDate.size() == 10 &&
+        data.status in ['Identificado', 'Em acompanhamento', 'Superado'] &&
         (!('observacao' in data) || (data.observacao is string && data.observacao.size() <= 500)) &&
         data.createdAt is string && data.updatedAt is string &&
         data.createdBy is string && data.updatedBy is string;
@@ -1194,6 +1200,63 @@ service cloud.firestore {
         incoming().createdBy == resource.data.createdBy &&
         isValidParecerBimestralNoteShape(noteId);
       allow delete: if isPlatformAdmin() && isValidId(noteId);
+    }
+
+    // --- Auditoria da reestruturação SIFEC: grade_entry_monitoring_disciplina ---
+    // Requisito central do Acompanhamento de Notas: dimensão turma+
+    // disciplina, coleção NOVA e separada de grade_entry_monitoring (que
+    // continua intocada — total por turma, sem disciplina, ainda usado pelo
+    // fluxo de registro do SIGE). Mesma integridade canônica de
+    // grade_entry_monitoring (isCanonicalTurmaOfSchoolYearAndName).
+    function isValidGradeEntryMonitoringDisciplineShape(entryId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
+          'anoLetivo', 'bimestre', 'disciplina', 'expectedGradeEntries',
+          'completedGradeEntries', 'status', 'referenceDate',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == entryId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        data.turmaId is string && data.turmaId.size() <= 128 &&
+        data.turmaNome is string && data.turmaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.bimestre in [1, 2, 3, 4] &&
+        data.disciplina in ['linguaPortuguesa', 'matematica', 'cienciasNatureza', 'cienciasHumanas'] &&
+        entryId == data.schoolId + '_' + string(data.anoLetivo) + '_b' + string(data.bimestre) + '_' + data.turmaId + '_' + data.disciplina &&
+        isNonNegInt(data.expectedGradeEntries) &&
+        isNonNegInt(data.completedGradeEntries) &&
+        data.completedGradeEntries <= data.expectedGradeEntries &&
+        data.status in ['rascunho', 'confirmado'] &&
+        data.referenceDate is string &&
+        data.referenceDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$') &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /grade_entry_monitoring_disciplina/{entryId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isValidId(entryId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
+        isValidGradeEntryMonitoringDisciplineShape(entryId);
+      allow update: if isValidId(entryId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().turmaId == resource.data.turmaId &&
+        incoming().turmaNome == resource.data.turmaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().bimestre == resource.data.bimestre &&
+        incoming().disciplina == resource.data.disciplina &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidGradeEntryMonitoringDisciplineShape(entryId);
+      allow delete: if isPlatformAdmin() && isValidId(entryId);
     }
 
     // --- Fase 2A: imports ---

@@ -38,12 +38,20 @@ import {
   type GradeEntryCounts,
 } from '../lib/gradeEntryMonitoringCalculations';
 import { buildAnoLetivoOptions } from '../lib/anoLetivoOptions';
+import { mapWithConcurrencyLimit } from '../lib/schoolSituationService';
 import NotasSummaryCards from './notas/NotasSummaryCards';
 import GradeEntryMonitoringTable, {
   type GradeEntryMonitoringRow,
   type StatusFilter,
 } from './notas/GradeEntryMonitoringTable';
 import GradeEntryMonitoringFormModal from './notas/GradeEntryMonitoringFormModal';
+import GradeEntryMonitoringByDisciplineTable, { buildDisciplineRows, type DisciplineRow } from './notas/GradeEntryMonitoringByDisciplineTable';
+import {
+  listGradeEntryMonitoringByDisciplineForSchool,
+  saveGradeEntryMonitoringByDiscipline,
+} from '../lib/gradeEntryMonitoringDisciplineService';
+import { DEMO_GRADE_ENTRY_MONITORING_DISCIPLINE } from '../data/demoGradeEntryMonitoringDiscipline';
+import type { GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
 
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
@@ -75,6 +83,18 @@ const VISAO_LABEL: Record<Visao, string> = {
   consolidado: 'Consolidado (ano letivo)',
 };
 
+// Auditoria da reestruturação, seção 5: o agregado regional processa
+// escola por escola, nunca todas de uma vez (mesmo pool de concorrência já
+// usado em schoolSituationService.ts) — a falha de UMA escola nunca some
+// com o resultado das demais 55.
+const REGIONAL_AGGREGATE_CONCURRENCY = 4;
+
+interface AggregateSchoolFailure {
+  schoolId: string;
+  escolaNome: string;
+  message: string;
+}
+
 export default function NotasView() {
   const [isFirebaseMode, setIsFirebaseMode] = useState(false);
   const [activeSuperId, setActiveSuperId] = useState('all');
@@ -92,6 +112,11 @@ export default function NotasView() {
   const [aggregateGroups, setAggregateGroups] = useState<GradeEntryCounts[][] | null>(null);
   const [aggregateLoading, setAggregateLoading] = useState(false);
   const [aggregateError, setAggregateError] = useState('');
+  // Cobertura do agregado regional: quantas escolas do escopo realmente
+  // contribuíram dado, e quais falharam (com o motivo) — nunca um "erro
+  // genérico" que apaga o resultado das escolas que carregaram com sucesso.
+  const [aggregateSchoolFailures, setAggregateSchoolFailures] = useState<AggregateSchoolFailure[]>([]);
+  const [aggregateSchoolsAttempted, setAggregateSchoolsAttempted] = useState(0);
 
   function handleAnoLetivoChange(nextAnoLetivo: number) {
     setAnoLetivo(nextAnoLetivo);
@@ -182,6 +207,80 @@ export default function NotasView() {
   const consolidated = consolidateGradeEntryMonitoring(rows);
   const isLoading = turmasLoading || monitoringLoading;
 
+  // Auditoria da reestruturação SIFEC — requisito central: acompanhamento
+  // por turma+DISCIPLINA (nunca só um total geral por turma). Coleção nova
+  // e separada (grade_entry_monitoring_disciplina) — grade_entry_monitoring
+  // continua intocado, servindo o resumo por turma acima e o fluxo de
+  // registro do SIGE (PR #18). Só busca no escopo normal (um bimestre, uma
+  // escola) — período/consolidado/regional são visões agregadas que não
+  // precisam do detalhe por disciplina linha a linha.
+  const [disciplineEntries, setDisciplineEntries] = useState<GradeEntryMonitoringByDiscipline[]>([]);
+  const [disciplineLoading, setDisciplineLoading] = useState(false);
+  const [disciplineError, setDisciplineError] = useState('');
+  const [disciplineReloadTick, setDisciplineReloadTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      if (!selectedSchool) {
+        setDisciplineEntries([]);
+        return;
+      }
+      if (!isFirebaseMode) {
+        const isDemoMatch = selectedSchool.id === 'diva-cabral' && anoLetivo === 2026 && bimestre === 1;
+        setDisciplineEntries(isDemoMatch ? DEMO_GRADE_ENTRY_MONITORING_DISCIPLINE : []);
+        return;
+      }
+      setDisciplineLoading(true);
+      setDisciplineError('');
+      try {
+        const loaded = await listGradeEntryMonitoringByDisciplineForSchool(selectedSchool.id, anoLetivo, bimestre);
+        if (!cancelled) setDisciplineEntries(loaded);
+      } catch (err) {
+        if (!cancelled) setDisciplineError(err instanceof Error ? err.message : 'Não foi possível carregar o acompanhamento por disciplina.');
+      } finally {
+        if (!cancelled) setDisciplineLoading(false);
+      }
+    }
+    load();
+    return () => { cancelled = true; };
+    // selectedSchoolId (primitivo) substitui selectedSchool (objeto) de
+    // propósito — selectedSchool nunca é referencialmente estável entre
+    // renders (getSuperintendents() sempre devolve um array novo), o que
+    // faria este efeito refazer a busca a cada re-render que ELE MESMO
+    // provoca via setDisciplineEntries (bug real encontrado na auditoria da
+    // reestruturação — mesmo padrão de visibleSchoolIdsKey acima).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedSchoolId substitui selectedSchool de propósito (ver comentário acima)
+  }, [selectedSchoolId, anoLetivo, bimestre, isFirebaseMode, disciplineReloadTick]);
+
+  const disciplineRows = useMemo(() => buildDisciplineRows(turmasDaEscola, disciplineEntries), [turmasDaEscola, disciplineEntries]);
+
+  async function handleSaveDisciplineRow(row: DisciplineRow, draft: { expectedGradeEntries: string; completedGradeEntries: string; status: 'rascunho' | 'confirmado'; referenceDate: string }) {
+    if (!selectedSchool) return;
+    const email = auth.currentUser?.email;
+    if (!email) throw new Error('É preciso estar autenticado para registrar o acompanhamento por disciplina.');
+    await saveGradeEntryMonitoringByDiscipline(
+      {
+        schoolId: selectedSchool.id,
+        codInep: selectedSchool.codInep,
+        escolaNome: selectedSchool.nome,
+        turmaId: row.turmaId,
+        turmaNome: row.turmaNome,
+        anoLetivo,
+        bimestre,
+        disciplina: row.disciplina,
+        expectedGradeEntries: Number(draft.expectedGradeEntries),
+        completedGradeEntries: Number(draft.completedGradeEntries),
+        status: draft.status,
+        referenceDate: draft.referenceDate,
+        actingUserEmail: email,
+        now: new Date().toISOString(),
+      },
+      row.entry ?? undefined
+    );
+    setDisciplineReloadTick(t => t + 1);
+  }
+
   const scopeLabel = getSchoolScopeLabel({
     superintendent: activeSuper,
     allSchoolNames: ALL_SCHOOL_NAMES,
@@ -199,39 +298,72 @@ export default function NotasView() {
   // agrupados por turma antes de agregar (aggregateGradeEntriesForPeriod
   // nunca soma totalStudents entre bimestres, só lançamentos).
   const showAggregateView = visao !== 'bimestre' || regionalScope;
+  // Chave estável derivada do CONTEÚDO de visibleSchools (nunca da
+  // referência do array) — mesmo padrão de schoolIdsKey em
+  // useSchoolSituation.ts. getSuperintendents()/getSchoolsForCurrentScope()
+  // sempre devolvem um array NOVO a cada render (JSON.parse fresco do
+  // localStorage), então usar `visibleSchools` direto nas deps do efeito
+  // abaixo o faria refazer a busca a cada re-render que ELE MESMO provoca
+  // (setAggregateGroups → re-render → nova referência de visibleSchools →
+  // efeito dispara de novo → nunca estabiliza). selectedSchoolId (primitivo)
+  // substitui selectedSchool pelo mesmo motivo.
+  const visibleSchoolIdsKey = visibleSchools.map(s => s.id).join(',');
   useEffect(() => {
     if (!showAggregateView || !isFirebaseMode) {
       setAggregateGroups(null);
       setAggregateError('');
+      setAggregateSchoolFailures([]);
+      setAggregateSchoolsAttempted(0);
       return;
     }
     const schoolsEscopo = regionalScope ? visibleSchools : (selectedSchool ? [selectedSchool] : []);
     if (schoolsEscopo.length === 0) {
       setAggregateGroups(null);
+      setAggregateSchoolFailures([]);
+      setAggregateSchoolsAttempted(0);
       return;
     }
     let cancelled = false;
     async function load() {
       setAggregateLoading(true);
       setAggregateError('');
+      setAggregateSchoolFailures([]);
       try {
         const bimestresEscopo = visao === 'bimestre' ? [bimestre] : VISAO_BIMESTRES[visao];
-        const perSchoolGroups = await Promise.all(schoolsEscopo.map(async school => {
-          const [turmasRaw, ...monitoringLists] = await Promise.all([
-            listClassroomsForSchool(school.id),
-            ...bimestresEscopo.map(b => listGradeEntryMonitoringForSchool(school.id, anoLetivo, b)),
-          ]);
-          const turmasDoAno = getClassroomsForSchoolYear(turmasRaw, school, anoLetivo);
-          const byTurma = new Map<string, GradeEntryCounts[]>();
-          turmasDoAno.forEach(t => byTurma.set(t.id, []));
-          monitoringLists.flat().forEach(m => {
-            const list = byTurma.get(m.turmaId) ?? [];
-            list.push(m);
-            byTurma.set(m.turmaId, list);
-          });
-          return Array.from(byTurma.values());
-        }));
-        if (!cancelled) setAggregateGroups(perSchoolGroups.flat());
+        // Auditoria da reestruturação, seção 5: cada escola é isolada da
+        // outra — uma exceção ao buscar turmas/monitoramento de UMA escola
+        // vira uma falha registrada para aquela escola, nunca uma rejeição
+        // do Promise.all inteiro que apagaria as demais 55. Concorrência
+        // limitada via mapWithConcurrencyLimit (nunca todas as escolas do
+        // escopo global de uma vez).
+        const perSchoolResults = await mapWithConcurrencyLimit(schoolsEscopo, REGIONAL_AGGREGATE_CONCURRENCY, async school => {
+          try {
+            const [turmasRaw, ...monitoringLists] = await Promise.all([
+              listClassroomsForSchool(school.id),
+              ...bimestresEscopo.map(b => listGradeEntryMonitoringForSchool(school.id, anoLetivo, b)),
+            ]);
+            const turmasDoAno = getClassroomsForSchoolYear(turmasRaw, school, anoLetivo);
+            const byTurma = new Map<string, GradeEntryCounts[]>();
+            turmasDoAno.forEach(t => byTurma.set(t.id, []));
+            monitoringLists.flat().forEach(m => {
+              const list = byTurma.get(m.turmaId) ?? [];
+              list.push(m);
+              byTurma.set(m.turmaId, list);
+            });
+            return { schoolId: school.id, escolaNome: school.nome, groups: Array.from(byTurma.values()), failed: false as const };
+          } catch (err) {
+            return {
+              schoolId: school.id, escolaNome: school.nome, groups: [] as GradeEntryCounts[][],
+              failed: true as const, message: err instanceof Error ? err.message : 'Falha ao carregar esta escola.',
+            };
+          }
+        });
+        if (cancelled) return;
+        setAggregateGroups(perSchoolResults.flatMap(r => r.groups));
+        setAggregateSchoolFailures(
+          perSchoolResults.filter(r => r.failed).map(r => ({ schoolId: r.schoolId, escolaNome: r.escolaNome, message: r.message ?? '' }))
+        );
+        setAggregateSchoolsAttempted(schoolsEscopo.length);
       } catch (err) {
         if (!cancelled) setAggregateError(err instanceof Error ? err.message : 'Não foi possível carregar a visão agregada.');
       } finally {
@@ -240,7 +372,8 @@ export default function NotasView() {
     }
     load();
     return () => { cancelled = true; };
-  }, [showAggregateView, visao, regionalScope, bimestre, anoLetivo, isFirebaseMode, selectedSchool, visibleSchools]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- visibleSchoolIdsKey/selectedSchoolId substituem visibleSchools/selectedSchool de propósito (ver comentário acima)
+  }, [showAggregateView, visao, regionalScope, bimestre, anoLetivo, isFirebaseMode, selectedSchoolId, visibleSchoolIdsKey]);
 
   const aggregateResult = aggregateGroups ? aggregateGradeEntriesForPeriod(aggregateGroups) : null;
 
@@ -346,6 +479,20 @@ export default function NotasView() {
                   </span>
                 )}
               </div>
+              {/* Auditoria da reestruturação, seção 5: cobertura sempre
+                  visível no escopo regional — mostra quantas escolas
+                  realmente contribuíram, nunca deixa a falha de algumas
+                  passar despercebida nem apaga o resultado das demais. */}
+              {regionalScope && !aggregateLoading && aggregateSchoolsAttempted > 0 && (
+                <div className="mb-3 text-[10px] font-bold text-slate-400">
+                  {aggregateSchoolsAttempted - aggregateSchoolFailures.length} de {aggregateSchoolsAttempted} escola(s) carregada(s) com sucesso.
+                </div>
+              )}
+              {aggregateSchoolFailures.length > 0 && (
+                <div className="mb-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[10px] text-amber-700 font-bold">
+                  {aggregateSchoolFailures.length} escola(s) não puderam ser carregadas e foram excluídas deste agregado (nunca contadas como zero): {aggregateSchoolFailures.map(f => f.escolaNome).join(', ')}.
+                </div>
+              )}
               {aggregateLoading || !aggregateResult ? (
                 <div className="py-6 text-center text-slate-400 text-xs">Carregando...</div>
               ) : (
@@ -416,14 +563,41 @@ export default function NotasView() {
               Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.
             </div>
           ) : (
-            <GradeEntryMonitoringTable
-              rows={rows}
-              loading={isLoading}
-              canWrite={canWrite}
-              statusFilter={statusFilter}
-              onStatusFilterChange={setStatusFilter}
-              onRegistrar={setModalRow}
-            />
+            <>
+              <div>
+                <h3 className="text-xs font-black uppercase text-slate-700 mb-2">Resumo por turma</h3>
+                <GradeEntryMonitoringTable
+                  rows={rows}
+                  loading={isLoading}
+                  canWrite={canWrite}
+                  statusFilter={statusFilter}
+                  onStatusFilterChange={setStatusFilter}
+                  onRegistrar={setModalRow}
+                />
+              </div>
+
+              <div>
+                <h3 className="text-xs font-black uppercase text-slate-700 mb-2">Acompanhamento por turma e disciplina</h3>
+                {disciplineError ? (
+                  <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
+                    <span>{disciplineError}</span>
+                    <button type="button" onClick={() => setDisciplineReloadTick(t => t + 1)}
+                      className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0">
+                      Tentar novamente
+                    </button>
+                  </div>
+                ) : (
+                  <GradeEntryMonitoringByDisciplineTable
+                    rows={disciplineRows}
+                    loading={disciplineLoading || turmasLoading}
+                    canWrite={canWrite}
+                    anoLetivo={anoLetivo}
+                    bimestre={bimestre}
+                    onSave={handleSaveDisciplineRow}
+                  />
+                )}
+              </div>
+            </>
           )}
         </>
       )}

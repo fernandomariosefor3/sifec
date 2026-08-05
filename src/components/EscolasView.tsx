@@ -235,6 +235,14 @@ export default function EscolasView() {
     turmasAtivasPorEscola[school.id] = getActiveClassroomCount(getClassroomsForSchool(turmasFase2A, school));
   });
 
+  // Auditoria da reestruturação SIFEC, seção 4: cobertura de região sempre
+  // visível — nunca calcular 4ª/5ª sobre o total de escolas (que incluiria
+  // "não informado" como se fosse uma das duas regiões) e nunca apresentar
+  // essa cobertura parcial como se fosse o total da carteira/visão.
+  const regiao4Count = visibleSchools.filter(s => s.regiao === '4ª').length;
+  const regiao5Count = visibleSchools.filter(s => s.regiao === '5ª').length;
+  const semRegiaoCount = visibleSchools.length - regiao4Count - regiao5Count;
+
   return (
     <div className="space-y-6">
       {/* Page header with subtitle and trigger */}
@@ -265,7 +273,7 @@ export default function EscolasView() {
       </div>
 
       {/* Grid summarizing core regional school markers */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-4">
           <div className="w-10 h-10 rounded-lg bg-brand-turquoise/10 border border-brand-turquoise/20 text-brand-turquoise flex items-center justify-center shrink-0">
             <GraduationCap size={20} />
@@ -293,6 +301,18 @@ export default function EscolasView() {
           <div>
             <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Cidades Cooperantes</div>
             <div className="text-lg font-extrabold text-slate-900">{cities.length - 1} Cidade</div>
+          </div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-4">
+          <div className="w-10 h-10 rounded-lg bg-brand-turquoise/10 border border-brand-turquoise/20 text-brand-turquoise flex items-center justify-center shrink-0">
+            <MapPin size={20} />
+          </div>
+          <div>
+            <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Cobertura de Região</div>
+            <div className="text-lg font-extrabold text-slate-900">4ª: {regiao4Count} · 5ª: {regiao5Count}</div>
+            {semRegiaoCount > 0 && (
+              <div className="text-[10px] text-amber-600 font-bold mt-0.5">{semRegiaoCount} escola(s) sem região informada</div>
+            )}
           </div>
         </div>
       </div>

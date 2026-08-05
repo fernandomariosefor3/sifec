@@ -87,3 +87,18 @@ export function buildBimonthlyEnrollmentId(
 ): string {
   return `${schoolId}_${anoLetivo}_b${bimestre}`;
 }
+
+// `grade_entry_monitoring_disciplina/{schoolId_anoLetivo_bBimestre_turmaId_disciplina}`
+// — ex.: "diva-cabral_2026_b1_turma-3a-diva_matematica". Auditoria da
+// reestruturação SIFEC: dimensão disciplina/área do acompanhamento de
+// notas, chave própria (nunca reaproveita buildGradeEntryMonitoringId, que
+// identifica o total por TURMA sem disciplina).
+export function buildGradeEntryMonitoringByDisciplineId(
+  schoolId: string,
+  anoLetivo: number,
+  bimestre: number,
+  turmaId: string,
+  disciplina: string
+): string {
+  return `${schoolId}_${anoLetivo}_b${bimestre}_${turmaId}_${disciplina}`;
+}

@@ -25,6 +25,7 @@ import SituationFilters from './sala-situacao/SituationFilters';
 import SituationSummaryCards from './sala-situacao/SituationSummaryCards';
 import SituationDataQualityPanel from './sala-situacao/SituationDataQualityPanel';
 import SituationSchoolTable from './sala-situacao/SituationSchoolTable';
+import RankingMethodologyPanel from './sala-situacao/RankingMethodologyPanel';
 import SituationSchoolDetail from './sala-situacao/SituationSchoolDetail';
 import SituationPendingItems, { type PendingItemWithSchool } from './sala-situacao/SituationPendingItems';
 
@@ -216,6 +217,7 @@ export default function SalaDeSituacaoView() {
         <SituationSchoolDetail situation={selectedSituation} onClose={() => setSelectedSchoolId(null)} />
       ) : (
         <>
+          <RankingMethodologyPanel totalEscolas={filteredSchools.length} anoLetivo={anoLetivo} bimestre={bimestre} />
           <SituationSchoolTable
             schools={filteredSchools}
             situations={situations}

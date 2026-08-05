@@ -54,15 +54,28 @@ export default function SituationSchoolTable({ schools, situations, loading, onS
   // schoolRiskRanking.ts): posição #1 é a escola que mais pede atenção
   // agora, combinando qualidade de dados + indicadores pedagógicos
   // disponíveis. Escolas sem situação carregada (situations[id] ausente)
-  // nunca entram no ranking.
+  // nunca entram no ranking. Escolas com dadosInsuficientes (auditoria da
+  // reestruturação) NUNCA recebem uma posição numerada — apareceriam como
+  // se seu score fosse comparável ao das demais, o que não é verdade.
   const situationsNoEscopo = schools
     .map(s => situations[s.id])
     .filter((s): s is SchoolSituation => s != null);
   const ranking = rankSchoolsByRisk(situationsNoEscopo);
-  const positionBySchoolId = new Map(ranking.map((r, index) => [r.schoolId, index + 1]));
+  let nextPosition = 1;
+  const positionBySchoolId = new Map<string, number>();
+  const insufficientDataSchoolIds = new Set<string>();
+  ranking.forEach(r => {
+    if (r.dadosInsuficientes) {
+      insufficientDataSchoolIds.add(r.schoolId);
+    } else {
+      positionBySchoolId.set(r.schoolId, nextPosition);
+      nextPosition += 1;
+    }
+  });
+  const rankOrder = new Map(ranking.map((r, index) => [r.schoolId, index]));
   const schoolsOrdenadas = [...schools]
     .filter(s => situations[s.id] != null)
-    .sort((a, b) => (positionBySchoolId.get(a.id) ?? Infinity) - (positionBySchoolId.get(b.id) ?? Infinity));
+    .sort((a, b) => (rankOrder.get(a.id) ?? Infinity) - (rankOrder.get(b.id) ?? Infinity));
 
   return (
     <div className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-x-auto">
@@ -87,18 +100,25 @@ export default function SituationSchoolTable({ schools, situations, loading, onS
           {schoolsOrdenadas.map(school => {
             const situation = situations[school.id];
             if (!situation) return null;
+            const dadosInsuficientes = insufficientDataSchoolIds.has(school.id);
             const posicao = positionBySchoolId.get(school.id) ?? 0;
             const estruturaIndisponivel = situation.estrutura.dataQuality === 'indisponivel';
             const matriculaIndisponivel = situation.matricula.dataQuality === 'indisponivel';
             const fluxoIndisponivel = situation.fluxo.dataQuality === 'indisponivel';
             const visitasIndisponivel = situation.visitas.dataQuality === 'indisponivel';
             return (
-              <tr key={school.id} className={`border-b border-slate-100 last:border-0 hover:bg-slate-50/60 transition ${posicao <= 3 ? TOP_RANK_CLASSES : ''}`}>
+              <tr key={school.id} className={`border-b border-slate-100 last:border-0 hover:bg-slate-50/60 transition ${!dadosInsuficientes && posicao <= 3 ? TOP_RANK_CLASSES : ''}`}>
                 <td className="px-3 py-3 text-center font-mono font-black text-slate-500">
-                  <span className={`inline-flex items-center gap-1 ${posicao <= 3 ? 'text-rose-600' : ''}`}>
-                    {posicao <= 3 && <Flame size={11} />}
-                    #{posicao}
-                  </span>
+                  {dadosInsuficientes ? (
+                    <span className="inline-block px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-[9px] font-bold uppercase">
+                      Dados insuficientes
+                    </span>
+                  ) : (
+                    <span className={`inline-flex items-center gap-1 ${posicao <= 3 ? 'text-rose-600' : ''}`}>
+                      {posicao <= 3 && <Flame size={11} />}
+                      #{posicao}
+                    </span>
+                  )}
                 </td>
                 <td className="px-4 py-3 font-bold text-slate-800">
                   <div className="flex items-center gap-2">

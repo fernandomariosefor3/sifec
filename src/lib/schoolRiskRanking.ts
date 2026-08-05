@@ -6,21 +6,57 @@
 // apresentado como ranqueamento punitivo, é ferramenta de priorização de
 // acompanhamento).
 //
-// Pesos escolhidos para refletir dois eixos que pedem atenção da
-// coordenadoria: risco PEDAGÓGICO (abandono, reprovação, notas não
-// lançadas) e risco de QUALIDADE DE DADOS (pendências, inconsistências,
-// ausência de visita). São uma escolha de engenharia inicial, documentada
-// linha a linha — a equipe pedagógica da SEFOR 3 deve revisar/ajustar os
-// pesos com base na prática real antes de tratar o ranking como definitivo.
+// AVISO PERMANENTE (auditoria da reestruturação): este escore é um
+// CRITÉRIO TÉCNICO PROVISÓRIO de apoio ao acompanhamento — nunca uma
+// metodologia oficial validada pela SEFOR 3. Os pesos abaixo (RISK_WEIGHTS)
+// são uma escolha inicial de engenharia, centralizada e documentada linha a
+// linha exatamente para que a equipe pedagógica possa revisar/ajustar cada
+// parcela sem precisar entender o código. A interface (SalaDeSituacaoView)
+// exibe este mesmo aviso.
 import type { DataQualityState, SchoolSituation } from '../types/schoolSituation';
 
-const DATA_QUALITY_PENALTY: Record<DataQualityState, number> = {
-  atualizado: 0,
-  incompleto: 5,
-  sem_dados: 10,
-  inconsistente: 15,
-  indisponivel: 20,
-};
+// Pesos centralizados e configuráveis — nunca espalhados como números
+// soltos pelo código. Cada campo tem uma pontuação máxima documentada, para
+// que o total (score) tenha um teto conhecido e comparável.
+export const RISK_WEIGHTS = {
+  // Inconsistência de dados é o sinal mais grave (registro duplicado, turma
+  // de outra escola, etc.) — pesa mais que qualquer outro fator isolado.
+  pontosPorInconsistencia: 10,
+  // Cada pendência (matrícula não informada, turma sem relatório de notas
+  // etc.) representa um item concreto de acompanhamento ainda em aberto.
+  pontosPorPendencia: 3,
+  // Fluxo só entra no escore quando o dado é confiável (dataQuality
+  // 'atualizado') — nunca a partir de um fluxo sem_dados/indisponível/
+  // inconsistente, que já é capturado por qualidadeDadosPenalidade abaixo.
+  // Máximo teórico: 100% abandono → 200 pontos (multiplicador 2 sobre um
+  // percentual de 0 a 100); reprovação pesa a metade disso.
+  multiplicadorAbandono: 2,
+  multiplicadorReprovacao: 1,
+  // Notas: fonte indisponível pesa mais que um percentual real muito baixo
+  // (ausência de dado é grave, mas não necessariamente pior que um dado
+  // real ruim); nenhuma turma com relatório (percentual null) fica no meio.
+  pontosNotasIndisponiveis: 20,
+  pontosNotasSemPercentualCalculavel: 15,
+  multiplicadorPercentualNotasFaltante: 0.5, // (100 - percentual) * 0.5 → máximo 50 pontos
+  pontosSemVisitaNoAno: 8,
+  // Penalidade por qualidade geral dos dados — independente dos pontos
+  // específicos de fluxo/notas acima (uma escola pode ter fluxo/notas OK,
+  // mas outra fonte com problema, refletido só aqui).
+  qualidadeDadosPenalidade: {
+    atualizado: 0,
+    incompleto: 5,
+    sem_dados: 10,
+    inconsistente: 15,
+    indisponivel: 20,
+  } as Record<DataQualityState, number>,
+  // Requisito da auditoria: "escola sem cobertura suficiente deve aparecer
+  // como 'dados insuficientes'" — nunca com uma posição no ranking que
+  // pareceria comparável às demais. Uma escola entra nesse estado quando a
+  // qualidade geral já é 'indisponivel' (fonte central falhou) OU quando 3
+  // ou mais das fontes específicas (schoolYear/turmas/snapshots/flow/
+  // gradeEntryMonitoring/visitas) falharam ao carregar.
+  minFalhasDeFontesParaDadosInsuficientes: 3,
+} as const;
 
 export interface SchoolRiskBreakdown {
   schoolId: string;
@@ -34,41 +70,52 @@ export interface SchoolRiskBreakdown {
   pontosNotas: number;
   pontosVisita: number;
   pontosQualidadeDados: number;
+  // true quando a escola não tem cobertura de dados suficiente para uma
+  // posição no ranking ser confiável — nunca recebe um score comparável às
+  // demais nesse caso (ver hasInsufficientData).
+  dadosInsuficientes: boolean;
+}
+
+// Nome pedido pela auditoria da reestruturação para o tipo de retorno do
+// ranking — alias direto de SchoolRiskBreakdown (mesmo shape, nomes
+// diferentes por compatibilidade com os dois contextos em que é usado:
+// "escore detalhado de UMA escola" e "uma linha do ranking regional").
+export type RankingEscola = SchoolRiskBreakdown;
+
+// "Dados insuficientes" nunca é decidido por um único campo ausente — exige
+// ou a qualidade geral já classificada como 'indisponivel' pela Sala de
+// Situação (fonte central falhou), ou múltiplas fontes específicas
+// falhando ao mesmo tempo (ver minFalhasDeFontesParaDadosInsuficientes).
+export function hasInsufficientData(situation: SchoolSituation): boolean {
+  return situation.qualidadeGeral === 'indisponivel' ||
+    situation.sourceFailures.length >= RISK_WEIGHTS.minFalhasDeFontesParaDadosInsuficientes;
 }
 
 export function calculateSchoolRiskBreakdown(situation: SchoolSituation): SchoolRiskBreakdown {
-  // Inconsistência de dados é o sinal mais grave (registro duplicado, turma
-  // de outra escola, etc.) — pesa mais que qualquer outro fator.
-  const pontosInconsistencias = situation.inconsistencias.length * 10;
+  const dadosInsuficientes = hasInsufficientData(situation);
 
-  // Cada pendência (matrícula não informada, turma sem relatório de notas,
-  // etc.) representa um item concreto de acompanhamento ainda em aberto.
-  const pontosPendencias = situation.pendencias.length * 3;
+  const pontosInconsistencias = situation.inconsistencias.length * RISK_WEIGHTS.pontosPorInconsistencia;
+  const pontosPendencias = situation.pendencias.length * RISK_WEIGHTS.pontosPorPendencia;
 
-  // Fluxo só entra no escore quando o dado é confiável (dataQuality
-  // 'atualizado') — nunca pontua abandono/reprovação a partir de um fluxo
-  // 'sem_dados'/'indisponivel'/'inconsistente', que já é capturado por
-  // pontosQualidadeDados abaixo.
   const pontosFluxo = situation.fluxo.dataQuality === 'atualizado'
-    ? situation.fluxo.percentualAbandono * 2 + situation.fluxo.percentualReprovacao
+    ? situation.fluxo.percentualAbandono * RISK_WEIGHTS.multiplicadorAbandono
+      + situation.fluxo.percentualReprovacao * RISK_WEIGHTS.multiplicadorReprovacao
     : 0;
 
-  // Notas: quanto menor o percentual de lançamentos realizados, maior o
-  // risco. Quando a fonte falhou (`notas === null`) ou não há nenhuma turma
-  // com relatório (percentual null), trata como risco alto mas não máximo —
-  // ausência de dado é grave, mas não necessariamente pior que uma escola
-  // com dado real e percentual muito baixo.
   const pontosNotas = situation.notas == null
-    ? 20
+    ? RISK_WEIGHTS.pontosNotasIndisponiveis
     : situation.notas.percentualPreenchimentoGeral == null
-      ? 15
-      : (100 - situation.notas.percentualPreenchimentoGeral) * 0.5;
+      ? RISK_WEIGHTS.pontosNotasSemPercentualCalculavel
+      : (100 - situation.notas.percentualPreenchimentoGeral) * RISK_WEIGHTS.multiplicadorPercentualNotasFaltante;
 
-  const pontosVisita = situation.visitas.semVisitaNoAno ? 8 : 0;
+  const pontosVisita = situation.visitas.semVisitaNoAno ? RISK_WEIGHTS.pontosSemVisitaNoAno : 0;
+  const pontosQualidadeDados = RISK_WEIGHTS.qualidadeDadosPenalidade[situation.qualidadeGeral];
 
-  const pontosQualidadeDados = DATA_QUALITY_PENALTY[situation.qualidadeGeral];
-
-  const score = pontosInconsistencias + pontosPendencias + pontosFluxo + pontosNotas + pontosVisita + pontosQualidadeDados;
+  // Dados insuficientes nunca recebem um score "real" (fica em zero — nunca
+  // usado para posicionar a escola, já que ela sai do ranking numerado).
+  const score = dadosInsuficientes
+    ? 0
+    : pontosInconsistencias + pontosPendencias + pontosFluxo + pontosNotas + pontosVisita + pontosQualidadeDados;
 
   return {
     schoolId: situation.schoolId,
@@ -80,14 +127,21 @@ export function calculateSchoolRiskBreakdown(situation: SchoolSituation): School
     pontosNotas,
     pontosVisita,
     pontosQualidadeDados,
+    dadosInsuficientes,
   };
 }
 
 // Ordena por escore decrescente (maior risco primeiro, posição #1) — em
-// caso de empate exato, ordena por nome (desempate estável e prévisível,
-// nunca pela ordem de chegada do array).
-export function rankSchoolsByRisk(situations: readonly SchoolSituation[]): SchoolRiskBreakdown[] {
+// caso de empate exato, ordena por nome (desempate estável e previsível,
+// nunca pela ordem de chegada do array). Escolas com dados insuficientes
+// sempre vão para o FIM da lista, nunca misturadas por score com as demais
+// — quem consome este array (SituationSchoolTable/ParecerBimestralView)
+// deve tratar dadosInsuficientes separadamente da posição numerada.
+export function rankSchoolsByRisk(situations: readonly SchoolSituation[]): RankingEscola[] {
   return situations
     .map(calculateSchoolRiskBreakdown)
-    .sort((a, b) => b.score - a.score || a.escolaNome.localeCompare(b.escolaNome));
+    .sort((a, b) => {
+      if (a.dadosInsuficientes !== b.dadosInsuficientes) return a.dadosInsuficientes ? 1 : -1;
+      return b.score - a.score || a.escolaNome.localeCompare(b.escolaNome);
+    });
 }

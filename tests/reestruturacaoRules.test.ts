@@ -1,11 +1,13 @@
-// Reestruturação SIFEC — regras das seis coleções novas (bimonthly_enrollments,
+// Reestruturação SIFEC — regras das sete coleções novas (bimonthly_enrollments,
 // farol_estudante, recomposicao_planos, cdg_planos, cdg_tarefas,
-// parecer_bimestral_notas), usando o Firebase Emulator (100% local), mesmo
-// padrão de tests/gradeEntryMonitoringRules.test.ts. Cobertura enxuta e
-// focada nos limites de segurança reais: criação autorizada, bloqueio
-// cross-escola, e o modelo de exclusão de cada coleção (admin-only para as
-// três com ID determinístico; qualquer superintendente com acesso de
-// escrita à escola para as três listas de trabalho com ID opaco).
+// parecer_bimestral_notas, grade_entry_monitoring_disciplina — esta última
+// adicionada na auditoria da reestruturação para a dimensão turma+
+// disciplina do Acompanhamento de Notas), usando o Firebase Emulator (100%
+// local), mesmo padrão de tests/gradeEntryMonitoringRules.test.ts. Cobertura
+// enxuta e focada nos limites de segurança reais: criação autorizada,
+// bloqueio cross-escola, e o modelo de exclusão de cada coleção (admin-only
+// para as com ID determinístico; qualquer superintendente com acesso de
+// escrita à escola para as listas de trabalho com ID opaco).
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails,
@@ -126,6 +128,7 @@ describe('Reestruturação SIFEC — farol_estudante', () => {
       schoolId: SCHOOL_A_ID, codInep: '00000601', escolaNome: ESCOLA_A,
       turmaId: TURMA_A_ID, turmaNome: 'Turma A - Teste', disciplina: 'Matemática',
       anoLetivo: ANO_LETIVO, bimestre: 1, estudanteNome: 'Estudante Teste', percentualAcerto: 18,
+      sourceSystem: 'SISEDU Analytics', referenceDate: '2026-03-08', status: 'Identificado',
       createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
       createdBy: ACTIVE_A_EMAIL, updatedBy: ACTIVE_A_EMAIL,
       ...overrides,
@@ -140,6 +143,14 @@ describe('Reestruturação SIFEC — farol_estudante', () => {
 
   it('percentual de acerto >= 25 é rejeitado — a lista é exclusiva para baixo desempenho', async () => {
     await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-2'), payload({ id: 'farol-2', percentualAcerto: 25 })));
+  });
+
+  it('fonte diferente de "SISEDU Analytics" é rejeitada — nunca outra origem', async () => {
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-fonte'), payload({ id: 'farol-fonte', sourceSystem: 'Outro sistema' })));
+  });
+
+  it('status de acompanhamento fora do enum é rejeitado', async () => {
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-status'), payload({ id: 'farol-status', status: 'Concluído' })));
   });
 
   it('turma que não existe (ou de outra escola) é rejeitada — integridade canônica', async () => {
@@ -285,5 +296,68 @@ describe('Reestruturação SIFEC — parecer_bimestral_notas', () => {
     });
     await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'parecer_bimestral_notas', id)));
     await assertSucceeds(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'parecer_bimestral_notas', id)));
+  });
+});
+
+describe('Reestruturação SIFEC — grade_entry_monitoring_disciplina', () => {
+  function payload(overrides: Record<string, unknown> = {}) {
+    return {
+      id: `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`,
+      schoolId: SCHOOL_A_ID, codInep: '00000601', escolaNome: ESCOLA_A,
+      turmaId: TURMA_A_ID, turmaNome: 'Turma A - Teste',
+      anoLetivo: ANO_LETIVO, bimestre: 1, disciplina: 'matematica',
+      expectedGradeEntries: 32, completedGradeEntries: 30,
+      status: 'confirmado', referenceDate: '2026-03-10',
+      createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
+      createdBy: ACTIVE_A_EMAIL, updatedBy: ACTIVE_A_EMAIL,
+      ...overrides,
+    };
+  }
+
+  it('superintendente da escola cria com sucesso; leitura de outra escola é bloqueada', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`;
+    await assertSucceeds(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload()));
+    await assertFails(getDocs(collection(ctxFor(ACTIVE_B_EMAIL).firestore(), 'grade_entry_monitoring_disciplina')));
+  });
+
+  it('ID precisa bater com schoolId_anoLetivo_bBimestre_turmaId_disciplina', async () => {
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', 'id-errado'), payload()));
+  });
+
+  it('disciplina fora das 4 áreas conhecidas é rejeitada', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_artes`;
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ id, disciplina: 'artes' })));
+  });
+
+  it('lançamentos realizados maiores que os esperados é rejeitado', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`;
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ expectedGradeEntries: 10, completedGradeEntries: 20 })));
+  });
+
+  it('turma que não existe (ou de outra escola) é rejeitada — integridade canônica', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_turma-inexistente_matematica`;
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ id, turmaId: 'turma-inexistente' })));
+  });
+
+  it('update não pode trocar disciplina/turma/identidade da escola', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`;
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'grade_entry_monitoring_disciplina', id), payload());
+    });
+    await assertFails(
+      updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), { disciplina: 'matematica2' })
+    );
+    await assertSucceeds(
+      updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), { completedGradeEntries: 32, updatedAt: '2026-03-12T00:00:00.000Z' })
+    );
+  });
+
+  it('exclusão restrita ao admin raiz — mesmo histórico auditável de grade_entry_monitoring', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`;
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'grade_entry_monitoring_disciplina', id), payload());
+    });
+    await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id)));
+    await assertSucceeds(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id)));
   });
 });

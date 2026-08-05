@@ -6,7 +6,7 @@ import {
   validateFarolEstudanteInput,
   type SaveFarolEstudanteInput,
 } from '../src/lib/farolEstudanteService';
-import { FAROL_ACERTO_LIMITE } from '../src/types/farolEstudante';
+import { FAROL_ACERTO_LIMITE, FAROL_SOURCE_SYSTEM } from '../src/types/farolEstudante';
 
 function baseInput(overrides: Partial<SaveFarolEstudanteInput> = {}): SaveFarolEstudanteInput {
   return {
@@ -20,6 +20,8 @@ function baseInput(overrides: Partial<SaveFarolEstudanteInput> = {}): SaveFarolE
     bimestre: 1,
     estudanteNome: 'Estudante Exemplo',
     percentualAcerto: 18,
+    referenceDate: '2026-03-08',
+    status: 'Identificado',
     actingUserEmail: 'super.a@example.com',
     now: '2026-03-10T12:00:00.000Z',
     ...overrides,
@@ -64,6 +66,15 @@ describe('validateFarolEstudanteInput', () => {
   it(`aceita percentual ${FAROL_ACERTO_LIMITE - 1} (o maior valor válido)`, () => {
     expect(() => validateFarolEstudanteInput(baseInput({ percentualAcerto: FAROL_ACERTO_LIMITE - 1 }))).not.toThrow();
   });
+
+  it('rejeita data de referência ausente ou em formato inválido', () => {
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '' }))).toThrow(FarolEstudanteValidationError);
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '08/03/2026' }))).toThrow(FarolEstudanteValidationError);
+  });
+
+  it('rejeita status de acompanhamento inválido', () => {
+    expect(() => validateFarolEstudanteInput(baseInput({ status: 'Concluído' as SaveFarolEstudanteInput['status'] }))).toThrow(FarolEstudanteValidationError);
+  });
 });
 
 describe('buildFarolEstudantePayload', () => {
@@ -84,5 +95,16 @@ describe('buildFarolEstudantePayload', () => {
     expect(updated.id).toBe(existing.id);
     expect(updated.createdAt).toBe(existing.createdAt);
     expect(updated.percentualAcerto).toBe(5);
+  });
+
+  it('sempre grava a fonte fixa SISEDU Analytics, nunca outra origem', () => {
+    const payload = buildFarolEstudantePayload(baseInput());
+    expect(payload.sourceSystem).toBe(FAROL_SOURCE_SYSTEM);
+  });
+
+  it('grava a data de referência e o status de acompanhamento informados', () => {
+    const payload = buildFarolEstudantePayload(baseInput({ referenceDate: '2026-03-05', status: 'Em acompanhamento' }));
+    expect(payload.referenceDate).toBe('2026-03-05');
+    expect(payload.status).toBe('Em acompanhamento');
   });
 });

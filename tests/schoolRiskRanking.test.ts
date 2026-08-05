@@ -1,7 +1,7 @@
 // Reestruturação SIFEC — Sala de Situação como ranking de urgência/risco.
 // Núcleo puro, sem Firebase.
 import { describe, expect, it } from 'vitest';
-import { calculateSchoolRiskBreakdown, rankSchoolsByRisk } from '../src/lib/schoolRiskRanking';
+import { calculateSchoolRiskBreakdown, hasInsufficientData, rankSchoolsByRisk, RISK_WEIGHTS } from '../src/lib/schoolRiskRanking';
 import type { SchoolSituation } from '../src/types/schoolSituation';
 
 function buildSituation(overrides: Partial<SchoolSituation> = {}): SchoolSituation {
@@ -100,6 +100,39 @@ describe('calculateSchoolRiskBreakdown', () => {
   });
 });
 
+describe('hasInsufficientData / dadosInsuficientes (auditoria da reestruturação, seção 6)', () => {
+  it('qualidadeGeral indisponivel sempre é dado insuficiente, mesmo sem sourceFailures', () => {
+    const situation = buildSituation({ qualidadeGeral: 'indisponivel', sourceFailures: [] });
+    expect(hasInsufficientData(situation)).toBe(true);
+  });
+
+  it(`${RISK_WEIGHTS.minFalhasDeFontesParaDadosInsuficientes} ou mais fontes falhando é dado insuficiente, mesmo com qualidadeGeral atualizado`, () => {
+    const sourceFailures = Array.from({ length: RISK_WEIGHTS.minFalhasDeFontesParaDadosInsuficientes }, (_, i) => ({
+      source: `fonte-${i}`, message: 'Falha simulada.',
+    }));
+    const situation = buildSituation({ qualidadeGeral: 'atualizado', sourceFailures });
+    expect(hasInsufficientData(situation)).toBe(true);
+  });
+
+  it('menos que o mínimo de falhas, com qualidadeGeral atualizado, não é dado insuficiente', () => {
+    const sourceFailures = Array.from({ length: RISK_WEIGHTS.minFalhasDeFontesParaDadosInsuficientes - 1 }, (_, i) => ({
+      source: `fonte-${i}`, message: 'Falha simulada.',
+    }));
+    const situation = buildSituation({ qualidadeGeral: 'atualizado', sourceFailures });
+    expect(hasInsufficientData(situation)).toBe(false);
+  });
+
+  it('escola com dados insuficientes nunca recebe um score "real" — fica em zero mesmo com fatores de risco altos', () => {
+    const result = calculateSchoolRiskBreakdown(buildSituation({
+      qualidadeGeral: 'indisponivel',
+      inconsistencias: [{ type: 'matricula_final_divergente', schoolId: 'esc1', message: 'x' }],
+      notas: null,
+    }));
+    expect(result.dadosInsuficientes).toBe(true);
+    expect(result.score).toBe(0);
+  });
+});
+
 describe('rankSchoolsByRisk', () => {
   it('ordena por escore decrescente — maior risco na posição #1', () => {
     const baixoRisco = buildSituation({ schoolId: 'baixo', escolaNome: 'Escola Baixo Risco' });
@@ -122,5 +155,35 @@ describe('rankSchoolsByRisk', () => {
 
   it('lista vazia produz ranking vazio', () => {
     expect(rankSchoolsByRisk([])).toEqual([]);
+  });
+
+  it('escola com dados insuficientes sempre vai para o fim, mesmo que teria o maior score se fosse calculado', () => {
+    const altoRiscoNormal = buildSituation({
+      schoolId: 'alto', escolaNome: 'Escola Alto Risco',
+      inconsistencias: [{ type: 'matricula_final_divergente', schoolId: 'alto', message: 'x' }],
+    });
+    const dadosInsuficientes = buildSituation({
+      schoolId: 'insuficiente', escolaNome: 'Escola Dados Insuficientes',
+      qualidadeGeral: 'indisponivel',
+      // Fatores que, se calculados, dariam um score muito maior que o da
+      // escola "alto risco" acima — mas dadosInsuficientes precisa vencer.
+      inconsistencias: [
+        { type: 'matricula_final_divergente', schoolId: 'insuficiente', message: 'x' },
+        { type: 'matricula_final_divergente', schoolId: 'insuficiente', message: 'y' },
+      ],
+      notas: null,
+    });
+    const baixoRisco = buildSituation({ schoolId: 'baixo', escolaNome: 'Escola Baixo Risco' });
+
+    const ranking = rankSchoolsByRisk([dadosInsuficientes, altoRiscoNormal, baixoRisco]);
+    expect(ranking.map(r => r.schoolId)).toEqual(['alto', 'baixo', 'insuficiente']);
+    expect(ranking[2].dadosInsuficientes).toBe(true);
+  });
+
+  it('duas escolas com dados insuficientes desempatam por nome, igual às demais', () => {
+    const b = buildSituation({ schoolId: 'b', escolaNome: 'Escola Insuficiente B', qualidadeGeral: 'indisponivel' });
+    const a = buildSituation({ schoolId: 'a', escolaNome: 'Escola Insuficiente A', qualidadeGeral: 'indisponivel' });
+    const ranking = rankSchoolsByRisk([b, a]);
+    expect(ranking.map(r => r.schoolId)).toEqual(['a', 'b']);
   });
 });

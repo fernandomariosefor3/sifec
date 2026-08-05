@@ -147,10 +147,16 @@ export const COMPLETION_COLOR_BAND_INFO: Record<CompletionColorBand, CompletionC
   },
 };
 
+// Auditoria da reestruturação SIFEC, seção 5 — limites exatos e literais:
+// >95% Ótimo; >=75 e <=95% Bom (limite inferior INCLUSIVO, ao contrário do
+// limite de 95, que é exclusivo do lado de baixo); >50 e <75% Atenção;
+// <=50% Crítico. Corrigido nesta auditoria: a implementação anterior usava
+// `> 75` (exclusivo), classificando exatamente 75% como Atenção — divergia
+// do limite inclusivo pedido explicitamente pela auditoria.
 export function classifyCompletionColorBand(percentage: number | null): CompletionColorBand {
   if (percentage == null) return 'sem_dado';
   if (percentage > 95) return 'otimo';
-  if (percentage > 75) return 'bom';
+  if (percentage >= 75) return 'bom';
   if (percentage > 50) return 'atencao';
   return 'critico';
 }

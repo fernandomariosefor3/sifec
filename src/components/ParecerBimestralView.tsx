@@ -56,15 +56,44 @@ const CARD_TITLES = [
   'Sala de Situação', 'Ciclo de Gestão', 'Recomposição', 'Conclusão / Encaminhamentos',
 ] as const;
 
-interface ParecerData {
-  turmas: Turma[];
-  bimonthly: BimonthlyEnrollment[];
-  flow: SchoolFlowResult | null;
-  monitoring: GradeEntryMonitoring[];
-  farol: FarolEstudanteItem[];
-  cdgPlan: CdgPlan | null;
-  cdgTasks: CdgTask[];
-  recomposicao: RecomposicaoPlan[];
+// Auditoria da reestruturação, seção 10: cada card precisa diferenciar
+// carregamento/sucesso/FALHA da fonte correspondente — nunca um único
+// Promise.all combinado onde uma fonte fora do ar apaga o parecer inteiro.
+// SourceResult carrega o valor (com fallback vazio em caso de falha,
+// NUNCA null silencioso) + a flag `failed` + a mensagem de erro, para cada
+// card poder mostrar "não foi possível carregar" em vez de reaproveitar
+// silenciosamente um estado vazio como se fosse "sem dado".
+export interface SourceResult<T> {
+  value: T;
+  failed: boolean;
+  errorMessage: string | null;
+}
+
+function sourceOk<T>(value: T): SourceResult<T> {
+  return { value, failed: false, errorMessage: null };
+}
+
+async function loadSource<T>(promise: Promise<T>, fallback: T): Promise<SourceResult<T>> {
+  try {
+    const value = await promise;
+    return sourceOk(value);
+  } catch (err) {
+    return { value: fallback, failed: true, errorMessage: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Nome pedido pela auditoria da reestruturação (seção 3/10) para o shape de
+// dados do Parecer Bimestral — antes era um `ParecerData` interno não
+// exportado; agora exportado e nomeado exatamente como o plano pede.
+export interface ParecerBimestralData {
+  turmas: SourceResult<Turma[]>;
+  bimonthly: SourceResult<BimonthlyEnrollment[]>;
+  flow: SourceResult<SchoolFlowResult | null>;
+  monitoring: SourceResult<GradeEntryMonitoring[]>;
+  farol: SourceResult<FarolEstudanteItem[]>;
+  cdgPlan: SourceResult<CdgPlan | null>;
+  cdgTasks: SourceResult<CdgTask[]>;
+  recomposicao: SourceResult<RecomposicaoPlan[]>;
 }
 
 export default function ParecerBimestralView() {
@@ -77,8 +106,12 @@ export default function ParecerBimestralView() {
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
   const [cardIndex, setCardIndex] = useState(0);
 
-  const [data, setData] = useState<ParecerData | null>(null);
+  const [data, setData] = useState<ParecerBimestralData | null>(null);
   const [loading, setLoading] = useState(false);
+  // Cada fonte já trata sua própria falha via loadSource/SourceResult (nunca
+  // apaga as demais) — loadError só existe para um erro verdadeiramente
+  // inesperado fora desse envelope (ex.: exceção síncrona antes do
+  // Promise.all), caso em que não há nada de útil para mostrar por card.
   const [loadError, setLoadError] = useState('');
   const [reloadTick, setReloadTick] = useState(0);
 
@@ -149,21 +182,37 @@ export default function ParecerBimestralView() {
       setLoading(true);
       setLoadError('');
       try {
-        const [turmasRaw, bimonthly, flow, monitoring, farol, cdgPlan, cdgTasks, recomposicao, note] = await Promise.all([
-          listClassroomsForSchool(selectedSchool.id),
-          listBimonthlyEnrollmentsForSchool(selectedSchool.id, anoLetivo),
-          getSchoolFlowResult(selectedSchool.id, anoLetivo),
-          listGradeEntryMonitoringForSchool(selectedSchool.id, anoLetivo, bimestre),
-          listFarolEstudanteForSchool(selectedSchool.id, anoLetivo),
-          getCdgPlan(selectedSchool.id, anoLetivo),
-          listCdgTasksForSchool(selectedSchool.id, anoLetivo),
-          listRecomposicaoPlansForSchool(selectedSchool.id, anoLetivo),
-          getParecerBimestralNote(selectedSchool.id, anoLetivo, bimestre),
+        // Cada fonte é isolada via loadSource — a falha de UMA (ex.: Farol
+        // sem permissão para essa escola) nunca apaga as demais 8 (auditoria
+        // da reestruturação, seção 10, mesmo princípio de isolamento por
+        // escola já aplicado ao agregado regional de Notas).
+        const [turmasR, bimonthlyR, flowR, monitoringR, farolR, cdgPlanR, cdgTasksR, recomposicaoR, noteR] = await Promise.all([
+          loadSource(listClassroomsForSchool(selectedSchool.id), []),
+          loadSource(listBimonthlyEnrollmentsForSchool(selectedSchool.id, anoLetivo), []),
+          loadSource(getSchoolFlowResult(selectedSchool.id, anoLetivo), null),
+          loadSource(listGradeEntryMonitoringForSchool(selectedSchool.id, anoLetivo, bimestre), []),
+          loadSource(listFarolEstudanteForSchool(selectedSchool.id, anoLetivo), []),
+          loadSource(getCdgPlan(selectedSchool.id, anoLetivo), null),
+          loadSource(listCdgTasksForSchool(selectedSchool.id, anoLetivo), []),
+          loadSource(listRecomposicaoPlansForSchool(selectedSchool.id, anoLetivo), []),
+          loadSource(getParecerBimestralNote(selectedSchool.id, anoLetivo, bimestre), null),
         ]);
         if (cancelled) return;
-        const turmas = getClassroomsForSchoolYear(turmasRaw, selectedSchool, anoLetivo);
-        setData({ turmas, bimonthly, flow, monitoring, farol, cdgPlan, cdgTasks, recomposicao: recomposicao.filter(p => p.bimestre === bimestre) });
-        setEncaminhamentos(note?.encaminhamentos ?? '');
+        const turmas: SourceResult<Turma[]> = {
+          ...turmasR,
+          value: getClassroomsForSchoolYear(turmasR.value, selectedSchool, anoLetivo),
+        };
+        setData({
+          turmas,
+          bimonthly: bimonthlyR,
+          flow: flowR,
+          monitoring: monitoringR,
+          farol: farolR,
+          cdgPlan: cdgPlanR,
+          cdgTasks: cdgTasksR,
+          recomposicao: { ...recomposicaoR, value: recomposicaoR.value.filter(p => p.bimestre === bimestre) },
+        });
+        setEncaminhamentos(noteR.value?.encaminhamentos ?? '');
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Não foi possível carregar o parecer.');
       } finally {
@@ -172,7 +221,16 @@ export default function ParecerBimestralView() {
     }
     load();
     return () => { cancelled = true; };
-  }, [selectedSchool, anoLetivo, bimestre, isFirebaseMode, reloadTick]);
+    // selectedSchoolId (primitivo) substitui selectedSchool (objeto) de
+    // propósito: getSuperintendents()/getSchoolsForCurrentScope() devolvem
+    // um array NOVO a cada render (JSON.parse fresco do localStorage), então
+    // `selectedSchool` nunca é referencialmente estável entre renders — usá-lo
+    // direto aqui faria este efeito refazer a busca a cada re-render que ELE
+    // MESMO provoca via setData (setData → re-render → novo selectedSchool →
+    // efeito dispara de novo → nunca estabiliza). Mesmo padrão de
+    // visibleSchoolIdsKey em NotasView.tsx / schoolIdsKey em useSchoolSituation.ts.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedSchoolId substitui selectedSchool de propósito (ver comentário acima)
+  }, [selectedSchoolId, anoLetivo, bimestre, isFirebaseMode, reloadTick]);
 
   async function handleSaveNote() {
     setNoteError('');
@@ -204,15 +262,15 @@ export default function ParecerBimestralView() {
   }
 
   const consolidatedNotas = data
-    ? consolidateGradeEntryMonitoring(data.turmas.map(t => ({
+    ? consolidateGradeEntryMonitoring(data.turmas.value.map(t => ({
         turmaId: t.id,
         turmaNome: t.nome,
-        monitoring: data.monitoring.find(m => m.turmaId === t.id) ?? null,
+        monitoring: data.monitoring.value.find(m => m.turmaId === t.id) ?? null,
       })))
     : null;
 
-  const flowPercentuais = data?.flow ? calculateSchoolFlowPercentuais(data.flow) : null;
-  const overdueTasks = data ? data.cdgTasks.filter(t => isCdgTaskOverdue(t, new Date().toISOString().slice(0, 10))) : [];
+  const flowPercentuais = data?.flow.value ? calculateSchoolFlowPercentuais(data.flow.value) : null;
+  const overdueTasks = data ? data.cdgTasks.value.filter(t => isCdgTaskOverdue(t, new Date().toISOString().slice(0, 10))) : [];
 
   function handlePrint() {
     window.print();
@@ -310,16 +368,16 @@ export default function ParecerBimestralView() {
               <FluxoCard flow={data.flow} percentuais={flowPercentuais} />
             </div>
             <div className={cardIndex === 3 ? 'block' : 'hidden print:block print:break-before-page'}>
-              <NotasCard consolidated={consolidatedNotas} />
+              <NotasCard consolidated={consolidatedNotas} monitoring={data.monitoring} />
             </div>
             <div className={cardIndex === 4 ? 'block' : 'hidden print:block print:break-before-page'}>
-              <FarolCard items={data.farol} />
+              <FarolCard result={data.farol} />
             </div>
             <div className={cardIndex === 5 ? 'block' : 'hidden print:block print:break-before-page'}>
               <SituacaoCard situation={selectedSituation} position={rankingPosition} total={ranking.length} />
             </div>
             <div className={cardIndex === 6 ? 'block' : 'hidden print:block print:break-before-page'}>
-              <CdgCard plan={data.cdgPlan} overdueTasks={overdueTasks} totalTasks={data.cdgTasks.length} />
+              <CdgCard plan={data.cdgPlan} overdueTasks={overdueTasks} totalTasks={data.cdgTasks.value.length} />
             </div>
             <div className={cardIndex === 7 ? 'block' : 'hidden print:block print:break-before-page'}>
               <RecomposicaoCard planos={data.recomposicao} />
@@ -364,13 +422,30 @@ function CapaCard({ school, anoLetivo, bimestre, superintendente }: { school: Sc
   );
 }
 
-function MatriculaCard({ school, turmas, bimonthly }: { school: SchoolLike; turmas: Turma[]; bimonthly: BimonthlyEnrollment[] }) {
-  const turmasAtivas = turmas.filter(t => t.ativa !== false).length;
+// Auditoria da reestruturação, seção 10: cada card informa a coleção de
+// origem do dado exibido, e — quando a fonte falhou — um aviso explícito em
+// vez de mostrar silenciosamente um estado vazio como se fosse "sem dado".
+function SourceMeta({ collection, failed, errorMessage }: { collection: string; failed: boolean; errorMessage?: string | null }) {
+  return (
+    <div className="mb-3 print:mb-2">
+      <div className="text-[9px] text-slate-400 font-mono uppercase tracking-wide">Fonte: {collection}</div>
+      {failed && (
+        <div className="mt-1 p-2 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-lg print:hidden">
+          Não foi possível carregar esta fonte agora{errorMessage ? `: ${errorMessage}` : '.'} Os dados abaixo podem estar incompletos.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MatriculaCard({ school, turmas, bimonthly }: { school: SchoolLike; turmas: SourceResult<Turma[]>; bimonthly: SourceResult<BimonthlyEnrollment[]> }) {
+  const turmasAtivas = turmas.value.filter(t => t.ativa !== false).length;
   return (
     <CardShell icon={<GraduationCap size={16} />} title="Matrícula">
+      <SourceMeta collection="classrooms / bimonthly_enrollments" failed={turmas.failed || bimonthly.failed} errorMessage={turmas.errorMessage ?? bimonthly.errorMessage} />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         {[1, 2, 3, 4].map(b => {
-          const item = bimonthly.find(m => m.bimestre === b);
+          const item = bimonthly.value.find(m => m.bimestre === b);
           return (
             <div key={b} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
               <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">{b}º Bimestre</div>
@@ -379,18 +454,19 @@ function MatriculaCard({ school, turmas, bimonthly }: { school: SchoolLike; turm
           );
         })}
       </div>
-      <div className="text-xs text-slate-600 mb-2"><strong>{turmasAtivas}</strong> turma(s) ativa(s) de <strong>{turmas.length}</strong> cadastrada(s).</div>
+      <div className="text-xs text-slate-600 mb-2"><strong>{turmasAtivas}</strong> turma(s) ativa(s) de <strong>{turmas.value.length}</strong> cadastrada(s).</div>
       <ul className="text-[11px] space-y-1">
-        {turmas.map(t => <li key={t.id} className="flex justify-between border-b border-slate-100 py-1"><span>{t.nome}</span><span className="font-mono">{t.matriculaAtual ?? '—'} alunos</span></li>)}
+        {turmas.value.map(t => <li key={t.id} className="flex justify-between border-b border-slate-100 py-1"><span>{t.nome}</span><span className="font-mono">{t.matriculaAtual ?? '—'} alunos</span></li>)}
       </ul>
     </CardShell>
   );
 }
 
-function FluxoCard({ flow, percentuais }: { flow: SchoolFlowResult | null; percentuais: ReturnType<typeof calculateSchoolFlowPercentuais> | null }) {
+function FluxoCard({ flow, percentuais }: { flow: SourceResult<SchoolFlowResult | null>; percentuais: ReturnType<typeof calculateSchoolFlowPercentuais> | null }) {
   return (
     <CardShell icon={<BarChart3 size={16} />} title="Fluxo Escolar">
-      {!flow || !percentuais ? (
+      <SourceMeta collection="school_flow_results" failed={flow.failed} errorMessage={flow.errorMessage} />
+      {!flow.value || !percentuais ? (
         <p className="text-xs text-slate-400">Fluxo escolar ainda não informado para este ano letivo.</p>
       ) : (
         <div className="grid grid-cols-3 gap-3">
@@ -412,10 +488,11 @@ function FluxoCard({ flow, percentuais }: { flow: SchoolFlowResult | null; perce
   );
 }
 
-function NotasCard({ consolidated }: { consolidated: ReturnType<typeof consolidateGradeEntryMonitoring> | null }) {
+function NotasCard({ consolidated, monitoring }: { consolidated: ReturnType<typeof consolidateGradeEntryMonitoring> | null; monitoring: SourceResult<GradeEntryMonitoring[]> }) {
   const band = COMPLETION_COLOR_BAND_INFO[classifyCompletionColorBand(consolidated?.percentualPreenchimentoGeral ?? null)];
   return (
     <CardShell icon={<ClipboardList size={16} />} title="Notas Informadas">
+      <SourceMeta collection="grade_entry_monitoring (consolidação por turma)" failed={monitoring.failed} errorMessage={monitoring.errorMessage} />
       <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border font-black text-lg mb-3 ${band.badgeClassName}`}>
         {consolidated?.percentualPreenchimentoGeral == null ? 'Não informado' : `${consolidated.percentualPreenchimentoGeral.toFixed(0)}%`}
       </div>
@@ -426,14 +503,49 @@ function NotasCard({ consolidated }: { consolidated: ReturnType<typeof consolida
   );
 }
 
-function FarolCard({ items }: { items: FarolEstudanteItem[] }) {
+// Auditoria da reestruturação, seção 10: nome de estudante NUNCA aparece no
+// PDF/impressão — só o resumo agregado (contagem por turma+disciplina), sem
+// nenhum nome. A listagem nominal fica em um bloco separado, marcado
+// print:hidden, e só existe para a sessão autenticada em tela (nunca no
+// HTML que efetivamente sai impresso/exportado). O bloco agregado leva
+// data-testid para permitir um teste automatizado verificar, isoladamente,
+// que nenhum nome de estudante está presente ali.
+function FarolCard({ result }: { result: SourceResult<FarolEstudanteItem[]> }) {
+  const items = result.value;
+  const porTurmaDisciplina = new Map<string, { turmaNome: string; disciplina: string; quantidade: number }>();
+  items.forEach(item => {
+    const key = `${item.turmaId}__${item.disciplina}`;
+    const existing = porTurmaDisciplina.get(key);
+    if (existing) {
+      existing.quantidade += 1;
+    } else {
+      porTurmaDisciplina.set(key, { turmaNome: item.turmaNome, disciplina: item.disciplina, quantidade: 1 });
+    }
+  });
+  const resumo = Array.from(porTurmaDisciplina.values());
+
   return (
     <CardShell icon={<ShieldAlert size={16} />} title="Farol do Estudante">
+      <SourceMeta collection="farol_estudante" failed={result.failed} errorMessage={result.errorMessage} />
       <div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-[10px] text-rose-700 font-bold mb-3">
-        Informação administrativa sensível — uso interno.
+        Informação administrativa sensível — uso interno. Nomes de estudantes nunca aparecem na versão impressa/PDF.
       </div>
       <p className="text-xs text-slate-600 mb-2"><strong>{items.length}</strong> estudante(s) com acerto abaixo de {FAROL_ACERTO_LIMITE}% neste bimestre.</p>
-      <ul className="text-[11px] space-y-1">
+
+      {/* Resumo agregado — único conteúdo do card visível na impressão/PDF. */}
+      <ul data-testid="farol-print-summary" className="text-[11px] space-y-1 hidden print:block">
+        {resumo.length === 0 ? (
+          <li className="text-slate-400">Nenhum estudante abaixo do critério neste bimestre.</li>
+        ) : resumo.map(r => (
+          <li key={`${r.turmaNome}__${r.disciplina}`} className="flex justify-between border-b border-slate-100 py-1">
+            <span>{r.turmaNome} — {r.disciplina}</span>
+            <span className="font-mono font-bold">{r.quantidade} estudante(s)</span>
+          </li>
+        ))}
+      </ul>
+
+      {/* Listagem nominal — só em tela, autenticado; nunca na impressão. */}
+      <ul data-testid="farol-nominal-list" className="text-[11px] space-y-1 print:hidden">
         {items.map(item => (
           <li key={item.id} className="flex justify-between border-b border-slate-100 py-1">
             <span>{item.estudanteNome} — {item.turmaNome} ({item.disciplina})</span>
@@ -462,11 +574,12 @@ function SituacaoCard({ situation, position, total }: { situation: import('../ty
   );
 }
 
-function CdgCard({ plan, overdueTasks, totalTasks }: { plan: CdgPlan | null; overdueTasks: CdgTask[]; totalTasks: number }) {
+function CdgCard({ plan, overdueTasks, totalTasks }: { plan: SourceResult<CdgPlan | null>; overdueTasks: CdgTask[]; totalTasks: number }) {
   return (
     <CardShell icon={<CheckCircle2 size={16} />} title="Ciclo de Gestão">
+      <SourceMeta collection="cdg_planos / cdg_tarefas" failed={plan.failed} errorMessage={plan.errorMessage} />
       <p className="text-xs text-slate-600 mb-2">
-        Situação do plano: <strong>{plan?.situacao ?? 'Não informado'}</strong> — Status de execução: <strong>{plan?.statusExecucao ?? 'Não informado'}</strong>
+        Situação do plano: <strong>{plan.value?.situacao ?? 'Não informado'}</strong> — Status de execução: <strong>{plan.value?.statusExecucao ?? 'Não informado'}</strong>
       </p>
       <p className="text-xs text-slate-600">
         <strong>{overdueTasks.length}</strong> de {totalTasks} tarefa(s) atrasada(s).
@@ -475,14 +588,15 @@ function CdgCard({ plan, overdueTasks, totalTasks }: { plan: CdgPlan | null; ove
   );
 }
 
-function RecomposicaoCard({ planos }: { planos: RecomposicaoPlan[] }) {
+function RecomposicaoCard({ planos }: { planos: SourceResult<RecomposicaoPlan[]> }) {
   return (
     <CardShell icon={<Award size={16} />} title="Recomposição">
-      {planos.length === 0 ? (
+      <SourceMeta collection="recomposicao_planos" failed={planos.failed} errorMessage={planos.errorMessage} />
+      {planos.value.length === 0 ? (
         <p className="text-xs text-slate-400">Nenhum plano de recomposição registrado para este bimestre.</p>
       ) : (
         <ul className="space-y-2 text-xs">
-          {planos.map(p => (
+          {planos.value.map(p => (
             <li key={p.id} className="border border-slate-200 rounded-lg p-2">
               <div className="font-bold text-slate-800">{p.areaDisciplina} — {p.turno}</div>
               <div className="text-slate-500">Prazo: {p.prazo}</div>

@@ -13,6 +13,14 @@ import type { Bimestre } from './gradeEntryMonitoring';
 
 export const FAROL_ACERTO_LIMITE = 25;
 
+// Fonte fixa — este fluxo nunca afirma sincronização automática com o
+// SISEDU Analytics (auditoria da reestruturação, seção 8): todo registro é
+// transcrito manualmente pela equipe a partir do relatório externo.
+export const FAROL_SOURCE_SYSTEM = 'SISEDU Analytics' as const;
+
+export const FAROL_STATUS_ACOMPANHAMENTO = ['Identificado', 'Em acompanhamento', 'Superado'] as const;
+export type FarolStatusAcompanhamento = (typeof FAROL_STATUS_ACOMPANHAMENTO)[number];
+
 export interface FarolEstudanteItem {
   id: string;
   schoolId: string;
@@ -27,6 +35,15 @@ export interface FarolEstudanteItem {
   bimestre: Bimestre;
   estudanteNome: string;
   percentualAcerto: number; // 0 a 24 — sempre < FAROL_ACERTO_LIMITE (validado antes de gravar)
+  // Sempre 'SISEDU Analytics' — nunca outra origem (auditoria da
+  // reestruturação, seção 8: "informar claramente que os dados foram
+  // transcritos do SISEDU Analytics; nunca afirmar sincronização
+  // automática").
+  sourceSystem: typeof FAROL_SOURCE_SYSTEM;
+  // Data do relatório do SISEDU Analytics transcrito — YYYY-MM-DD, mesmo
+  // formato de referenceDate em grade_entry_monitoring.
+  referenceDate: string;
+  status: FarolStatusAcompanhamento;
   observacao?: string;
   createdAt: string;
   updatedAt: string;

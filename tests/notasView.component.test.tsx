@@ -668,4 +668,45 @@ describe('NotasView', () => {
       await waitFor(() => expect(mockListMonitoring).toHaveBeenCalledWith(DIVA_SCHOOL_ID, 2025, 1));
     });
   });
+
+  // Auditoria da reestruturação SIFEC, seção 5: o agregado regional
+  // processa escola por escola — a falha de UMA escola nunca apaga o
+  // resultado das demais nem vira um "erro genérico" de página inteira.
+  describe('Agregados regionais — isolamento de falha por escola', () => {
+    it('falha ao carregar turmas de UMA escola não apaga o agregado das demais — mostra cobertura e aviso discreto', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral', 'EEM Figueiredo Correia'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListClassrooms.mockReset().mockImplementation(async (schoolId: string) => {
+        if (schoolId === 'figueiredo-correia') throw new Error('Falha simulada ao carregar turmas.');
+        return (SEED_TURMAS as unknown as Turma[]).filter(t => t.escolaId === schoolId);
+      });
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      fireEvent.click(screen.getByRole('button', { name: /Agregados regionais/ }));
+
+      await waitFor(() => expect(screen.getByText(/1 de 2 escola\(s\) carregada\(s\) com sucesso\./)).toBeInTheDocument());
+      const failureBanner = screen.getByText(/1 escola\(s\) não puderam ser carregadas/);
+      expect(failureBanner).toBeInTheDocument();
+      // "EEM Figueiredo Correia" também aparece na <option> do seletor de
+      // escola — a asserção precisa ficar restrita ao aviso de falha.
+      expect(failureBanner.textContent).toMatch(/EEM Figueiredo Correia/);
+      // O agregado da escola que carregou com sucesso continua visível —
+      // nunca substituído por um erro de página inteira.
+      expect(screen.getByText('Turmas no escopo')).toBeInTheDocument();
+      expect(screen.queryByText('Não foi possível carregar a visão agregada.')).not.toBeInTheDocument();
+    });
+
+    it('todas as escolas carregando com sucesso mostram a cobertura completa, sem aviso de falha', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral', 'EEM Figueiredo Correia'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      fireEvent.click(screen.getByRole('button', { name: /Agregados regionais/ }));
+
+      await waitFor(() => expect(screen.getByText(/2 de 2 escola\(s\) carregada\(s\) com sucesso\./)).toBeInTheDocument());
+      expect(screen.queryByText(/não puderam ser carregadas/)).not.toBeInTheDocument();
+    });
+  });
 });

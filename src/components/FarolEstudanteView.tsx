@@ -30,7 +30,13 @@ import {
   listFarolEstudanteForSchool,
   saveFarolEstudanteItem,
 } from '../lib/farolEstudanteService';
-import { FAROL_ACERTO_LIMITE, type FarolEstudanteItem } from '../types/farolEstudante';
+import {
+  FAROL_ACERTO_LIMITE,
+  FAROL_SOURCE_SYSTEM,
+  FAROL_STATUS_ACOMPANHAMENTO,
+  type FarolEstudanteItem,
+  type FarolStatusAcompanhamento,
+} from '../types/farolEstudante';
 import { DEMO_FAROL_ESTUDANTE } from '../data/demoFarolEstudante';
 import { DEMO_ANO_LETIVO, DEMO_BIMESTRE, DEMO_SCHOOL_ID } from '../data/demoGradeEntryMonitoring';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
@@ -40,7 +46,15 @@ const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
 interface SchoolLike { id: string; nome: string; codInep: string; }
 
 function emptyDraft() {
-  return { turmaId: '', disciplina: '', estudanteNome: '', percentualAcerto: '', observacao: '' };
+  return {
+    turmaId: '',
+    disciplina: '',
+    estudanteNome: '',
+    percentualAcerto: '',
+    referenceDate: '',
+    status: 'Identificado' as FarolStatusAcompanhamento,
+    observacao: '',
+  };
 }
 
 export default function FarolEstudanteView() {
@@ -130,7 +144,14 @@ export default function FarolEstudanteView() {
     }
     load();
     return () => { cancelled = true; };
-  }, [selectedSchool, anoLetivo, bimestre, isFirebaseMode, reloadTick]);
+    // selectedSchoolId (primitivo) substitui selectedSchool (objeto) de
+    // propósito — selectedSchool nunca é referencialmente estável entre
+    // renders (getSuperintendents() sempre devolve um array novo), o que
+    // faria este efeito refazer a busca a cada re-render que ELE MESMO
+    // provoca via setItems (bug real encontrado na auditoria da
+    // reestruturação — mesmo padrão de visibleSchoolIdsKey em NotasView.tsx).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedSchoolId substitui selectedSchool de propósito (ver comentário acima)
+  }, [selectedSchoolId, anoLetivo, bimestre, isFirebaseMode, reloadTick]);
 
   const visibleItems = useMemo(
     () => (turmaFilter === 'todas' ? items : items.filter(i => i.turmaId === turmaFilter)),
@@ -151,6 +172,8 @@ export default function FarolEstudanteView() {
       disciplina: item.disciplina,
       estudanteNome: item.estudanteNome,
       percentualAcerto: String(item.percentualAcerto),
+      referenceDate: item.referenceDate,
+      status: item.status,
       observacao: item.observacao ?? '',
     });
     setFormError('');
@@ -186,6 +209,8 @@ export default function FarolEstudanteView() {
           bimestre,
           estudanteNome: draft.estudanteNome,
           percentualAcerto: Number(draft.percentualAcerto),
+          referenceDate: draft.referenceDate,
+          status: draft.status,
           observacao: draft.observacao.trim() === '' ? undefined : draft.observacao,
           actingUserEmail: email,
           now: new Date().toISOString(),
@@ -289,17 +314,20 @@ export default function FarolEstudanteView() {
                   <th className="py-2 px-3">Turma</th>
                   <th className="py-2 px-3">Disciplina</th>
                   <th className="py-2 px-3 text-right">% Acerto</th>
+                  <th className="py-2 px-3">Fonte</th>
+                  <th className="py-2 px-3">Data de referência</th>
+                  <th className="py-2 px-3">Status</th>
                   <th className="py-2 px-3">Observação</th>
                   {canWrite && isFirebaseMode && <th className="py-2 px-3 text-right">Ações</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {loading || turmasLoading ? (
-                  <tr><td colSpan={6} className="py-8 text-center text-slate-400">Carregando...</td></tr>
+                  <tr><td colSpan={9} className="py-8 text-center text-slate-400">Carregando...</td></tr>
                 ) : turmasStatus === 'failure' ? (
-                  <tr><td colSpan={6} className="py-8 text-center text-rose-500 font-bold">Não foi possível carregar as turmas desta escola.</td></tr>
+                  <tr><td colSpan={9} className="py-8 text-center text-rose-500 font-bold">Não foi possível carregar as turmas desta escola.</td></tr>
                 ) : visibleItems.length === 0 ? (
-                  <tr><td colSpan={6} className="py-8 text-center text-slate-400">Nenhum estudante registrado para este filtro.</td></tr>
+                  <tr><td colSpan={9} className="py-8 text-center text-slate-400">Nenhum estudante registrado para este filtro.</td></tr>
                 ) : (
                   visibleItems.map(item => (
                     <tr key={item.id}>
@@ -307,6 +335,9 @@ export default function FarolEstudanteView() {
                       <td className="py-2 px-3">{item.turmaNome}</td>
                       <td className="py-2 px-3">{item.disciplina}</td>
                       <td className="py-2 px-3 text-right font-mono font-bold text-rose-600">{item.percentualAcerto}%</td>
+                      <td className="py-2 px-3 text-slate-500">{item.sourceSystem}</td>
+                      <td className="py-2 px-3 font-mono text-slate-500">{item.referenceDate}</td>
+                      <td className="py-2 px-3 text-slate-600">{item.status}</td>
                       <td className="py-2 px-3 text-slate-500">{item.observacao ?? '—'}</td>
                       {canWrite && isFirebaseMode && (
                         <td className="py-2 px-3 text-right">
@@ -369,6 +400,21 @@ export default function FarolEstudanteView() {
                 <input id="farol-percentual" type="number" inputMode="numeric" min={0} max={FAROL_ACERTO_LIMITE - 1}
                   value={draft.percentualAcerto} onChange={e => setDraft({ ...draft, percentualAcerto: e.target.value })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg font-mono" />
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="farol-referencia" className="text-[9px] font-black uppercase text-slate-600 block">Data de referência do relatório SISEDU Analytics</label>
+                <input id="farol-referencia" type="date" value={draft.referenceDate} onChange={e => setDraft({ ...draft, referenceDate: e.target.value })}
+                  className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg font-mono" />
+                <p className="text-[9px] text-slate-400">
+                  Fonte fixa: {FAROL_SOURCE_SYSTEM}. Dado transcrito manualmente — não há sincronização automática com o SISEDU.
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label htmlFor="farol-status" className="text-[9px] font-black uppercase text-slate-600 block">Status de acompanhamento</label>
+                <select id="farol-status" value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value as FarolStatusAcompanhamento })}
+                  className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg font-bold">
+                  {FAROL_STATUS_ACOMPANHAMENTO.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
               </div>
               <div className="space-y-1">
                 <label htmlFor="farol-observacao" className="text-[9px] font-black uppercase text-slate-600 block">Observação (opcional)</label>
