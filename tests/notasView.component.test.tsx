@@ -145,10 +145,12 @@ describe('NotasView', () => {
     await loginAs(SUPER_A_EMAIL);
     await selectSchool('EEMTI Estado do Amazonas');
 
+    // Integração do fluxo do PR #18: a mensagem não afirma mais que
+    // "cadastre a turma em Gestão de Escolas" é o único caminho — o
+    // relatório do SIGE também pode criar a turma (ver describe
+    // "botão Registrar relatório do SIGE" abaixo).
     await waitFor(() =>
-      expect(
-        screen.getByText('Nenhuma turma cadastrada para esta escola e ano letivo — cadastre a turma em Gestão de Escolas.')
-      ).toBeInTheDocument()
+      expect(screen.getByText('Nenhuma turma cadastrada para esta escola e ano letivo.')).toBeInTheDocument()
     );
   });
 
@@ -707,6 +709,120 @@ describe('NotasView', () => {
 
       await waitFor(() => expect(screen.getByText(/2 de 2 escola\(s\) carregada\(s\) com sucesso\./)).toBeInTheDocument());
       expect(screen.queryByText(/não puderam ser carregadas/)).not.toBeInTheDocument();
+    });
+  });
+
+  // Integração do fluxo do PR #18 ao PR #19 — botão permanente "Registrar
+  // relatório do SIGE" em Acompanhamento de Notas, com o gating explícito
+  // exigido: só habilitado quando turmas E grade_entry_monitoring estão em
+  // status 'success', nenhuma fonte carregando, nenhuma fonte falhou.
+  describe('botão "Registrar relatório do SIGE"', () => {
+    it('não aparece enquanto as fontes ainda estão carregando', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      let resolveMonitoring: (value: unknown[]) => void = () => {};
+      mockListMonitoring.mockReset().mockImplementation(
+        () => new Promise(resolve => { resolveMonitoring = resolve; })
+      );
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      // Escola selecionada, mas grade_entry_monitoring ainda está pendente
+      // (nunca resolvido) — a tabela mostra "Carregando..." e o botão não
+      // pode aparecer até AMBAS as fontes terminarem com sucesso.
+      await waitFor(() => expect(screen.getByText('Carregando...')).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /Registrar relatório do SIGE/ })).not.toBeInTheDocument();
+
+      await act(async () => { resolveMonitoring([]); });
+      await waitFor(() => expect(screen.getByText('3º Ano A - Matutino')).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: /Registrar relatório do SIGE/ })).toBeInTheDocument();
+    });
+
+    it('não aparece quando a fonte de acompanhamento falhou', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockReset().mockRejectedValue(new Error('unavailable'));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      await waitFor(() => expect(screen.getByText(/Acompanhamento indisponível/)).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /Registrar relatório do SIGE/ })).not.toBeInTheDocument();
+    });
+
+    it('não aparece quando a fonte de turmas falhou', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListClassrooms.mockReset().mockRejectedValue(new Error('unavailable'));
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument());
+      expect(screen.queryByRole('button', { name: /Registrar relatório do SIGE/ })).not.toBeInTheDocument();
+    });
+
+    // Seção 3 do pedido de integração: registro permitido mesmo quando
+    // ainda não existem turmas — o botão nunca depende de uma linha existir.
+    it('aparece mesmo quando a escola ainda não tem nenhuma turma cadastrada', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEMTI Estado do Amazonas'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockResolvedValue([]);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEMTI Estado do Amazonas');
+
+      await waitFor(() => expect(screen.getByText('Nenhuma turma cadastrada para esta escola e ano letivo.')).toBeInTheDocument());
+      expect(screen.getByRole('button', { name: /Registrar relatório do SIGE/ })).toBeInTheDocument();
+    });
+
+    it('clicar no botão abre o modal em três etapas, iniciando pela identificação', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockResolvedValue([]);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(screen.getByRole('button', { name: /Registrar relatório do SIGE/ })).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('button', { name: /Registrar relatório do SIGE/ }));
+
+      // O botão do cabeçalho continua na tela por trás do modal — a
+      // asserção usa o heading do modal (role específico), nunca getByText
+      // solto, que bateria também no texto do botão.
+      expect(screen.getByRole('heading', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument();
+      expect(screen.getByText(/Etapa 1 de 3: Identificação/)).toBeInTheDocument();
+    });
+
+    it('fechar o modal (Cancelar) não deixa nenhum registro pendente nem refaz a consulta sem necessidade', async () => {
+      saveSuperintendents([...getSuperintendents(), superComEscolas(SUPER_A_EMAIL, ['EEM Diva Cabral'])]);
+      setActiveSuperintendentId(`super-${SUPER_A_EMAIL}`);
+      mockListMonitoring.mockResolvedValue([]);
+
+      render(<NotasView />);
+      await loginAs(SUPER_A_EMAIL);
+      await selectSchool('EEM Diva Cabral');
+      await waitFor(() => expect(screen.getByRole('button', { name: /Registrar relatório do SIGE/ })).toBeInTheDocument());
+
+      const turmasCallsBefore = mockListClassrooms.mock.calls.length;
+      const monitoringCallsBefore = mockListMonitoring.mock.calls.length;
+
+      fireEvent.click(screen.getByRole('button', { name: /Registrar relatório do SIGE/ }));
+      expect(screen.getByRole('heading', { name: 'Registrar relatório do SIGE' })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancelar' }));
+
+      expect(screen.queryByRole('heading', { name: 'Registrar relatório do SIGE' })).not.toBeInTheDocument();
+      // Abrir/fechar o modal sem confirmar nada nunca dispara uma nova
+      // consulta — nenhum loop de refetch (mesma classe de bug já corrigida
+      // para selectedSchool/getSuperintendents em outras telas).
+      expect(mockListClassrooms.mock.calls.length).toBe(turmasCallsBefore);
+      expect(mockListMonitoring.mock.calls.length).toBe(monitoringCallsBefore);
     });
   });
 });

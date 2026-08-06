@@ -15,7 +15,7 @@
 // uma falha real esconde a tabela por trás de um aviso com "Tentar
 // novamente", em vez de renderizar zeros ou classificações inventadas.
 import { useEffect, useMemo, useState } from 'react';
-import { Globe2, Percent } from 'lucide-react';
+import { ClipboardPlus, Globe2, Percent } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
@@ -46,6 +46,7 @@ import GradeEntryMonitoringTable, {
   type StatusFilter,
 } from './notas/GradeEntryMonitoringTable';
 import GradeEntryMonitoringFormModal from './notas/GradeEntryMonitoringFormModal';
+import SigeReportModal from './notas/SigeReportModal';
 import GradeEntryMonitoringByDisciplineTable, { buildDisciplineRows, type DisciplineSaveInput } from './notas/GradeEntryMonitoringByDisciplineTable';
 import {
   listGradeEntryMonitoringByDisciplineForSchool,
@@ -108,6 +109,9 @@ export default function NotasView() {
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('todos');
   const [modalRow, setModalRow] = useState<GradeEntryMonitoringRow | null>(null);
+  // Integração do fluxo do PR #18 (registro assistido do relatório do
+  // SIGE) ao PR #19 — botão permanente em Acompanhamento de Notas.
+  const [showSigeReportModal, setShowSigeReportModal] = useState(false);
   const [visao, setVisao] = useState<Visao>('bimestre');
   const [regionalScope, setRegionalScope] = useState(false);
   const [aggregateGroups, setAggregateGroups] = useState<GradeEntryCounts[][] | null>(null);
@@ -197,6 +201,11 @@ export default function NotasView() {
     monitoring.forEach(m => map.set(m.turmaId, m));
     return map;
   }, [monitoring]);
+
+  function handleRelatorioSaved() {
+    refreshTurmas();
+    refreshMonitoring();
+  }
 
   const rows: GradeEntryMonitoringRow[] = turmasDaEscola.map(turma => ({
     turmaId: turma.id,
@@ -298,6 +307,22 @@ export default function NotasView() {
   });
 
   const canWrite = selectedSchool ? hasSchoolWriteAccess(selectedSchool.nome) : false;
+
+  // Botão permanente (integração do fluxo do PR #18): precisa existir mesmo
+  // sem nenhuma turma cadastrada, sem acompanhamento anterior, ou com a
+  // tabela vazia — nunca depende de uma linha existir. Ano letivo e
+  // bimestre sempre têm um valor selecionado (nunca vazio nestes selects),
+  // então só falta turmas E grade_entry_monitoring em status 'success' —
+  // nunca só "não falhou". 'loading'/'idle' também desabilitam: sem a lista
+  // real de turmas E do acompanhamento já carregados, a correspondência do
+  // relatório não tem como saber quais turmas já existem nem quais já têm
+  // registro neste bimestre, arriscando criar uma turma duplicada ou abrir
+  // o modal com existingMonitoringByTurmaId desconhecido. Consulta
+  // bem-sucedida e vazia (0 turmas, 0 acompanhamentos) CONTINUA habilitando
+  // — 'success' não exige nenhum resultado, só que a consulta tenha
+  // terminado sem erro.
+  const sourcesSafe = turmasStatus === 'success' && monitoringStatus === 'success';
+  const showRegistrarRelatorioButton = !!selectedSchool && canWrite && sourcesSafe;
 
   // Reestruturação SIFEC — visão de período/consolidado e/ou escopo
   // regional: busca sob demanda, só quando o usuário pede uma dessas visões
@@ -456,6 +481,15 @@ export default function NotasView() {
           >
             <Globe2 size={14} /> Agregados regionais (SEFOR 3 — {anoLetivo})
           </button>
+          {showRegistrarRelatorioButton && (
+            <button
+              type="button"
+              onClick={() => setShowSigeReportModal(true)}
+              className="py-1.5 px-3 bg-brand-turquoise hover:bg-brand-turquoise/90 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm whitespace-nowrap"
+            >
+              <ClipboardPlus size={14} /> Registrar relatório do SIGE
+            </button>
+          )}
         </div>
       </div>
 
@@ -642,6 +676,19 @@ export default function NotasView() {
           existing={modalRow.monitoring}
           onClose={() => setModalRow(null)}
           onSaved={refreshMonitoring}
+        />
+      )}
+
+      {showSigeReportModal && selectedSchool && (
+        <SigeReportModal
+          school={selectedSchool}
+          anoLetivo={anoLetivo}
+          bimestre={bimestre}
+          existingTurmas={turmasDaEscola}
+          existingMonitoringByTurmaId={monitoringByTurmaId}
+          onClose={() => setShowSigeReportModal(false)}
+          onSaved={handleRelatorioSaved}
+          onRefreshSources={handleRelatorioSaved}
         />
       )}
     </div>
