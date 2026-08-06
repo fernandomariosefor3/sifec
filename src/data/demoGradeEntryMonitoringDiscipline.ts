@@ -1,18 +1,30 @@
 // Auditoria da reestruturação SIFEC — Acompanhamento de Notas por
 // disciplina: dados fictícios para o modo demonstração. Nunca gravado no
 // Firestore.
-import type { GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
+//
+// Correção final da auditoria, seção 3: disciplina deixou de ser uma lista
+// fechada de 4 áreas — os dados de demonstração agora incluem disciplinas
+// reais distintas (ex.: História e Geografia, ambas em Ciências Humanas),
+// para deixar claro que o sistema nunca fica limitado a quatro nomes.
+import type { AreaConhecimento, GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
+import { normalizeDisciplinaId } from '../types/gradeEntryMonitoringDiscipline';
 import { DEMO_ANO_LETIVO, DEMO_BIMESTRE, DEMO_COD_INEP, DEMO_ESCOLA_NOME, DEMO_SCHOOL_ID } from './demoGradeEntryMonitoring';
 
 const TURMA_ID = 'turma-3a-diva';
 const TURMA_NOME = '3º Ano A - Matutino';
 
-function item(disciplina: GradeEntryMonitoringByDiscipline['disciplina'], expected: number, completed: number): GradeEntryMonitoringByDiscipline {
+function item(
+  disciplinaNome: string,
+  areaConhecimento: AreaConhecimento,
+  expected: number,
+  completed: number
+): GradeEntryMonitoringByDiscipline {
+  const disciplinaId = normalizeDisciplinaId(disciplinaNome);
   return {
-    id: `${DEMO_SCHOOL_ID}_${DEMO_ANO_LETIVO}_b${DEMO_BIMESTRE}_${TURMA_ID}_${disciplina}`,
+    id: `${DEMO_SCHOOL_ID}_${DEMO_ANO_LETIVO}_b${DEMO_BIMESTRE}_${TURMA_ID}_${disciplinaId}`,
     schoolId: DEMO_SCHOOL_ID, codInep: DEMO_COD_INEP, escolaNome: DEMO_ESCOLA_NOME,
     turmaId: TURMA_ID, turmaNome: TURMA_NOME,
-    anoLetivo: DEMO_ANO_LETIVO, bimestre: DEMO_BIMESTRE, disciplina,
+    anoLetivo: DEMO_ANO_LETIVO, bimestre: DEMO_BIMESTRE, disciplinaId, disciplinaNome, areaConhecimento,
     expectedGradeEntries: expected, completedGradeEntries: completed, status: 'confirmado',
     referenceDate: '2026-03-10',
     createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
@@ -21,8 +33,10 @@ function item(disciplina: GradeEntryMonitoringByDiscipline['disciplina'], expect
 }
 
 export const DEMO_GRADE_ENTRY_MONITORING_DISCIPLINE: GradeEntryMonitoringByDiscipline[] = [
-  item('linguaPortuguesa', 32, 32),
-  item('matematica', 32, 30),
-  item('cienciasNatureza', 32, 20),
-  item('cienciasHumanas', 32, 10),
+  item('Língua Portuguesa', 'Linguagens', 32, 32),
+  item('Matemática', 'Matemática', 32, 30),
+  item('Física', 'Ciências da Natureza', 32, 20),
+  item('Química', 'Ciências da Natureza', 32, 15),
+  item('História', 'Ciências Humanas', 32, 10),
+  item('Geografia', 'Ciências Humanas', 32, 8),
 ];

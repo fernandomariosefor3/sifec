@@ -21,6 +21,17 @@ export const FAROL_SOURCE_SYSTEM = 'SISEDU Analytics' as const;
 export const FAROL_STATUS_ACOMPANHAMENTO = ['Identificado', 'Em acompanhamento', 'Superado'] as const;
 export type FarolStatusAcompanhamento = (typeof FAROL_STATUS_ACOMPANHAMENTO)[number];
 
+// Correção final da auditoria da reestruturação — seção 2: exclusão física
+// nunca é permitida para o superintendente comum (só isPlatformAdmin() em
+// manutenção excepcional). O caminho normal de "remover da lista de
+// trabalho" passa a ser arquivar (update, nunca delete) — statusRegistro é
+// um campo NOVO e distinto de `status` (que é o status de acompanhamento
+// pedagógico do estudante, ex.: "Superado"); reaproveitar `status` para
+// arquivamento confundiria duas semânticas diferentes (o estudante pode ter
+// sido "Superado" e o registro continuar ativo na lista, ou vice-versa).
+export const FAROL_STATUS_REGISTRO = ['ativo', 'arquivado'] as const;
+export type FarolStatusRegistro = (typeof FAROL_STATUS_REGISTRO)[number];
+
 export interface FarolEstudanteItem {
   id: string;
   schoolId: string;
@@ -44,6 +55,10 @@ export interface FarolEstudanteItem {
   // formato de referenceDate em grade_entry_monitoring.
   referenceDate: string;
   status: FarolStatusAcompanhamento;
+  // 'ativo' (padrão) ou 'arquivado' — nunca excluído fisicamente pelo
+  // superintendente comum. Interface nunca mostra 'arquivado' por padrão;
+  // exige filtro explícito (ver FarolEstudanteView.tsx).
+  statusRegistro: FarolStatusRegistro;
   observacao?: string;
   createdAt: string;
   updatedAt: string;

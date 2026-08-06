@@ -6,6 +6,7 @@
 // completedGradeEntries=0); a AUSÊNCIA de documento nunca é tratada como
 // zero — ver classifyTurmaGradeEntryStatus.
 import type { GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
+import type { AreaConhecimento, GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
 import { isNonNegativeInteger } from './enrollmentCalculations';
 
 export type TurmaGradeEntryStatus =
@@ -345,4 +346,46 @@ export function aggregateGradeEntriesForPeriod(
           completedGradeEntries: totalCompletedGradeEntries,
         }),
   };
+}
+
+// Correção final da auditoria da reestruturação, seção 3: "a consolidação
+// por área deve ser calculada a partir das disciplinas, nunca persistida
+// como percentual redundante" — esta função é sempre recalculada em tempo
+// real a partir das entradas de grade_entry_monitoring_disciplina, nunca
+// gravada em nenhum documento. Entradas sem areaConhecimento (opcional)
+// entram no grupo 'Sem área', nunca descartadas silenciosamente. Percentual
+// sempre soma(realizados)/soma(esperados) da área inteira — nunca a média
+// dos percentuais de cada disciplina (mesmo princípio de
+// consolidateGradeEntryMonitoring/aggregateGradeEntriesForPeriod acima).
+export interface DisciplineAreaAggregate {
+  areaConhecimento: AreaConhecimento | 'Sem área';
+  disciplinasNoEscopo: number;
+  totalExpectedGradeEntries: number;
+  totalCompletedGradeEntries: number;
+  percentualGeral: number | null;
+}
+
+export function consolidateGradeEntryMonitoringDisciplineByArea(
+  entries: readonly GradeEntryMonitoringByDiscipline[]
+): DisciplineAreaAggregate[] {
+  const byArea = new Map<string, GradeEntryMonitoringByDiscipline[]>();
+  for (const entry of entries) {
+    const key = entry.areaConhecimento ?? 'Sem área';
+    const list = byArea.get(key) ?? [];
+    list.push(entry);
+    byArea.set(key, list);
+  }
+  return Array.from(byArea.entries())
+    .map(([areaConhecimento, list]) => {
+      const totalExpectedGradeEntries = list.reduce((sum, e) => sum + e.expectedGradeEntries, 0);
+      const totalCompletedGradeEntries = list.reduce((sum, e) => sum + e.completedGradeEntries, 0);
+      return {
+        areaConhecimento: areaConhecimento as AreaConhecimento | 'Sem área',
+        disciplinasNoEscopo: list.length,
+        totalExpectedGradeEntries,
+        totalCompletedGradeEntries,
+        percentualGeral: calculateCompletionPercentage({ expectedGradeEntries: totalExpectedGradeEntries, completedGradeEntries: totalCompletedGradeEntries }),
+      };
+    })
+    .sort((a, b) => a.areaConhecimento.localeCompare(b.areaConhecimento));
 }

@@ -24,8 +24,10 @@ import { listBimonthlyEnrollmentsForSchool } from '../lib/bimonthlyEnrollmentSer
 import { getSchoolFlowResult } from '../lib/schoolFlowService';
 import { calculateSchoolFlowPercentuais } from '../lib/schoolFlowCalculations';
 import { listGradeEntryMonitoringForSchool } from '../lib/gradeEntryMonitoringService';
+import { listGradeEntryMonitoringByDisciplineForSchool } from '../lib/gradeEntryMonitoringDisciplineService';
 import {
   consolidateGradeEntryMonitoring,
+  consolidateGradeEntryMonitoringDisciplineByArea,
   classifyCompletionColorBand,
   COMPLETION_COLOR_BAND_INFO,
 } from '../lib/gradeEntryMonitoringCalculations';
@@ -40,14 +42,22 @@ import {
   getParecerBimestralNote,
   saveParecerBimestralNote,
 } from '../lib/parecerBimestralService';
-import type { Bimestre } from '../types/gradeEntryMonitoring';
+import type { Bimestre, GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
 import type { Turma } from '../types/classroom';
 import type { BimonthlyEnrollment } from '../types/bimonthlyEnrollment';
 import type { SchoolFlowResult } from '../types/schoolFlow';
-import type { GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
 import type { FarolEstudanteItem } from '../types/farolEstudante';
 import type { CdgPlan, CdgTask } from '../types/cdgPlan';
 import type { RecomposicaoPlan } from '../types/recomposicaoPlan';
+import type { GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
+// Correção final da auditoria da reestruturação, seção 5: SourceResult e
+// ParecerBimestralData movidos para uma fonte canônica única em
+// src/types/parecerBimestral.ts (não podem ficar definidos só dentro do
+// componente) — reexportados aqui para não quebrar nenhum import existente
+// que ainda aponte para este arquivo.
+import type { ParecerBimestralData, SourceResult } from '../types/parecerBimestral';
+
+export type { ParecerBimestralData, SourceResult };
 
 interface SchoolLike { id: string; nome: string; codInep: string; regiao?: '4ª' | '5ª' }
 
@@ -55,19 +65,6 @@ const CARD_TITLES = [
   'Capa', 'Matrícula', 'Fluxo Escolar', 'Notas Informadas', 'Farol do Estudante',
   'Sala de Situação', 'Ciclo de Gestão', 'Recomposição', 'Conclusão / Encaminhamentos',
 ] as const;
-
-// Auditoria da reestruturação, seção 10: cada card precisa diferenciar
-// carregamento/sucesso/FALHA da fonte correspondente — nunca um único
-// Promise.all combinado onde uma fonte fora do ar apaga o parecer inteiro.
-// SourceResult carrega o valor (com fallback vazio em caso de falha,
-// NUNCA null silencioso) + a flag `failed` + a mensagem de erro, para cada
-// card poder mostrar "não foi possível carregar" em vez de reaproveitar
-// silenciosamente um estado vazio como se fosse "sem dado".
-export interface SourceResult<T> {
-  value: T;
-  failed: boolean;
-  errorMessage: string | null;
-}
 
 function sourceOk<T>(value: T): SourceResult<T> {
   return { value, failed: false, errorMessage: null };
@@ -80,20 +77,6 @@ async function loadSource<T>(promise: Promise<T>, fallback: T): Promise<SourceRe
   } catch (err) {
     return { value: fallback, failed: true, errorMessage: err instanceof Error ? err.message : String(err) };
   }
-}
-
-// Nome pedido pela auditoria da reestruturação (seção 3/10) para o shape de
-// dados do Parecer Bimestral — antes era um `ParecerData` interno não
-// exportado; agora exportado e nomeado exatamente como o plano pede.
-export interface ParecerBimestralData {
-  turmas: SourceResult<Turma[]>;
-  bimonthly: SourceResult<BimonthlyEnrollment[]>;
-  flow: SourceResult<SchoolFlowResult | null>;
-  monitoring: SourceResult<GradeEntryMonitoring[]>;
-  farol: SourceResult<FarolEstudanteItem[]>;
-  cdgPlan: SourceResult<CdgPlan | null>;
-  cdgTasks: SourceResult<CdgTask[]>;
-  recomposicao: SourceResult<RecomposicaoPlan[]>;
 }
 
 export default function ParecerBimestralView() {
@@ -186,11 +169,12 @@ export default function ParecerBimestralView() {
         // sem permissão para essa escola) nunca apaga as demais 8 (auditoria
         // da reestruturação, seção 10, mesmo princípio de isolamento por
         // escola já aplicado ao agregado regional de Notas).
-        const [turmasR, bimonthlyR, flowR, monitoringR, farolR, cdgPlanR, cdgTasksR, recomposicaoR, noteR] = await Promise.all([
+        const [turmasR, bimonthlyR, flowR, monitoringR, disciplinaR, farolR, cdgPlanR, cdgTasksR, recomposicaoR, noteR] = await Promise.all([
           loadSource(listClassroomsForSchool(selectedSchool.id), []),
           loadSource(listBimonthlyEnrollmentsForSchool(selectedSchool.id, anoLetivo), []),
           loadSource(getSchoolFlowResult(selectedSchool.id, anoLetivo), null),
           loadSource(listGradeEntryMonitoringForSchool(selectedSchool.id, anoLetivo, bimestre), []),
+          loadSource(listGradeEntryMonitoringByDisciplineForSchool(selectedSchool.id, anoLetivo, bimestre), []),
           loadSource(listFarolEstudanteForSchool(selectedSchool.id, anoLetivo), []),
           loadSource(getCdgPlan(selectedSchool.id, anoLetivo), null),
           loadSource(listCdgTasksForSchool(selectedSchool.id, anoLetivo), []),
@@ -207,6 +191,7 @@ export default function ParecerBimestralView() {
           bimonthly: bimonthlyR,
           flow: flowR,
           monitoring: monitoringR,
+          disciplina: disciplinaR,
           farol: farolR,
           cdgPlan: cdgPlanR,
           cdgTasks: cdgTasksR,
@@ -368,7 +353,7 @@ export default function ParecerBimestralView() {
               <FluxoCard flow={data.flow} percentuais={flowPercentuais} />
             </div>
             <div className={cardIndex === 3 ? 'block' : 'hidden print:block print:break-before-page'}>
-              <NotasCard consolidated={consolidatedNotas} monitoring={data.monitoring} />
+              <NotasCard consolidated={consolidatedNotas} monitoring={data.monitoring} disciplina={data.disciplina} />
             </div>
             <div className={cardIndex === 4 ? 'block' : 'hidden print:block print:break-before-page'}>
               <FarolCard result={data.farol} />
@@ -425,10 +410,21 @@ function CapaCard({ school, anoLetivo, bimestre, superintendente }: { school: Sc
 // Auditoria da reestruturação, seção 10: cada card informa a coleção de
 // origem do dado exibido, e — quando a fonte falhou — um aviso explícito em
 // vez de mostrar silenciosamente um estado vazio como se fosse "sem dado".
-function SourceMeta({ collection, failed, errorMessage }: { collection: string; failed: boolean; errorMessage?: string | null }) {
+// Correção final da auditoria, seção 7: "data de atualização" precisa
+// aparecer em cada card, além da fonte — o mais recente `updatedAt` entre
+// os registros carregados (nunca a data de hoje, que não informaria nada
+// sobre QUANDO o dado foi de fato gravado).
+function mostRecentUpdatedAt(items: readonly { updatedAt: string }[]): string | null {
+  if (items.length === 0) return null;
+  return items.reduce((latest, item) => (item.updatedAt > latest ? item.updatedAt : latest), items[0].updatedAt);
+}
+
+function SourceMeta({ collection, failed, errorMessage, updatedAt }: { collection: string; failed: boolean; errorMessage?: string | null; updatedAt?: string | null }) {
   return (
     <div className="mb-3 print:mb-2">
-      <div className="text-[9px] text-slate-400 font-mono uppercase tracking-wide">Fonte: {collection}</div>
+      <div className="text-[9px] text-slate-400 font-mono uppercase tracking-wide">
+        Fonte: {collection} — Atualizado em: {updatedAt ? new Date(updatedAt).toLocaleString('pt-BR') : 'Não informado'}
+      </div>
       {failed && (
         <div className="mt-1 p-2 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-lg print:hidden">
           Não foi possível carregar esta fonte agora{errorMessage ? `: ${errorMessage}` : '.'} Os dados abaixo podem estar incompletos.
@@ -442,7 +438,7 @@ function MatriculaCard({ school, turmas, bimonthly }: { school: SchoolLike; turm
   const turmasAtivas = turmas.value.filter(t => t.ativa !== false).length;
   return (
     <CardShell icon={<GraduationCap size={16} />} title="Matrícula">
-      <SourceMeta collection="classrooms / bimonthly_enrollments" failed={turmas.failed || bimonthly.failed} errorMessage={turmas.errorMessage ?? bimonthly.errorMessage} />
+      <SourceMeta collection="classrooms / bimonthly_enrollments" failed={turmas.failed || bimonthly.failed} errorMessage={turmas.errorMessage ?? bimonthly.errorMessage} updatedAt={mostRecentUpdatedAt(bimonthly.value)} />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
         {[1, 2, 3, 4].map(b => {
           const item = bimonthly.value.find(m => m.bimestre === b);
@@ -465,7 +461,7 @@ function MatriculaCard({ school, turmas, bimonthly }: { school: SchoolLike; turm
 function FluxoCard({ flow, percentuais }: { flow: SourceResult<SchoolFlowResult | null>; percentuais: ReturnType<typeof calculateSchoolFlowPercentuais> | null }) {
   return (
     <CardShell icon={<BarChart3 size={16} />} title="Fluxo Escolar">
-      <SourceMeta collection="school_flow_results" failed={flow.failed} errorMessage={flow.errorMessage} />
+      <SourceMeta collection="school_flow_results" failed={flow.failed} errorMessage={flow.errorMessage} updatedAt={flow.value?.updatedAt ?? null} />
       {!flow.value || !percentuais ? (
         <p className="text-xs text-slate-400">Fluxo escolar ainda não informado para este ano letivo.</p>
       ) : (
@@ -488,17 +484,46 @@ function FluxoCard({ flow, percentuais }: { flow: SourceResult<SchoolFlowResult 
   );
 }
 
-function NotasCard({ consolidated, monitoring }: { consolidated: ReturnType<typeof consolidateGradeEntryMonitoring> | null; monitoring: SourceResult<GradeEntryMonitoring[]> }) {
+// Correção final da auditoria, seção 7: o card de Notas precisa usar
+// disciplina REAL (grade_entry_monitoring_disciplina), não só o total por
+// turma — a consolidação por área é sempre recalculada em tempo real
+// (consolidateGradeEntryMonitoringDisciplineByArea), nunca persistida.
+function NotasCard({ consolidated, monitoring, disciplina }: {
+  consolidated: ReturnType<typeof consolidateGradeEntryMonitoring> | null;
+  monitoring: SourceResult<GradeEntryMonitoring[]>;
+  disciplina: SourceResult<GradeEntryMonitoringByDiscipline[]>;
+}) {
   const band = COMPLETION_COLOR_BAND_INFO[classifyCompletionColorBand(consolidated?.percentualPreenchimentoGeral ?? null)];
+  const areas = consolidateGradeEntryMonitoringDisciplineByArea(disciplina.value);
   return (
     <CardShell icon={<ClipboardList size={16} />} title="Notas Informadas">
-      <SourceMeta collection="grade_entry_monitoring (consolidação por turma)" failed={monitoring.failed} errorMessage={monitoring.errorMessage} />
+      <SourceMeta collection="grade_entry_monitoring (consolidação por turma)" failed={monitoring.failed} errorMessage={monitoring.errorMessage} updatedAt={mostRecentUpdatedAt(monitoring.value)} />
       <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border font-black text-lg mb-3 ${band.badgeClassName}`}>
         {consolidated?.percentualPreenchimentoGeral == null ? 'Não informado' : `${consolidated.percentualPreenchimentoGeral.toFixed(0)}%`}
       </div>
-      <p className="text-xs text-slate-600">
+      <p className="text-xs text-slate-600 mb-3">
         {consolidated?.turmasComRelatorio ?? 0} de {consolidated?.turmasCadastradas ?? 0} turma(s) com relatório informado neste bimestre.
       </p>
+      <div className="border-t border-slate-100 pt-3">
+        <SourceMeta collection="grade_entry_monitoring_disciplina (consolidação por área)" failed={disciplina.failed} errorMessage={disciplina.errorMessage} updatedAt={mostRecentUpdatedAt(disciplina.value)} />
+        {areas.length === 0 ? (
+          <p className="text-xs text-slate-400">Nenhuma disciplina registrada ainda para esta escola/ano/bimestre.</p>
+        ) : (
+          <ul className="text-[11px] space-y-1">
+            {areas.map(area => {
+              const areaBand = COMPLETION_COLOR_BAND_INFO[classifyCompletionColorBand(area.percentualGeral)];
+              return (
+                <li key={area.areaConhecimento} className="flex justify-between border-b border-slate-100 py-1">
+                  <span>{area.areaConhecimento} ({area.disciplinasNoEscopo} disciplina(s))</span>
+                  <span className={`font-mono font-bold ${areaBand.textClassName}`}>
+                    {area.percentualGeral == null ? 'Não informado' : `${area.percentualGeral.toFixed(0)}%`}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </CardShell>
   );
 }
@@ -526,7 +551,7 @@ function FarolCard({ result }: { result: SourceResult<FarolEstudanteItem[]> }) {
 
   return (
     <CardShell icon={<ShieldAlert size={16} />} title="Farol do Estudante">
-      <SourceMeta collection="farol_estudante" failed={result.failed} errorMessage={result.errorMessage} />
+      <SourceMeta collection="farol_estudante" failed={result.failed} errorMessage={result.errorMessage} updatedAt={mostRecentUpdatedAt(items)} />
       <div className="bg-rose-50 border border-rose-200 rounded-lg px-3 py-2 text-[10px] text-rose-700 font-bold mb-3">
         Informação administrativa sensível — uso interno. Nomes de estudantes nunca aparecem na versão impressa/PDF.
       </div>
@@ -560,6 +585,10 @@ function FarolCard({ result }: { result: SourceResult<FarolEstudanteItem[]> }) {
 function SituacaoCard({ situation, position, total }: { situation: import('../types/schoolSituation').SchoolSituation | null; position: number | null; total: number }) {
   return (
     <CardShell icon={<Radar size={16} />} title="Sala de Situação">
+      {/* Situação é sempre recalculada em tempo real (schoolSituationService.ts),
+          nunca um documento com updatedAt próprio — "Não informado" aqui é o
+          estado correto, não uma falha de instrumentação. */}
+      <SourceMeta collection="schoolSituationService (calculado em tempo real)" failed={false} updatedAt={null} />
       {situation ? (
         <>
           <p className="text-xs text-slate-600 mb-3">
@@ -577,7 +606,7 @@ function SituacaoCard({ situation, position, total }: { situation: import('../ty
 function CdgCard({ plan, overdueTasks, totalTasks }: { plan: SourceResult<CdgPlan | null>; overdueTasks: CdgTask[]; totalTasks: number }) {
   return (
     <CardShell icon={<CheckCircle2 size={16} />} title="Ciclo de Gestão">
-      <SourceMeta collection="cdg_planos / cdg_tarefas" failed={plan.failed} errorMessage={plan.errorMessage} />
+      <SourceMeta collection="cdg_planos / cdg_tarefas" failed={plan.failed} errorMessage={plan.errorMessage} updatedAt={plan.value?.updatedAt ?? null} />
       <p className="text-xs text-slate-600 mb-2">
         Situação do plano: <strong>{plan.value?.situacao ?? 'Não informado'}</strong> — Status de execução: <strong>{plan.value?.statusExecucao ?? 'Não informado'}</strong>
       </p>
@@ -591,7 +620,7 @@ function CdgCard({ plan, overdueTasks, totalTasks }: { plan: SourceResult<CdgPla
 function RecomposicaoCard({ planos }: { planos: SourceResult<RecomposicaoPlan[]> }) {
   return (
     <CardShell icon={<Award size={16} />} title="Recomposição">
-      <SourceMeta collection="recomposicao_planos" failed={planos.failed} errorMessage={planos.errorMessage} />
+      <SourceMeta collection="recomposicao_planos" failed={planos.failed} errorMessage={planos.errorMessage} updatedAt={mostRecentUpdatedAt(planos.value)} />
       {planos.value.length === 0 ? (
         <p className="text-xs text-slate-400">Nenhum plano de recomposição registrado para este bimestre.</p>
       ) : (

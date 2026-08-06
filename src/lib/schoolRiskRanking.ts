@@ -14,6 +14,9 @@
 // parcela sem precisar entender o código. A interface (SalaDeSituacaoView)
 // exibe este mesmo aviso.
 import type { DataQualityState, SchoolSituation } from '../types/schoolSituation';
+import type { RankingEscola, SchoolRiskBreakdown } from '../types/schoolRiskRanking';
+
+export type { RankingEscola, SchoolRiskBreakdown };
 
 // Pesos centralizados e configuráveis — nunca espalhados como números
 // soltos pelo código. Cada campo tem uma pontuação máxima documentada, para
@@ -57,30 +60,6 @@ export const RISK_WEIGHTS = {
   // gradeEntryMonitoring/visitas) falharam ao carregar.
   minFalhasDeFontesParaDadosInsuficientes: 3,
 } as const;
-
-export interface SchoolRiskBreakdown {
-  schoolId: string;
-  escolaNome: string;
-  score: number;
-  // Cada parcela do escore, para a interface poder explicar "por que essa
-  // escola está nessa posição" em vez de mostrar só o número final.
-  pontosInconsistencias: number;
-  pontosPendencias: number;
-  pontosFluxo: number;
-  pontosNotas: number;
-  pontosVisita: number;
-  pontosQualidadeDados: number;
-  // true quando a escola não tem cobertura de dados suficiente para uma
-  // posição no ranking ser confiável — nunca recebe um score comparável às
-  // demais nesse caso (ver hasInsufficientData).
-  dadosInsuficientes: boolean;
-}
-
-// Nome pedido pela auditoria da reestruturação para o tipo de retorno do
-// ranking — alias direto de SchoolRiskBreakdown (mesmo shape, nomes
-// diferentes por compatibilidade com os dois contextos em que é usado:
-// "escore detalhado de UMA escola" e "uma linha do ranking regional").
-export type RankingEscola = SchoolRiskBreakdown;
 
 // "Dados insuficientes" nunca é decidido por um único campo ausente — exige
 // ou a qualidade geral já classificada como 'indisponivel' pela Sala de

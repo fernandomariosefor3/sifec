@@ -10,7 +10,7 @@
 // conhecimento_sifec.md: trabalhar preferencialmente com dados agregados,
 // nunca publicar dado nominal sem autorização).
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Lock, Pencil, Plus, ShieldAlert, Trash2, X } from 'lucide-react';
+import { Archive, AlertTriangle, Lock, Pencil, Plus, ShieldAlert, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
@@ -26,7 +26,7 @@ import { useSchoolClassrooms } from '../hooks/useSchoolClassrooms';
 import { buildAnoLetivoOptions } from '../lib/anoLetivoOptions';
 import {
   FarolEstudanteValidationError,
-  deleteFarolEstudanteItem,
+  archiveFarolEstudanteItem,
   listFarolEstudanteForSchool,
   saveFarolEstudanteItem,
 } from '../lib/farolEstudanteService';
@@ -66,6 +66,10 @@ export default function FarolEstudanteView() {
   const [bimestre, setBimestre] = useState<Bimestre>(1);
   const [selectedSchoolId, setSelectedSchoolId] = useState('');
   const [turmaFilter, setTurmaFilter] = useState('todas');
+  // Correção final da auditoria, seção 2: arquivados nunca aparecem por
+  // padrão — só mediante este filtro explícito, nunca ligado por padrão.
+  const [showArchived, setShowArchived] = useState(false);
+  const [archiveMessage, setArchiveMessage] = useState('');
 
   const [items, setItems] = useState<FarolEstudanteItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -128,13 +132,14 @@ export default function FarolEstudanteView() {
       }
       if (!isFirebaseMode) {
         const isDemoMatch = selectedSchool.id === DEMO_SCHOOL_ID && anoLetivo === DEMO_ANO_LETIVO && bimestre === DEMO_BIMESTRE;
-        setItems(isDemoMatch ? DEMO_FAROL_ESTUDANTE : []);
+        const demoItems = isDemoMatch ? DEMO_FAROL_ESTUDANTE : [];
+        setItems(showArchived ? demoItems : demoItems.filter(item => item.statusRegistro !== 'arquivado'));
         return;
       }
       setLoading(true);
       setLoadError('');
       try {
-        const loaded = await listFarolEstudanteForSchool(selectedSchool.id, anoLetivo);
+        const loaded = await listFarolEstudanteForSchool(selectedSchool.id, anoLetivo, { includeArchived: showArchived });
         if (!cancelled) setItems(loaded.filter(item => item.bimestre === bimestre));
       } catch (err) {
         if (!cancelled) setLoadError(err instanceof Error ? err.message : 'Não foi possível carregar a listagem.');
@@ -151,7 +156,7 @@ export default function FarolEstudanteView() {
     // provoca via setItems (bug real encontrado na auditoria da
     // reestruturação — mesmo padrão de visibleSchoolIdsKey em NotasView.tsx).
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedSchoolId substitui selectedSchool de propósito (ver comentário acima)
-  }, [selectedSchoolId, anoLetivo, bimestre, isFirebaseMode, reloadTick]);
+  }, [selectedSchoolId, anoLetivo, bimestre, isFirebaseMode, reloadTick, showArchived]);
 
   const visibleItems = useMemo(
     () => (turmaFilter === 'todas' ? items : items.filter(i => i.turmaId === turmaFilter)),
@@ -230,9 +235,16 @@ export default function FarolEstudanteView() {
     }
   }
 
-  async function handleDelete(item: FarolEstudanteItem) {
+  // Correção final da auditoria, seção 2: "Excluir" nunca aparece para o
+  // superintendente comum — exclusão física é restrita ao admin raiz em
+  // firestore.rules. Arquivar é sempre um update, nunca um delete.
+  async function handleArchive(item: FarolEstudanteItem) {
     if (!isFirebaseMode) return;
-    await deleteFarolEstudanteItem(item.id);
+    const email = auth.currentUser?.email;
+    if (!email) return;
+    setArchiveMessage('');
+    await archiveFarolEstudanteItem(item, email, new Date().toISOString());
+    setArchiveMessage(`Registro de ${item.turmaNome} (${item.disciplina}) arquivado — não foi excluído, continua acessível pelo filtro "Mostrar arquivados".`);
     setReloadTick(t => t + 1);
   }
 
@@ -283,11 +295,18 @@ export default function FarolEstudanteView() {
       ) : (
         <>
           <div className="flex items-center justify-between gap-3 flex-wrap">
-            <select value={turmaFilter} onChange={e => setTurmaFilter(e.target.value)} aria-label="Filtrar turma"
-              className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-xl">
-              <option value="todas">Todas as turmas</option>
-              {turmasDaEscola.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
-            </select>
+            <div className="flex items-center gap-3 flex-wrap">
+              <select value={turmaFilter} onChange={e => setTurmaFilter(e.target.value)} aria-label="Filtrar turma"
+                className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-xl">
+                <option value="todas">Todas as turmas</option>
+                {turmasDaEscola.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
+              </select>
+              <label className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500 cursor-pointer select-none">
+                <input type="checkbox" checked={showArchived} onChange={e => { setShowArchived(e.target.checked); setArchiveMessage(''); }}
+                  className="accent-brand-orange" />
+                Mostrar arquivados
+              </label>
+            </div>
             {canWrite && isFirebaseMode && (
               <button type="button" onClick={openCreate}
                 className="py-1.5 px-3 bg-brand-orange hover:bg-brand-orange/90 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm">
@@ -295,6 +314,13 @@ export default function FarolEstudanteView() {
               </button>
             )}
           </div>
+
+          {archiveMessage && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-[11px] text-emerald-700 font-bold flex items-center gap-2">
+              <Archive size={14} className="shrink-0" />
+              <span>{archiveMessage}</span>
+            </div>
+          )}
 
           {loadError && (
             <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
@@ -330,8 +356,17 @@ export default function FarolEstudanteView() {
                   <tr><td colSpan={9} className="py-8 text-center text-slate-400">Nenhum estudante registrado para este filtro.</td></tr>
                 ) : (
                   visibleItems.map(item => (
-                    <tr key={item.id}>
-                      <td className="py-2 px-3 font-bold text-slate-800">{item.estudanteNome}</td>
+                    <tr key={item.id} className={item.statusRegistro === 'arquivado' ? 'opacity-60' : ''}>
+                      <td className="py-2 px-3 font-bold text-slate-800">
+                        <div className="flex items-center gap-1.5">
+                          <span>{item.estudanteNome}</span>
+                          {item.statusRegistro === 'arquivado' && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-[9px] font-bold uppercase">
+                              Arquivado
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="py-2 px-3">{item.turmaNome}</td>
                       <td className="py-2 px-3">{item.disciplina}</td>
                       <td className="py-2 px-3 text-right font-mono font-bold text-rose-600">{item.percentualAcerto}%</td>
@@ -345,9 +380,11 @@ export default function FarolEstudanteView() {
                             <button onClick={() => openEdit(item)} className="p-1 hover:bg-slate-100 hover:text-blue-700 text-slate-400 rounded-md transition" title="Editar">
                               <Pencil size={12} />
                             </button>
-                            <button onClick={() => handleDelete(item)} className="p-1 hover:bg-slate-100 hover:text-rose-600 text-slate-400 rounded-md transition" title="Remover">
-                              <Trash2 size={12} />
-                            </button>
+                            {item.statusRegistro !== 'arquivado' && (
+                              <button onClick={() => handleArchive(item)} className="p-1 hover:bg-slate-100 hover:text-amber-600 text-slate-400 rounded-md transition" title="Arquivar (nunca exclui — mantém o histórico)">
+                                <Archive size={12} />
+                              </button>
+                            )}
                           </div>
                         </td>
                       )}

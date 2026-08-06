@@ -2,11 +2,13 @@
 import { describe, expect, it } from 'vitest';
 import {
   FarolEstudanteValidationError,
+  buildFarolArchiveAuditInput,
+  buildFarolArchivePayload,
   buildFarolEstudantePayload,
   validateFarolEstudanteInput,
   type SaveFarolEstudanteInput,
 } from '../src/lib/farolEstudanteService';
-import { FAROL_ACERTO_LIMITE, FAROL_SOURCE_SYSTEM } from '../src/types/farolEstudante';
+import { FAROL_ACERTO_LIMITE, FAROL_SOURCE_SYSTEM, type FarolEstudanteItem } from '../src/types/farolEstudante';
 
 function baseInput(overrides: Partial<SaveFarolEstudanteInput> = {}): SaveFarolEstudanteInput {
   return {
@@ -106,5 +108,60 @@ describe('buildFarolEstudantePayload', () => {
     const payload = buildFarolEstudantePayload(baseInput({ referenceDate: '2026-03-05', status: 'Em acompanhamento' }));
     expect(payload.referenceDate).toBe('2026-03-05');
     expect(payload.status).toBe('Em acompanhamento');
+  });
+
+  // Correção final da auditoria, seção 2: exclusão física bloqueada para o
+  // superintendente comum — statusRegistro é o campo de arquivamento.
+  it('novo registro sempre nasce com statusRegistro "ativo"', () => {
+    const payload = buildFarolEstudantePayload(baseInput());
+    expect(payload.statusRegistro).toBe('ativo');
+  });
+
+  it('editar um registro arquivado nunca reativa por acidente — preserva statusRegistro', () => {
+    const existing = buildFarolEstudantePayload(baseInput());
+    const archived = buildFarolArchivePayload(existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const editedAfterArchive = buildFarolEstudantePayload(baseInput({ percentualAcerto: 3 }), archived);
+    expect(editedAfterArchive.statusRegistro).toBe('arquivado');
+  });
+});
+
+describe('buildFarolArchivePayload', () => {
+  it('muda só statusRegistro/updatedAt/updatedBy — preserva todos os demais campos, inclusive estudanteNome', () => {
+    const existing = buildFarolEstudantePayload(baseInput());
+    const archived = buildFarolArchivePayload(existing, 'super.b@example.com', '2026-03-20T00:00:00.000Z');
+    expect(archived.statusRegistro).toBe('arquivado');
+    expect(archived.updatedAt).toBe('2026-03-20T00:00:00.000Z');
+    expect(archived.updatedBy).toBe('super.b@example.com');
+    expect(archived.estudanteNome).toBe(existing.estudanteNome);
+    expect(archived.createdAt).toBe(existing.createdAt);
+    expect(archived.createdBy).toBe(existing.createdBy);
+    expect(archived.id).toBe(existing.id);
+  });
+});
+
+describe('buildFarolArchiveAuditInput', () => {
+  const existing: FarolEstudanteItem = buildFarolEstudantePayload(baseInput({ estudanteNome: 'Nome Sensível Do Estudante' }));
+
+  it('nunca inclui estudanteNome (nem qualquer variação de nome do estudante) no audit_log', () => {
+    const archived = buildFarolArchivePayload(existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const auditInput = buildFarolArchiveAuditInput(archived, existing.statusRegistro, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const serialized = JSON.stringify(auditInput);
+    expect(serialized).not.toContain('Nome Sensível Do Estudante');
+    expect(serialized.toLowerCase()).not.toContain('estudantenome');
+  });
+
+  it('operação registrada é "archive"', () => {
+    const archived = buildFarolArchivePayload(existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const auditInput = buildFarolArchiveAuditInput(archived, existing.statusRegistro, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    expect(auditInput.operation).toBe('archive');
+  });
+
+  it('newValue contém só identificadores não-nominais (turma, disciplina, bimestre, id do registro)', () => {
+    const archived = buildFarolArchivePayload(existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const auditInput = buildFarolArchiveAuditInput(archived, existing.statusRegistro, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    expect(auditInput.newValue).toEqual({
+      action: 'archive', itemId: archived.id, turmaId: archived.turmaId,
+      disciplina: archived.disciplina, bimestre: archived.bimestre,
+    });
   });
 });

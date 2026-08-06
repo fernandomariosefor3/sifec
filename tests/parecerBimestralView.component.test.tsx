@@ -23,7 +23,7 @@ afterEach(() => {
 const {
   authStateListeners, mockAuth,
   mockListClassroomsForSchool, mockListBimonthlyEnrollmentsForSchool, mockGetSchoolFlowResult,
-  mockListGradeEntryMonitoringForSchool, mockListFarolEstudanteForSchool,
+  mockListGradeEntryMonitoringForSchool, mockListGradeEntryMonitoringByDisciplineForSchool, mockListFarolEstudanteForSchool,
   mockGetCdgPlan, mockListCdgTasksForSchool, mockListRecomposicaoPlansForSchool,
   mockGetParecerBimestralNote, mockSaveParecerBimestralNote,
   mockFetchTurmasForSchools, mockFetchVisitasForSchools, mockFetchPortfolioSituations,
@@ -45,6 +45,7 @@ const {
     mockListBimonthlyEnrollmentsForSchool: vi.fn(),
     mockGetSchoolFlowResult: vi.fn(),
     mockListGradeEntryMonitoringForSchool: vi.fn(),
+    mockListGradeEntryMonitoringByDisciplineForSchool: vi.fn(),
     mockListFarolEstudanteForSchool: vi.fn(),
     mockGetCdgPlan: vi.fn(),
     mockListCdgTasksForSchool: vi.fn(),
@@ -74,6 +75,10 @@ vi.mock('../src/lib/schoolFlowService', () => ({
 
 vi.mock('../src/lib/gradeEntryMonitoringService', () => ({
   listGradeEntryMonitoringForSchool: (...args: unknown[]) => mockListGradeEntryMonitoringForSchool(...args),
+}));
+
+vi.mock('../src/lib/gradeEntryMonitoringDisciplineService', () => ({
+  listGradeEntryMonitoringByDisciplineForSchool: (...args: unknown[]) => mockListGradeEntryMonitoringByDisciplineForSchool(...args),
 }));
 
 vi.mock('../src/lib/farolEstudanteService', () => ({
@@ -148,6 +153,15 @@ function goToCard(title: string) {
   fireEvent.click(screen.getByRole('button', { name: new RegExp(title) }));
 }
 
+// Todos os 9 cards ficam no DOM ao mesmo tempo (o inativo só leva a classe
+// "hidden", que o jsdom não aplica como display:none de verdade) — consultas
+// por texto precisam ficar restritas ao card certo, nunca `screen` global,
+// senão "Atualizado em:" bate em vários cards ao mesmo tempo.
+function getCardContainer(title: string): HTMLElement {
+  const heading = screen.getByRole('heading', { name: new RegExp(title) });
+  return heading.parentElement as HTMLElement;
+}
+
 describe('ParecerBimestralView', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -158,6 +172,7 @@ describe('ParecerBimestralView', () => {
     mockListBimonthlyEnrollmentsForSchool.mockReset().mockResolvedValue([]);
     mockGetSchoolFlowResult.mockReset().mockResolvedValue(null);
     mockListGradeEntryMonitoringForSchool.mockReset().mockResolvedValue([]);
+    mockListGradeEntryMonitoringByDisciplineForSchool.mockReset().mockResolvedValue([]);
     mockListFarolEstudanteForSchool.mockReset().mockResolvedValue([
       { id: 'farol-1', schoolId: 'diva-cabral', codInep: SCHOOL_CODINEP, escolaNome: SCHOOL_NOME, turmaId: 'turma-3a-diva', turmaNome: '3º Ano A - Matutino', disciplina: 'Matemática', anoLetivo: 2026, bimestre: 1, estudanteNome: 'Aluno Confidencial Teste', percentualAcerto: 18, sourceSystem: 'SISEDU Analytics', referenceDate: '2026-03-01', status: 'Identificado', createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z', createdBy: SUPER_A_EMAIL, updatedBy: SUPER_A_EMAIL },
     ]);
@@ -211,5 +226,63 @@ describe('ParecerBimestralView', () => {
 
     goToCard('Farol do Estudante');
     await waitFor(() => expect(screen.getByText(/Não foi possível carregar esta fonte agora/)).toBeInTheDocument());
+  });
+
+  // Correção final da auditoria, seção 7: o card de Notas precisa usar
+  // disciplina real (grade_entry_monitoring_disciplina), nunca só o total
+  // por turma de grade_entry_monitoring.
+  it('card de Notas mostra consolidação por área a partir de disciplinas reais', async () => {
+    mockListGradeEntryMonitoringByDisciplineForSchool.mockResolvedValue([
+      {
+        id: 'x1', schoolId: 'diva-cabral', codInep: SCHOOL_CODINEP, escolaNome: SCHOOL_NOME,
+        turmaId: 'turma-3a-diva', turmaNome: '3º Ano A - Matutino', anoLetivo: 2026, bimestre: 1,
+        disciplinaId: 'historia', disciplinaNome: 'História', areaConhecimento: 'Ciências Humanas',
+        expectedGradeEntries: 32, completedGradeEntries: 32, status: 'confirmado', referenceDate: '2026-03-10',
+        createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z', createdBy: SUPER_A_EMAIL, updatedBy: SUPER_A_EMAIL,
+      },
+      {
+        id: 'x2', schoolId: 'diva-cabral', codInep: SCHOOL_CODINEP, escolaNome: SCHOOL_NOME,
+        turmaId: 'turma-3a-diva', turmaNome: '3º Ano A - Matutino', anoLetivo: 2026, bimestre: 1,
+        disciplinaId: 'geografia', disciplinaNome: 'Geografia', areaConhecimento: 'Ciências Humanas',
+        expectedGradeEntries: 32, completedGradeEntries: 0, status: 'confirmado', referenceDate: '2026-03-10',
+        createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z', createdBy: SUPER_A_EMAIL, updatedBy: SUPER_A_EMAIL,
+      },
+    ]);
+
+    render(<ParecerBimestralView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchoolAnoBimestre();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Anterior/ })).toBeInTheDocument());
+
+    goToCard('Notas Informadas');
+    await waitFor(() => expect(within(getCardContainer('Notas Informadas')).getByText(/Ciências Humanas \(2 disciplina\(s\)\)/)).toBeInTheDocument());
+    // soma(realizados)/soma(esperados) = 32/64 = 50% — nunca a média simples
+    // dos percentuais de cada disciplina.
+    expect(within(getCardContainer('Notas Informadas')).getByText('50%')).toBeInTheDocument();
+  });
+
+  it('data de atualização aparece em cada card com fonte carregada', async () => {
+    mockListBimonthlyEnrollmentsForSchool.mockResolvedValue([
+      { id: 'b1', schoolId: 'diva-cabral', codInep: SCHOOL_CODINEP, escolaNome: SCHOOL_NOME, anoLetivo: 2026, bimestre: 1, matricula: 100, createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-15T12:00:00.000Z', createdBy: SUPER_A_EMAIL, updatedBy: SUPER_A_EMAIL },
+    ]);
+
+    render(<ParecerBimestralView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchoolAnoBimestre();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Anterior/ })).toBeInTheDocument());
+
+    goToCard('Matrícula');
+    await waitFor(() => expect(within(getCardContainer('Matrícula')).getByText(/Atualizado em:/)).toBeInTheDocument());
+    expect(within(getCardContainer('Matrícula')).queryByText(/Atualizado em: Não informado/)).not.toBeInTheDocument();
+  });
+
+  it('fonte sem nenhum registro mostra "Atualizado em: Não informado" — nunca uma data inventada', async () => {
+    render(<ParecerBimestralView />);
+    await loginAs(SUPER_A_EMAIL);
+    await selectSchoolAnoBimestre();
+    await waitFor(() => expect(screen.getByRole('button', { name: /Anterior/ })).toBeInTheDocument());
+
+    goToCard('Recomposição');
+    await waitFor(() => expect(within(getCardContainer('Recomposição')).getByText(/Atualizado em: Não informado/)).toBeInTheDocument());
   });
 });

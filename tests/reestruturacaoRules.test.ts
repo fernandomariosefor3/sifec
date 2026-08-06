@@ -5,9 +5,14 @@
 // disciplina do Acompanhamento de Notas), usando o Firebase Emulator (100%
 // local), mesmo padrão de tests/gradeEntryMonitoringRules.test.ts. Cobertura
 // enxuta e focada nos limites de segurança reais: criação autorizada,
-// bloqueio cross-escola, e o modelo de exclusão de cada coleção (admin-only
-// para as com ID determinístico; qualquer superintendente com acesso de
-// escrita à escola para as listas de trabalho com ID opaco).
+// bloqueio cross-escola, e o modelo de exclusão de cada coleção — admin-only
+// para as com ID determinístico, e TAMBÉM admin-only para farol_estudante
+// (correção final da auditoria, seção 2: dado nominal nunca pode ser
+// excluído fisicamente por um superintendente comum, mesmo o da própria
+// escola — o caminho normal passa a ser arquivar via update de
+// statusRegistro); recomposicao_planos/cdg_tarefas continuam permitindo
+// exclusão física ao superintendente da própria escola (não são dado
+// nominal, são listas de trabalho comuns).
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertFails,
@@ -16,7 +21,7 @@ import {
   type RulesTestEnvironment,
 } from '@firebase/rules-unit-testing';
 import { readFileSync } from 'node:fs';
-import { collection, deleteDoc, doc, getDocs, setDoc, updateDoc } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, query, setDoc, updateDoc, where } from 'firebase/firestore';
 
 const ADMIN_EMAIL = 'fernandomariodasmartins@gmail.com';
 const ACTIVE_A_EMAIL = 'super.a.reestruturacao@example.com';
@@ -129,6 +134,7 @@ describe('Reestruturação SIFEC — farol_estudante', () => {
       turmaId: TURMA_A_ID, turmaNome: 'Turma A - Teste', disciplina: 'Matemática',
       anoLetivo: ANO_LETIVO, bimestre: 1, estudanteNome: 'Estudante Teste', percentualAcerto: 18,
       sourceSystem: 'SISEDU Analytics', referenceDate: '2026-03-08', status: 'Identificado',
+      statusRegistro: 'ativo',
       createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
       createdBy: ACTIVE_A_EMAIL, updatedBy: ACTIVE_A_EMAIL,
       ...overrides,
@@ -157,12 +163,58 @@ describe('Reestruturação SIFEC — farol_estudante', () => {
     await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-3'), payload({ id: 'farol-3', turmaId: 'turma-inexistente' })));
   });
 
-  it('exclusão permitida para o superintendente da própria escola (lista de trabalho, não histórico auditável)', async () => {
+  // Correção final da auditoria da reestruturação, seção 2: "exclusão
+  // bloqueada para usuário comum" — a versão anterior desta regra permitia
+  // delete físico para o superintendente da própria escola (canWriteEscola);
+  // corrigido para isPlatformAdmin() apenas. O caminho normal para "remover
+  // da lista de trabalho" passa a ser arquivar (update de statusRegistro).
+  it('exclusão física é SEMPRE bloqueada para superintendente comum, mesmo da própria escola', async () => {
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
     });
     await assertFails(deleteDoc(doc(ctxFor(ACTIVE_B_EMAIL).firestore(), 'farol_estudante', 'farol-1')));
-    await assertSucceeds(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-1')));
+    await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-1')));
+  });
+
+  it('exclusão física permitida ao admin raiz, em manutenção excepcional', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
+    });
+    await assertSucceeds(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'farol_estudante', 'farol-1')));
+  });
+
+  it('arquivamento (update de statusRegistro) é permitido ao superintendente da própria escola', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
+    });
+    await assertSucceeds(
+      updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-1'), {
+        statusRegistro: 'arquivado', updatedAt: '2026-03-20T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+      })
+    );
+  });
+
+  it('arquivamento é bloqueado para superintendente de outra escola', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
+    });
+    await assertFails(
+      updateDoc(doc(ctxFor(ACTIVE_B_EMAIL).firestore(), 'farol_estudante', 'farol-1'), {
+        statusRegistro: 'arquivado', updatedAt: '2026-03-20T00:00:00.000Z', updatedBy: ACTIVE_B_EMAIL,
+      })
+    );
+  });
+
+  it('statusRegistro fora do enum ["ativo", "arquivado"] é rejeitado', async () => {
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-registro'), payload({ id: 'farol-registro', statusRegistro: 'deletado' })));
+  });
+
+  it('consulta continua obrigatoriamente filtrada por schoolId (leitura de outra escola bloqueada mesmo após arquivamento)', async () => {
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload({ statusRegistro: 'arquivado' }));
+    });
+    await assertFails(getDocs(collection(ctxFor(ACTIVE_B_EMAIL).firestore(), 'farol_estudante')));
+    await assertSucceeds(getDocs(query(collection(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante'), where('schoolId', '==', SCHOOL_A_ID))));
   });
 });
 
@@ -300,12 +352,16 @@ describe('Reestruturação SIFEC — parecer_bimestral_notas', () => {
 });
 
 describe('Reestruturação SIFEC — grade_entry_monitoring_disciplina', () => {
+  // Correção final da auditoria, seção 3: disciplina deixou de ser uma
+  // lista fechada de 4 áreas — disciplinaId (chave normalizada) +
+  // disciplinaNome (texto livre) + areaConhecimento (opcional).
   function payload(overrides: Record<string, unknown> = {}) {
     return {
       id: `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`,
       schoolId: SCHOOL_A_ID, codInep: '00000601', escolaNome: ESCOLA_A,
       turmaId: TURMA_A_ID, turmaNome: 'Turma A - Teste',
-      anoLetivo: ANO_LETIVO, bimestre: 1, disciplina: 'matematica',
+      anoLetivo: ANO_LETIVO, bimestre: 1, disciplinaId: 'matematica', disciplinaNome: 'Matemática',
+      areaConhecimento: 'Matemática',
       expectedGradeEntries: 32, completedGradeEntries: 30,
       status: 'confirmado', referenceDate: '2026-03-10',
       createdAt: '2026-03-10T00:00:00.000Z', updatedAt: '2026-03-10T00:00:00.000Z',
@@ -320,13 +376,44 @@ describe('Reestruturação SIFEC — grade_entry_monitoring_disciplina', () => {
     await assertFails(getDocs(collection(ctxFor(ACTIVE_B_EMAIL).firestore(), 'grade_entry_monitoring_disciplina')));
   });
 
-  it('ID precisa bater com schoolId_anoLetivo_bBimestre_turmaId_disciplina', async () => {
+  // Nunca limitado a 4 disciplinas — História/Geografia/Física/Química/
+  // Biologia/Filosofia/Sociologia/Língua Inglesa são todas aceitas.
+  it('aceita qualquer disciplina real (nunca limitada a 4 áreas fixas)', async () => {
+    const casos: Array<{ nome: string; id: string }> = [
+      { nome: 'História', id: 'historia' },
+      { nome: 'Geografia', id: 'geografia' },
+      { nome: 'Física', id: 'fisica' },
+      { nome: 'Química', id: 'quimica' },
+      { nome: 'Educação Física', id: 'educacao-fisica' },
+    ];
+    for (const caso of casos) {
+      const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_${caso.id}`;
+      // Firestore setDoc() rejeita `undefined` como valor de campo (mesmo
+      // cuidado de stripUndefinedDeep em auditService.ts) — nunca passar
+      // `areaConhecimento: undefined` no overrides; omitir a chave inteira.
+      const { areaConhecimento: _unused, ...base } = payload({ id, disciplinaId: caso.id, disciplinaNome: caso.nome });
+      await assertSucceeds(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), base));
+    }
+  });
+
+  it('ID precisa bater com schoolId_anoLetivo_bBimestre_turmaId_disciplinaId', async () => {
     await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', 'id-errado'), payload()));
   });
 
-  it('disciplina fora das 4 áreas conhecidas é rejeitada', async () => {
-    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_artes`;
-    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ id, disciplina: 'artes' })));
+  it('disciplinaId fora do formato de chave normalizada (maiúscula/espaço/acento) é rejeitado', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_Matemática`;
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ id, disciplinaId: 'Matemática' })));
+  });
+
+  it('disciplinaNome vazio é rejeitado', async () => {
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`), payload({ disciplinaNome: '' })));
+  });
+
+  it('areaConhecimento fora do enum é rejeitada; ausência de areaConhecimento é aceita', async () => {
+    const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`;
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ areaConhecimento: 'Artes Marciais' })));
+    const { areaConhecimento: _unused, ...semArea } = payload();
+    await assertSucceeds(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), semArea));
   });
 
   it('lançamentos realizados maiores que os esperados é rejeitado', async () => {
@@ -339,16 +426,22 @@ describe('Reestruturação SIFEC — grade_entry_monitoring_disciplina', () => {
     await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ id, turmaId: 'turma-inexistente' })));
   });
 
-  it('update não pode trocar disciplina/turma/identidade da escola', async () => {
+  it('update não pode trocar disciplinaId/disciplinaNome/turma/identidade da escola — mas pode reclassificar areaConhecimento', async () => {
     const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`;
     await testEnv.withSecurityRulesDisabled(async (context) => {
       await setDoc(doc(context.firestore(), 'grade_entry_monitoring_disciplina', id), payload());
     });
     await assertFails(
-      updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), { disciplina: 'matematica2' })
+      updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), { disciplinaId: 'matematica2' })
+    );
+    await assertFails(
+      updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), { disciplinaNome: 'Matemática Financeira' })
     );
     await assertSucceeds(
       updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), { completedGradeEntries: 32, updatedAt: '2026-03-12T00:00:00.000Z' })
+    );
+    await assertSucceeds(
+      updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), { areaConhecimento: 'Ciências Humanas', updatedAt: '2026-03-12T00:00:00.000Z' })
     );
   });
 

@@ -991,7 +991,7 @@ service cloud.firestore {
       return data.keys().hasOnly([
           'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
           'disciplina', 'anoLetivo', 'bimestre', 'estudanteNome', 'percentualAcerto',
-          'sourceSystem', 'referenceDate', 'status',
+          'sourceSystem', 'referenceDate', 'status', 'statusRegistro',
           'observacao', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
         ]) &&
         data.id == itemId &&
@@ -1010,6 +1010,10 @@ service cloud.firestore {
         data.sourceSystem == 'SISEDU Analytics' &&
         data.referenceDate is string && data.referenceDate.size() == 10 &&
         data.status in ['Identificado', 'Em acompanhamento', 'Superado'] &&
+        // Correção final da auditoria, seção 2: statusRegistro é o campo de
+        // arquivamento (nunca reaproveita `status`, que é o status de
+        // acompanhamento pedagógico do estudante — semânticas diferentes).
+        data.statusRegistro in ['ativo', 'arquivado'] &&
         (!('observacao' in data) || (data.observacao is string && data.observacao.size() <= 500)) &&
         data.createdAt is string && data.updatedAt is string &&
         data.createdBy is string && data.updatedBy is string;
@@ -1022,6 +1026,9 @@ service cloud.firestore {
         isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
         isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
         isValidFarolEstudanteShape(itemId);
+      // update cobre tanto edição normal quanto arquivamento (statusRegistro
+      // 'ativo' -> 'arquivado') — o superintendente da escola nunca precisa
+      // de `delete` para "remover" um registro da lista de trabalho.
       allow update: if isValidId(itemId) &&
         canWriteEscola(resource.data.escolaNome) &&
         incoming().schoolId == resource.data.schoolId &&
@@ -1033,7 +1040,14 @@ service cloud.firestore {
         incoming().createdAt == resource.data.createdAt &&
         incoming().createdBy == resource.data.createdBy &&
         isValidFarolEstudanteShape(itemId);
-      allow delete: if canWriteEscola(resource.data.escolaNome) && isValidId(itemId);
+      // Correção final da auditoria, seção 2: exclusão física NUNCA é
+      // permitida para o superintendente comum (nem o da própria escola) —
+      // "exclusão bloqueada para usuário comum" era o requisito não
+      // atendido pela versão anterior desta regra (que usava
+      // canWriteEscola()). Só o admin raiz pode excluir fisicamente, em
+      // manutenção excepcional (ex.: registro de teste/erro grave de
+      // digitação) — o caminho normal para a escola é arquivar (update).
+      allow delete: if isPlatformAdmin() && isValidId(itemId);
     }
 
     // --- Reestruturação SIFEC: recomposicao_planos ---
@@ -1208,12 +1222,23 @@ service cloud.firestore {
     // continua intocada — total por turma, sem disciplina, ainda usado pelo
     // fluxo de registro do SIGE). Mesma integridade canônica de
     // grade_entry_monitoring (isCanonicalTurmaOfSchoolYearAndName).
+    // Correção final da auditoria, seção 3: disciplina deixou de ser uma
+    // lista fechada de 4 áreas — disciplinaId (chave normalizada e segura)
+    // + disciplinaNome (texto livre, exibição) + areaConhecimento
+    // (opcional). As regras NÃO replicam a normalização Unicode completa do
+    // cliente (normalizeDisciplinaId — NFD + remoção de diacríticos; sem
+    // suporte equivalente na linguagem de regras do Firestore), então só
+    // validam o FORMATO de disciplinaId (minúsculas/dígitos/hífen, sem
+    // hífen nas pontas) — mesmo tradeoff já aceito para IDs de escola
+    // gerados no cliente em EscolasView.tsx. A integridade real do ID do
+    // documento continua garantida: entryId precisa bater exatamente com a
+    // chave composta usando disciplinaId.
     function isValidGradeEntryMonitoringDisciplineShape(entryId) {
       let data = incoming();
       return data.keys().hasOnly([
           'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
-          'anoLetivo', 'bimestre', 'disciplina', 'expectedGradeEntries',
-          'completedGradeEntries', 'status', 'referenceDate',
+          'anoLetivo', 'bimestre', 'disciplinaId', 'disciplinaNome', 'areaConhecimento',
+          'expectedGradeEntries', 'completedGradeEntries', 'status', 'referenceDate',
           'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
         ]) &&
         data.id == entryId &&
@@ -1224,8 +1249,12 @@ service cloud.firestore {
         data.turmaNome is string && data.turmaNome.size() <= 150 &&
         isValidAnoLetivo(data.anoLetivo) &&
         data.bimestre in [1, 2, 3, 4] &&
-        data.disciplina in ['linguaPortuguesa', 'matematica', 'cienciasNatureza', 'cienciasHumanas'] &&
-        entryId == data.schoolId + '_' + string(data.anoLetivo) + '_b' + string(data.bimestre) + '_' + data.turmaId + '_' + data.disciplina &&
+        data.disciplinaId is string && data.disciplinaId.size() > 0 && data.disciplinaId.size() <= 100 &&
+        data.disciplinaId.matches('^[a-z0-9]+(-[a-z0-9]+)*$') &&
+        data.disciplinaNome is string && data.disciplinaNome.size() > 0 && data.disciplinaNome.size() <= 100 &&
+        (!('areaConhecimento' in data) ||
+          data.areaConhecimento in ['Linguagens', 'Matemática', 'Ciências da Natureza', 'Ciências Humanas', 'Formação Técnica', 'Outra']) &&
+        entryId == data.schoolId + '_' + string(data.anoLetivo) + '_b' + string(data.bimestre) + '_' + data.turmaId + '_' + data.disciplinaId &&
         isNonNegInt(data.expectedGradeEntries) &&
         isNonNegInt(data.completedGradeEntries) &&
         data.completedGradeEntries <= data.expectedGradeEntries &&
@@ -1243,6 +1272,11 @@ service cloud.firestore {
         isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
         isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
         isValidGradeEntryMonitoringDisciplineShape(entryId);
+      // areaConhecimento NUNCA é travada aqui de propósito — é um campo de
+      // organização/reclassificação, não de identidade (diferente de
+      // disciplinaId/disciplinaNome, que travam junto com turmaId/turmaNome
+      // abaixo, mesmo princípio de identidade imutável pós-criação já usado
+      // nas demais coleções desta reestruturação).
       allow update: if isValidId(entryId) &&
         canWriteEscola(resource.data.escolaNome) &&
         incoming().schoolId == resource.data.schoolId &&
@@ -1252,7 +1286,8 @@ service cloud.firestore {
         incoming().turmaNome == resource.data.turmaNome &&
         incoming().anoLetivo == resource.data.anoLetivo &&
         incoming().bimestre == resource.data.bimestre &&
-        incoming().disciplina == resource.data.disciplina &&
+        incoming().disciplinaId == resource.data.disciplinaId &&
+        incoming().disciplinaNome == resource.data.disciplinaNome &&
         incoming().createdAt == resource.data.createdAt &&
         incoming().createdBy == resource.data.createdBy &&
         isValidGradeEntryMonitoringDisciplineShape(entryId);

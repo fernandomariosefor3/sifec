@@ -32,6 +32,7 @@ import { useGradeEntryMonitoring } from '../hooks/useGradeEntryMonitoring';
 import { listGradeEntryMonitoringForSchool } from '../lib/gradeEntryMonitoringService';
 import {
   consolidateGradeEntryMonitoring,
+  consolidateGradeEntryMonitoringDisciplineByArea,
   aggregateGradeEntriesForPeriod,
   classifyCompletionColorBand,
   COMPLETION_COLOR_BAND_INFO,
@@ -45,13 +46,13 @@ import GradeEntryMonitoringTable, {
   type StatusFilter,
 } from './notas/GradeEntryMonitoringTable';
 import GradeEntryMonitoringFormModal from './notas/GradeEntryMonitoringFormModal';
-import GradeEntryMonitoringByDisciplineTable, { buildDisciplineRows, type DisciplineRow } from './notas/GradeEntryMonitoringByDisciplineTable';
+import GradeEntryMonitoringByDisciplineTable, { buildDisciplineRows, type DisciplineSaveInput } from './notas/GradeEntryMonitoringByDisciplineTable';
 import {
   listGradeEntryMonitoringByDisciplineForSchool,
   saveGradeEntryMonitoringByDiscipline,
 } from '../lib/gradeEntryMonitoringDisciplineService';
 import { DEMO_GRADE_ENTRY_MONITORING_DISCIPLINE } from '../data/demoGradeEntryMonitoringDiscipline';
-import type { GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
+import { normalizeDisciplinaId, type GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
 
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
@@ -253,30 +254,38 @@ export default function NotasView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- selectedSchoolId substitui selectedSchool de propósito (ver comentário acima)
   }, [selectedSchoolId, anoLetivo, bimestre, isFirebaseMode, disciplineReloadTick]);
 
-  const disciplineRows = useMemo(() => buildDisciplineRows(turmasDaEscola, disciplineEntries), [turmasDaEscola, disciplineEntries]);
+  const disciplineRows = useMemo(() => buildDisciplineRows(disciplineEntries), [disciplineEntries]);
+  // Correção final da auditoria, seção 3: consolidação por ÁREA sempre
+  // recalculada em tempo real a partir das disciplinas já registradas —
+  // nunca persistida como percentual redundante em nenhum documento.
+  const disciplineAreaAggregates = useMemo(() => consolidateGradeEntryMonitoringDisciplineByArea(disciplineEntries), [disciplineEntries]);
 
-  async function handleSaveDisciplineRow(row: DisciplineRow, draft: { expectedGradeEntries: string; completedGradeEntries: string; status: 'rascunho' | 'confirmado'; referenceDate: string }) {
+  async function handleSaveDisciplineRow(input: DisciplineSaveInput) {
     if (!selectedSchool) return;
+    if (!input.turmaId || !input.turmaNome) throw new Error('Selecione a turma.');
     const email = auth.currentUser?.email;
     if (!email) throw new Error('É preciso estar autenticado para registrar o acompanhamento por disciplina.');
+    const disciplinaId = normalizeDisciplinaId(input.disciplinaNome);
+    const existing = disciplineEntries.find(e => e.turmaId === input.turmaId && e.disciplinaId === disciplinaId);
     await saveGradeEntryMonitoringByDiscipline(
       {
         schoolId: selectedSchool.id,
         codInep: selectedSchool.codInep,
         escolaNome: selectedSchool.nome,
-        turmaId: row.turmaId,
-        turmaNome: row.turmaNome,
+        turmaId: input.turmaId,
+        turmaNome: input.turmaNome,
         anoLetivo,
         bimestre,
-        disciplina: row.disciplina,
-        expectedGradeEntries: Number(draft.expectedGradeEntries),
-        completedGradeEntries: Number(draft.completedGradeEntries),
-        status: draft.status,
-        referenceDate: draft.referenceDate,
+        disciplinaNome: input.disciplinaNome,
+        areaConhecimento: input.areaConhecimento,
+        expectedGradeEntries: Number(input.expectedGradeEntries),
+        completedGradeEntries: Number(input.completedGradeEntries),
+        status: input.status,
+        referenceDate: input.referenceDate,
         actingUserEmail: email,
         now: new Date().toISOString(),
       },
-      row.entry ?? undefined
+      existing
     );
     setDisciplineReloadTick(t => t + 1);
   }
@@ -578,6 +587,26 @@ export default function NotasView() {
 
               <div>
                 <h3 className="text-xs font-black uppercase text-slate-700 mb-2">Acompanhamento por turma e disciplina</h3>
+                {/* Correção final da auditoria, seção 3: consolidação por
+                    ÁREA — sempre calculada em tempo real a partir das
+                    disciplinas já registradas, nunca um percentual
+                    persistido separadamente. */}
+                {disciplineAreaAggregates.length > 0 && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                    {disciplineAreaAggregates.map(area => {
+                      const band = COMPLETION_COLOR_BAND_INFO[classifyCompletionColorBand(area.percentualGeral)];
+                      return (
+                        <div key={area.areaConhecimento} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
+                          <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider truncate">{area.areaConhecimento}</div>
+                          <div className={`text-sm font-extrabold mt-0.5 ${band.textClassName}`}>
+                            {area.percentualGeral == null ? 'Não informado' : `${area.percentualGeral.toFixed(0)}%`}
+                          </div>
+                          <div className="text-[9px] text-slate-400">{area.disciplinasNoEscopo} disciplina(s)</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
                 {disciplineError ? (
                   <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
                     <span>{disciplineError}</span>
@@ -589,6 +618,7 @@ export default function NotasView() {
                 ) : (
                   <GradeEntryMonitoringByDisciplineTable
                     rows={disciplineRows}
+                    turmas={turmasDaEscola}
                     loading={disciplineLoading || turmasLoading}
                     canWrite={canWrite}
                     anoLetivo={anoLetivo}

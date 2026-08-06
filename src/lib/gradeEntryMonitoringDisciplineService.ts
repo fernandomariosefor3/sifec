@@ -3,12 +3,18 @@
 // grade_entry_monitoring (preservada intacta). Núcleo puro (validação +
 // montagem do payload) separado da orquestração assíncrona, mesmo padrão de
 // gradeEntryMonitoringService.ts.
+//
+// Correção final da auditoria, seção 3: disciplina deixou de ser uma lista
+// fechada de 4 áreas — agora é disciplinaNome (texto livre, obrigatório) +
+// disciplinaId (chave normalizada, estável e segura, derivada do nome) +
+// areaConhecimento (opcional, só para agrupamento).
 import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
 import { db } from './firebase';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
 import {
-  DISCIPLINA_AREAS,
-  type DisciplinaArea,
+  AREA_CONHECIMENTO,
+  normalizeDisciplinaId,
+  type AreaConhecimento,
   type GradeEntryMonitoringByDiscipline,
   type GradeEntryMonitoringDisciplineStatus,
 } from '../types/gradeEntryMonitoringDiscipline';
@@ -17,6 +23,7 @@ import { isNonNegativeInteger } from './enrollmentCalculations';
 
 const COLLECTION = 'grade_entry_monitoring_disciplina';
 const REFERENCE_DATE_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
+const MAX_DISCIPLINA_NOME_LENGTH = 100;
 
 export class GradeEntryMonitoringDisciplineValidationError extends Error {}
 
@@ -28,7 +35,8 @@ export interface SaveGradeEntryMonitoringByDisciplineInput {
   turmaNome: string;
   anoLetivo: number;
   bimestre: Bimestre;
-  disciplina: DisciplinaArea;
+  disciplinaNome: string;
+  areaConhecimento?: AreaConhecimento;
   expectedGradeEntries: number;
   completedGradeEntries: number;
   status: GradeEntryMonitoringDisciplineStatus;
@@ -44,8 +52,20 @@ export function validateGradeEntryMonitoringByDisciplineInput(input: SaveGradeEn
   if (![1, 2, 3, 4].includes(input.bimestre)) {
     throw new GradeEntryMonitoringDisciplineValidationError('Bimestre inválido — use um valor entre 1 e 4.');
   }
-  if (!DISCIPLINA_AREAS.includes(input.disciplina)) {
-    throw new GradeEntryMonitoringDisciplineValidationError('Disciplina/área inválida.');
+  const disciplinaNome = input.disciplinaNome.trim();
+  if (!disciplinaNome) {
+    throw new GradeEntryMonitoringDisciplineValidationError('Informe o nome da disciplina.');
+  }
+  if (disciplinaNome.length > MAX_DISCIPLINA_NOME_LENGTH) {
+    throw new GradeEntryMonitoringDisciplineValidationError(`Nome da disciplina muito longo — máximo de ${MAX_DISCIPLINA_NOME_LENGTH} caracteres.`);
+  }
+  // Um nome só de pontuação/símbolos (ex.: "???") normalizaria para uma
+  // chave vazia — nunca aceito, geraria um ID de documento malformado.
+  if (!normalizeDisciplinaId(disciplinaNome)) {
+    throw new GradeEntryMonitoringDisciplineValidationError('Informe um nome de disciplina válido (use letras ou números).');
+  }
+  if (input.areaConhecimento !== undefined && !AREA_CONHECIMENTO.includes(input.areaConhecimento)) {
+    throw new GradeEntryMonitoringDisciplineValidationError('Área de conhecimento inválida.');
   }
   if (!isNonNegativeInteger(input.expectedGradeEntries) || !isNonNegativeInteger(input.completedGradeEntries)) {
     throw new GradeEntryMonitoringDisciplineValidationError('Lançamentos esperados/realizados devem ser inteiros maiores ou iguais a zero.');
@@ -66,8 +86,10 @@ export function buildGradeEntryMonitoringByDisciplinePayload(
   existing?: GradeEntryMonitoringByDiscipline
 ): GradeEntryMonitoringByDiscipline {
   validateGradeEntryMonitoringByDisciplineInput(input);
+  const disciplinaNome = input.disciplinaNome.trim();
+  const disciplinaId = normalizeDisciplinaId(disciplinaNome);
   return {
-    id: buildGradeEntryMonitoringByDisciplineId(input.schoolId, input.anoLetivo, input.bimestre, input.turmaId, input.disciplina),
+    id: buildGradeEntryMonitoringByDisciplineId(input.schoolId, input.anoLetivo, input.bimestre, input.turmaId, disciplinaId),
     schoolId: input.schoolId,
     codInep: input.codInep,
     escolaNome: input.escolaNome,
@@ -75,7 +97,9 @@ export function buildGradeEntryMonitoringByDisciplinePayload(
     turmaNome: input.turmaNome,
     anoLetivo: input.anoLetivo,
     bimestre: input.bimestre,
-    disciplina: input.disciplina,
+    disciplinaId,
+    disciplinaNome,
+    ...(input.areaConhecimento ? { areaConhecimento: input.areaConhecimento } : {}),
     expectedGradeEntries: input.expectedGradeEntries,
     completedGradeEntries: input.completedGradeEntries,
     status: input.status,

@@ -10,11 +10,15 @@ import type { SourceSystem } from '../types/import';
 const COLLECTION = 'audit_logs';
 
 // "nome" isolado NÃO entra aqui de propósito (bloquearia campos de negócio
-// legítimos como turmaNome/escolaNome) — só nomeAluno, que é dado pessoal
-// de estudante, é bloqueado (ver revisão pós-PR #8, seção 11 do plano).
+// legítimos como turmaNome/escolaNome) — só nomeAluno/estudanteNome, que são
+// dado pessoal de estudante, são bloqueados (ver revisão pós-PR #8, seção 11
+// do plano; 'estudantenome' adicionado na correção final da reestruturação,
+// seção 2 — garante estruturalmente que o audit_log de arquivamento do
+// Farol do Estudante nunca inclui o nome do estudante, mesmo que um
+// chamador futuro esqueça de sanitizar o payload manualmente).
 const FORBIDDEN_KEY_FRAGMENTS = [
   'password', 'senha', 'token', 'credential', 'credencial', 'secret',
-  'matriculasige', 'idcenso', 'datanascimento', 'nascimento', 'nomealuno',
+  'matriculasige', 'idcenso', 'datanascimento', 'nascimento', 'nomealuno', 'estudantenome',
 ];
 
 export class AuditPayloadError extends Error {}
