@@ -4,7 +4,9 @@ import {
   FarolEstudanteValidationError,
   buildFarolArchiveAuditInput,
   buildFarolArchivePayload,
+  buildFarolCreateAuditInput,
   buildFarolEstudantePayload,
+  buildFarolUpdateAuditInput,
   validateFarolEstudanteInput,
   type SaveFarolEstudanteInput,
 } from '../src/lib/farolEstudanteService';
@@ -74,6 +76,28 @@ describe('validateFarolEstudanteInput', () => {
     expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '08/03/2026' }))).toThrow(FarolEstudanteValidationError);
   });
 
+  // Correção do code review do PR #19, seção 4: a checagem anterior só
+  // media o tamanho da string (10 caracteres) — datas com formato certo mas
+  // mês/dia fora de faixa, ou datas que não existem no calendário real,
+  // passavam batido.
+  it('rejeita mês fora de 01-12', () => {
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '2026-13-10' }))).toThrow(FarolEstudanteValidationError);
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '2026-00-10' }))).toThrow(FarolEstudanteValidationError);
+  });
+
+  it('rejeita 30 de fevereiro (data que não existe no calendário real, mesmo com formato correto)', () => {
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '2026-02-30' }))).toThrow(FarolEstudanteValidationError);
+  });
+
+  it('rejeita 31 de abril (mês de 30 dias)', () => {
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '2026-04-31' }))).toThrow(FarolEstudanteValidationError);
+  });
+
+  it('aceita 29 de fevereiro em ano bissexto; rejeita em ano não bissexto', () => {
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '2028-02-29' }))).not.toThrow();
+    expect(() => validateFarolEstudanteInput(baseInput({ referenceDate: '2026-02-29' }))).toThrow(FarolEstudanteValidationError);
+  });
+
   it('rejeita status de acompanhamento inválido', () => {
     expect(() => validateFarolEstudanteInput(baseInput({ status: 'Concluído' as SaveFarolEstudanteInput['status'] }))).toThrow(FarolEstudanteValidationError);
   });
@@ -123,6 +147,25 @@ describe('buildFarolEstudantePayload', () => {
     const editedAfterArchive = buildFarolEstudantePayload(baseInput({ percentualAcerto: 3 }), archived);
     expect(editedAfterArchive.statusRegistro).toBe('arquivado');
   });
+
+  // Correção do code review do PR #19, seção 3: turmaId/turmaNome nunca
+  // podem mudar por edição — firestore.rules já bloqueia isso no update,
+  // mas a validação aqui dá um erro claro na interface em vez de deixar a
+  // gravação falhar só no Firestore.
+  it('edição válida (mesma turma) é permitida', () => {
+    const existing = buildFarolEstudantePayload(baseInput());
+    expect(() => buildFarolEstudantePayload(baseInput({ percentualAcerto: 10 }), existing)).not.toThrow();
+  });
+
+  it('rejeita alteração de turmaId na edição', () => {
+    const existing = buildFarolEstudantePayload(baseInput());
+    expect(() => buildFarolEstudantePayload(baseInput({ turmaId: 'outra-turma' }), existing)).toThrow(FarolEstudanteValidationError);
+  });
+
+  it('rejeita alteração de turmaNome na edição, mesmo com turmaId igual', () => {
+    const existing = buildFarolEstudantePayload(baseInput());
+    expect(() => buildFarolEstudantePayload(baseInput({ turmaNome: '3º Ano B - Vespertino' }), existing)).toThrow(FarolEstudanteValidationError);
+  });
 });
 
 describe('buildFarolArchivePayload', () => {
@@ -144,24 +187,70 @@ describe('buildFarolArchiveAuditInput', () => {
 
   it('nunca inclui estudanteNome (nem qualquer variação de nome do estudante) no audit_log', () => {
     const archived = buildFarolArchivePayload(existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
-    const auditInput = buildFarolArchiveAuditInput(archived, existing.statusRegistro, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const auditInput = buildFarolArchiveAuditInput(archived, existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
     const serialized = JSON.stringify(auditInput);
     expect(serialized).not.toContain('Nome Sensível Do Estudante');
     expect(serialized.toLowerCase()).not.toContain('estudantenome');
   });
 
+  it('nunca inclui percentualAcerto nem observação no audit_log', () => {
+    const withObservacao = buildFarolEstudantePayload(baseInput({ observacao: 'Observação sensível sobre o estudante' }));
+    const archived = buildFarolArchivePayload(withObservacao, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const auditInput = buildFarolArchiveAuditInput(archived, withObservacao, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const serialized = JSON.stringify(auditInput);
+    expect(serialized).not.toContain('Observação sensível');
+    expect(serialized).not.toContain('percentualAcerto');
+  });
+
   it('operação registrada é "archive"', () => {
     const archived = buildFarolArchivePayload(existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
-    const auditInput = buildFarolArchiveAuditInput(archived, existing.statusRegistro, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const auditInput = buildFarolArchiveAuditInput(archived, existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
     expect(auditInput.operation).toBe('archive');
   });
 
-  it('newValue contém só identificadores não-nominais (turma, disciplina, bimestre, id do registro)', () => {
+  it('newValue contém só o resumo permitido (id, escola, turma, disciplina, ano, bimestre, status, statusRegistro) — statusRegistro reflete o arquivamento', () => {
     const archived = buildFarolArchivePayload(existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
-    const auditInput = buildFarolArchiveAuditInput(archived, existing.statusRegistro, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
+    const auditInput = buildFarolArchiveAuditInput(archived, existing, 'super.a@example.com', '2026-03-20T00:00:00.000Z');
     expect(auditInput.newValue).toEqual({
-      action: 'archive', itemId: archived.id, turmaId: archived.turmaId,
-      disciplina: archived.disciplina, bimestre: archived.bimestre,
+      itemId: archived.id, schoolId: archived.schoolId, turmaId: archived.turmaId,
+      disciplina: archived.disciplina, anoLetivo: archived.anoLetivo, bimestre: archived.bimestre,
+      status: archived.status, statusRegistro: 'arquivado',
     });
+    expect(auditInput.previousValue).toEqual({
+      itemId: existing.id, schoolId: existing.schoolId, turmaId: existing.turmaId,
+      disciplina: existing.disciplina, anoLetivo: existing.anoLetivo, bimestre: existing.bimestre,
+      status: existing.status, statusRegistro: 'ativo',
+    });
+  });
+});
+
+describe('buildFarolCreateAuditInput / buildFarolUpdateAuditInput', () => {
+  it('create: previousValue é null, newValue reflete o registro recém-criado', () => {
+    const created = buildFarolEstudantePayload(baseInput());
+    const auditInput = buildFarolCreateAuditInput(created, 'super.a@example.com', '2026-03-10T12:00:00.000Z');
+    expect(auditInput.operation).toBe('create');
+    expect(auditInput.previousValue).toBeNull();
+    expect(auditInput.newValue).toEqual({
+      itemId: created.id, schoolId: created.schoolId, turmaId: created.turmaId,
+      disciplina: created.disciplina, anoLetivo: created.anoLetivo, bimestre: created.bimestre,
+      status: created.status, statusRegistro: 'ativo',
+    });
+  });
+
+  it('create: nunca inclui estudanteNome nem percentualAcerto', () => {
+    const created = buildFarolEstudantePayload(baseInput({ estudanteNome: 'Nome Sensível Criação' }));
+    const auditInput = buildFarolCreateAuditInput(created, 'super.a@example.com', '2026-03-10T12:00:00.000Z');
+    const serialized = JSON.stringify(auditInput);
+    expect(serialized).not.toContain('Nome Sensível Criação');
+    expect(serialized).not.toContain('percentualAcerto');
+  });
+
+  it('update: previousValue/newValue refletem status antes/depois da edição', () => {
+    const existing = buildFarolEstudantePayload(baseInput({ status: 'Identificado' }));
+    const updated = buildFarolEstudantePayload(baseInput({ status: 'Em acompanhamento', now: '2026-03-15T00:00:00.000Z' }), existing);
+    const auditInput = buildFarolUpdateAuditInput(updated, existing, 'super.a@example.com', '2026-03-15T00:00:00.000Z');
+    expect(auditInput.operation).toBe('update');
+    expect((auditInput.previousValue as { status: string }).status).toBe('Identificado');
+    expect((auditInput.newValue as { status: string }).status).toBe('Em acompanhamento');
   });
 });

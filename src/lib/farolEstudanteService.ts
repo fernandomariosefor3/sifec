@@ -2,7 +2,7 @@
 // montagem do payload) separado da orquestração assíncrona, mesmo padrão de
 // gradeEntryMonitoringService.ts. Consulta sempre escopada por schoolId —
 // nunca a coleção inteira (mesmo cuidado de listGradeEntryMonitoringForSchool).
-import { collection, deleteDoc, doc, getDocs, query, setDoc, where, writeBatch } from 'firebase/firestore';
+import { collection, deleteDoc, doc, getDocs, query, where, writeBatch } from 'firebase/firestore';
 import { db } from './firebase';
 import { queueAuditLog, type RecordAuditLogInput } from './auditService';
 import type { Bimestre } from '../types/gradeEntryMonitoring';
@@ -19,8 +19,29 @@ const COLLECTION = 'farol_estudante';
 
 // YYYY-MM-DD — mesma checagem simples já usada para referenceDate em
 // gradeEntryMonitoringDisciplineService.ts (nunca aceita um Date bruto, para
-// nunca gravar um formato ambíguo de fuso horário).
-const REFERENCE_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+// nunca gravar um formato ambíguo de fuso horário). Correção do code review
+// do PR #19: a checagem anterior só media o TAMANHO da string (10
+// caracteres) — "2026-99-99" também tem 10 caracteres e passava. A regex
+// agora restringe mês (01-12) e dia (01-31) a faixas válidas, mesma regra
+// aplicada em firestore.rules.
+const REFERENCE_DATE_PATTERN = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+
+// A regex acima ainda aceita datas que não existem no calendário real (ex.:
+// 2026-02-30, mês de 30 dias em fevereiro) — só a faixa numérica de dia é
+// checada, nunca quantos dias o mês realmente tem. new Date(Date.UTC(...))
+// "rola" datas inválidas para o mês seguinte em vez de rejeitá-las (ex.:
+// 30/02 vira 02/03) — comparar os componentes de volta é o jeito confiável
+// de detectar esse rollover sem depender de nenhuma biblioteca de datas.
+function isValidCalendarDate(value: string): boolean {
+  if (!REFERENCE_DATE_PATTERN.test(value)) return false;
+  const [year, month, day] = value.split('-').map(Number);
+  const parsed = new Date(Date.UTC(year, month - 1, day));
+  return (
+    parsed.getUTCFullYear() === year &&
+    parsed.getUTCMonth() === month - 1 &&
+    parsed.getUTCDate() === day
+  );
+}
 
 export class FarolEstudanteValidationError extends Error {}
 
@@ -67,8 +88,8 @@ export function validateFarolEstudanteInput(input: SaveFarolEstudanteInput): voi
       `O percentual de acerto deve ser um número inteiro entre 0 e ${FAROL_ACERTO_LIMITE - 1} — esta listagem é exclusiva para estudantes abaixo de ${FAROL_ACERTO_LIMITE}%.`
     );
   }
-  if (!REFERENCE_DATE_PATTERN.test(input.referenceDate)) {
-    throw new FarolEstudanteValidationError('Informe a data de referência do relatório do SISEDU Analytics (AAAA-MM-DD).');
+  if (!isValidCalendarDate(input.referenceDate)) {
+    throw new FarolEstudanteValidationError('Informe uma data de referência válida do relatório do SISEDU Analytics (AAAA-MM-DD, dentro do calendário real).');
   }
   if (!FAROL_STATUS_ACOMPANHAMENTO.includes(input.status)) {
     throw new FarolEstudanteValidationError('Selecione um status de acompanhamento válido.');
@@ -79,11 +100,28 @@ export function buildFarolEstudanteId(): string {
   return crypto.randomUUID();
 }
 
+// Correção do code review do PR #19, seção 3: a turma de um registro
+// existente nunca pode mudar por edição — firestore.rules já bloqueia isso
+// no update (turmaId/turmaNome travados), mas validar aqui também dá um erro
+// claro na interface em vez de deixar a gravação falhar silenciosamente só
+// no Firestore. Transferir um estudante para outra turma exige criar um
+// novo registro e arquivar o anterior (ver archiveFarolEstudanteItem) —
+// nunca mudar a identidade dentro do mesmo documento.
+function assertTurmaImutavelNaEdicao(input: SaveFarolEstudanteInput, existing?: FarolEstudanteItem): void {
+  if (!existing) return;
+  if (existing.turmaId !== input.turmaId || existing.turmaNome !== input.turmaNome) {
+    throw new FarolEstudanteValidationError(
+      'Não é possível trocar a turma de um registro existente — arquive este registro e crie um novo na turma correta.'
+    );
+  }
+}
+
 export function buildFarolEstudantePayload(
   input: SaveFarolEstudanteInput,
   existing?: FarolEstudanteItem
 ): FarolEstudanteItem {
   validateFarolEstudanteInput(input);
+  assertTurmaImutavelNaEdicao(input, existing);
   return {
     id: existing?.id ?? input.id ?? buildFarolEstudanteId(),
     schoolId: input.schoolId,
@@ -111,12 +149,24 @@ export function buildFarolEstudantePayload(
   };
 }
 
+// Correção do code review do PR #19, seção 2: create/update passavam por
+// setDoc isolado, sem nenhum audit_log — só archiveFarolEstudanteItem era
+// auditado. Agora create e update também gravam documento + audit_log no
+// MESMO batch (atômico), mesmo padrão já usado pelo arquivamento.
 export async function saveFarolEstudanteItem(
   input: SaveFarolEstudanteInput,
   existing?: FarolEstudanteItem
 ): Promise<FarolEstudanteItem> {
   const payload = buildFarolEstudantePayload(input, existing);
-  await setDoc(doc(db, COLLECTION, payload.id), payload);
+  const batch = writeBatch(db);
+  batch.set(doc(db, COLLECTION, payload.id), payload);
+  queueAuditLog(
+    batch,
+    existing
+      ? buildFarolUpdateAuditInput(payload, existing, input.actingUserEmail, input.now)
+      : buildFarolCreateAuditInput(payload, input.actingUserEmail, input.now)
+  );
+  await batch.commit();
   return payload;
 }
 
@@ -167,35 +217,86 @@ export function buildFarolArchivePayload(
   };
 }
 
-// Núcleo puro do audit_log de arquivamento — newValue contém só
-// identificadores não-nominais (id do registro, turma, disciplina,
-// bimestre) — NUNCA estudanteNome nem qualquer dado pessoal do estudante.
-// Reforçado estruturalmente por assertNoSensitiveKeys em auditService.ts
-// (fragmento 'estudantenome' bloqueado), mas o formato já nasce sanitizado
-// aqui — a checagem em auditService.ts é uma segunda camada, não a única.
-export function buildFarolArchiveAuditInput(
-  archived: FarolEstudanteItem,
-  previousStatusRegistro: FarolStatusRegistro,
+// Resumo permitido no audit_log — só identificadores e status
+// não-nominais: NUNCA estudanteNome, percentualAcerto (individual) nem
+// observação (texto livre que pode conter dado do estudante). Reforçado
+// estruturalmente por assertNoSensitiveKeys em auditService.ts (fragmento
+// 'estudantenome' bloqueado), mas o formato já nasce sanitizado aqui — a
+// checagem em auditService.ts é uma segunda camada, não a única.
+export interface FarolAuditSummary {
+  itemId: string;
+  schoolId: string;
+  turmaId: string;
+  disciplina: string;
+  anoLetivo: number;
+  bimestre: Bimestre;
+  status: FarolStatusAcompanhamento;
+  statusRegistro: FarolStatusRegistro;
+}
+
+function buildFarolAuditSummary(item: FarolEstudanteItem): FarolAuditSummary {
+  return {
+    itemId: item.id,
+    schoolId: item.schoolId,
+    turmaId: item.turmaId,
+    disciplina: item.disciplina,
+    anoLetivo: item.anoLetivo,
+    bimestre: item.bimestre,
+    status: item.status,
+    statusRegistro: item.statusRegistro,
+  };
+}
+
+// Núcleo puro comum aos três audit_logs do Farol (create/update/archive) —
+// previousValue/newValue são sempre o mesmo resumo sanitizado, nunca o
+// item inteiro (que teria estudanteNome/percentualAcerto/observação).
+function buildFarolAuditInput(
+  operation: 'create' | 'update' | 'archive',
+  current: FarolEstudanteItem,
+  previous: FarolEstudanteItem | null,
   actingUserEmail: string,
   now: string
 ): RecordAuditLogInput {
   return {
     collectionName: COLLECTION,
-    documentId: archived.id,
-    schoolId: archived.schoolId,
-    codInep: archived.codInep,
-    anoLetivo: archived.anoLetivo,
-    operation: 'archive',
-    previousValue: { statusRegistro: previousStatusRegistro },
-    newValue: {
-      action: 'archive', itemId: archived.id, turmaId: archived.turmaId,
-      disciplina: archived.disciplina, bimestre: archived.bimestre,
-    },
+    documentId: current.id,
+    schoolId: current.schoolId,
+    codInep: current.codInep,
+    anoLetivo: current.anoLetivo,
+    operation,
+    previousValue: previous ? buildFarolAuditSummary(previous) : null,
+    newValue: buildFarolAuditSummary(current),
     source: 'Manual',
     userId: actingUserEmail,
     userEmail: actingUserEmail,
     now,
   };
+}
+
+export function buildFarolCreateAuditInput(
+  created: FarolEstudanteItem,
+  actingUserEmail: string,
+  now: string
+): RecordAuditLogInput {
+  return buildFarolAuditInput('create', created, null, actingUserEmail, now);
+}
+
+export function buildFarolUpdateAuditInput(
+  updated: FarolEstudanteItem,
+  previous: FarolEstudanteItem,
+  actingUserEmail: string,
+  now: string
+): RecordAuditLogInput {
+  return buildFarolAuditInput('update', updated, previous, actingUserEmail, now);
+}
+
+export function buildFarolArchiveAuditInput(
+  archived: FarolEstudanteItem,
+  previous: FarolEstudanteItem,
+  actingUserEmail: string,
+  now: string
+): RecordAuditLogInput {
+  return buildFarolAuditInput('archive', archived, previous, actingUserEmail, now);
 }
 
 // Arquivamento — o caminho normal para o superintendente comum "remover" um
@@ -209,7 +310,7 @@ export async function archiveFarolEstudanteItem(
   const archived = buildFarolArchivePayload(item, actingUserEmail, now);
   const batch = writeBatch(db);
   batch.set(doc(db, COLLECTION, archived.id), archived);
-  queueAuditLog(batch, buildFarolArchiveAuditInput(archived, item.statusRegistro, actingUserEmail, now));
+  queueAuditLog(batch, buildFarolArchiveAuditInput(archived, item, actingUserEmail, now));
   await batch.commit();
   return archived;
 }

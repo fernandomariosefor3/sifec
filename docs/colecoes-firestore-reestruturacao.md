@@ -54,7 +54,7 @@ Nenhuma coleção adicional além destas sete foi criada.
 - **Criação**: superintendente com acesso à escola; `isCanonicalSchoolMatch` + `isCanonicalTurmaOfSchoolYearAndName` (a turma referenciada precisa existir de fato); `sourceSystem` travado em `'SISEDU Analytics'`; `statusRegistro` restrito a `['ativo', 'arquivado']`
 - **Atualização**: mesmo superintendente; identidade (schoolId/codInep/escolaNome/turmaId/anoLetivo/bimestre/createdAt/createdBy) travada; cobre tanto edição normal quanto arquivamento (`statusRegistro: 'ativo' → 'arquivado'`)
 - **Exclusão**: **correção final da auditoria — só admin raiz** (`isPlatformAdmin()`), nunca o superintendente comum, nem o da própria escola. Antes desta correção, a regra permitia exclusão física por qualquer superintendente com acesso à escola — contrariava o requisito "exclusão bloqueada para usuário comum". O caminho normal para "remover da lista" passou a ser **arquivar** (update de `statusRegistro`), não excluir
-- **Auditoria**: `archiveFarolEstudanteItem` grava um `audit_log` (operação `'archive'`) no mesmo batch do arquivamento — `newValue` contém só `{ action, itemId, turmaId, disciplina, bimestre }`, **nunca `estudanteNome`** (reforçado estruturalmente por `assertNoSensitiveKeys` em `auditService.ts`, que bloqueia qualquer payload contendo a chave `estudantenome`)
+- **Auditoria**: correção do code review do PR #19 — `saveFarolEstudanteItem` (create/update) e `archiveFarolEstudanteItem` (archive) gravam TODOS um `audit_log` no mesmo `WriteBatch` do documento principal (atômico — falha no log impede a escrita do registro). `previousValue`/`newValue` contêm só o resumo sanitizado `{ itemId, schoolId, turmaId, disciplina, anoLetivo, bimestre, status, statusRegistro }` — **nunca `estudanteNome`, `percentualAcerto` ou `observacao`** (reforçado estruturalmente por `assertNoSensitiveKeys` em `auditService.ts`, que bloqueia qualquer payload contendo a chave `estudantenome`). Ver inventário completo de auditoria por serviço abaixo
 - **Índices necessários**: nenhum composto — filtros de igualdade (`schoolId`, `anoLetivo`)
 - **Preservação**: arquivamento nunca apaga o documento; a interface nunca mostra registros arquivados por padrão (exige filtro explícito "Mostrar arquivados")
 
@@ -138,6 +138,35 @@ Nenhuma coleção adicional além destas sete foi criada.
 - **Auditoria**: nenhum `audit_log` dedicado (mesma decisão de `grade_entry_monitoring` — o próprio documento, com `createdAt`/`updatedAt`/`createdBy`/`updatedBy`, já registra a trilha básica)
 - **Índices necessários**: nenhum composto — consultas usam só filtros de igualdade (`schoolId`, `anoLetivo`, `bimestre`)
 - **Preservação**: nunca migra nem apaga `grade_entry_monitoring`; consolidação por área (`consolidateGradeEntryMonitoringDisciplineByArea`) é sempre recalculada em tempo real a partir das disciplinas registradas, nunca persistida como percentual redundante em nenhum documento
+
+---
+
+## Inventário de auditoria por serviço (code review do PR #19)
+
+Levantamento explícito, coleção por coleção, de qual operação grava `audit_log` no serviço de
+verdade (`src/lib/*Service.ts`), **não só** o que `firestore.rules` permite/bloqueia — uma regra de
+segurança impede uma escrita indevida, mas não é, por si só, uma trilha de auditoria (não registra
+quem fez o quê, nem estado anterior/novo). "Não auditado" aqui nunca significa "inseguro" — as sete
+coleções continuam protegidas por `firestore.rules` (escopo de escola, imutabilidade de identidade,
+formato de shape) independentemente de terem ou não `audit_log` dedicado.
+
+| Coleção | Create auditado | Update auditado | Delete/Archive auditado | Justificativa |
+|---|---|---|---|---|
+| `farol_estudante` | **Sim** (`saveFarolEstudanteItem`, op. `create`) | **Sim** (`saveFarolEstudanteItem`, op. `update`) | **Sim** (`archiveFarolEstudanteItem`, op. `archive`) | Único dado NOMINAL desta reestruturação — todas as três operações auditadas atomicamente (documento + log no mesmo `WriteBatch`) desde a correção do PR #19. Exclusão física (`deleteFarolEstudanteItem`, só admin raiz) não é auditada — uso excepcional de manutenção, fora do fluxo normal de trabalho |
+| `bimonthly_enrollments` | Não | Não | Não | Cada documento já é, por si só, o histórico imutável de um bimestre específico (`schoolId_ano_bBimestre`) — uma correção de matrícula sobrescreve o mesmo documento, mas `createdAt`/`createdBy`/`updatedAt`/`updatedBy` no próprio documento já registram quem criou e quem corrigiu por último. Dado agregado (só um número), nunca nominal |
+| `recomposicao_planos` | Não | Não | Não | Formulário de texto livre institucional (prazo/área/turno/descrição), sem dado pessoal. Exclusão permitida ao superintendente da própria escola (lista de trabalho comum, não histórico imutável) — recomendação: se a exclusão de planos vier a alimentar indicadores do Parecer Bimestral de forma persistida (hoje não alimenta — é sempre lido em tempo real), reavaliar auditoria de delete nessa ocasião |
+| `cdg_planos` | Não | Não | Não | Um plano por escola+ano (`schoolId_ano`), sempre corrigido no mesmo documento — `createdAt`/`createdBy`/`updatedAt`/`updatedBy` já registram a trilha básica. Exclusão restrita ao admin raiz |
+| `cdg_tarefas` | Não | Não | Não | Lista de trabalho comum (ações/responsável/prazo/status), sem dado pessoal sensível — `responsavel` é cargo/pessoa da gestão administrativa, não estudante. Exclusão permitida ao superintendente da própria escola |
+| `parecer_bimestral_notas` | Não | Não | Não | Texto livre institucional (conclusão/encaminhamentos), sem dado pessoal — os outros 8 cards do Parecer são só LEITURA agregada de outras coleções, nunca duplicados nem persistidos aqui. Exclusão restrita ao admin raiz |
+| `grade_entry_monitoring_disciplina` | Não | Não | Não | Mesma decisão de design já aplicada a `grade_entry_monitoring` (coleção irmã, sem disciplina) — dado agregado (lançamentos esperados/realizados por turma+disciplina), nunca nominal. `createdAt`/`createdBy`/`updatedAt`/`updatedBy` no próprio documento já registram a trilha básica |
+
+**Recomendação para trabalho futuro** (fora do escopo desta correção — nenhuma das seis coleções
+abaixo teve sua documentação alterada para "auditado" sem implementação correspondente; a tabela
+acima já refletia a ausência antes desta revisão): se qualquer uma das seis coleções sem
+`audit_log` passar a alimentar um indicador **persistido** (hoje todos os indicadores dependentes
+delas — Parecer Bimestral, ranking de risco — são recalculados em tempo real na leitura, nunca
+gravados como valor derivado), adicionar `audit_log` no mesmo `WriteBatch` do documento principal,
+mesmo padrão já usado por `farol_estudante`/`school_flow_results`.
 
 ---
 

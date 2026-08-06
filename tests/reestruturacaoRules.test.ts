@@ -216,6 +216,122 @@ describe('Reestruturação SIFEC — farol_estudante', () => {
     await assertFails(getDocs(collection(ctxFor(ACTIVE_B_EMAIL).firestore(), 'farol_estudante')));
     await assertSucceeds(getDocs(query(collection(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante'), where('schoolId', '==', SCHOOL_A_ID))));
   });
+
+  // Correção do code review do PR #19, seção 3: a versão anterior travava
+  // só turmaId no update, deixando turmaNome livre para reescrita — um
+  // update podia manter o turmaId antigo mas trocar o nome exibido. Data de
+  // referência também endurecida (regex de calendário, não só tamanho).
+  describe('integridade canônica da turma no update', () => {
+    it('update válido (sem tocar na identidade da turma) é permitido', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
+      });
+      await assertSucceeds(
+        updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-1'), {
+          percentualAcerto: 10, updatedAt: '2026-03-12T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+
+    it('alteração de turmaId no update é rejeitada, mesmo para uma turma real da mesma escola', async () => {
+      const outraTurmaId = 'turma-outra-mesma-escola';
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
+        await setDoc(doc(context.firestore(), 'turmas', outraTurmaId), {
+          schoolId: SCHOOL_A_ID, escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A,
+          nome: 'Turma A - Teste', ano: '1º Ano', periodo: 'Tarde', alunosSinalizados: 0, anoLetivo: ANO_LETIVO,
+        });
+      });
+      await assertFails(
+        updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-1'), {
+          turmaId: outraTurmaId, updatedAt: '2026-03-12T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+
+    it('alteração de turmaNome no update é rejeitada, mesmo mantendo o turmaId original', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
+      });
+      await assertFails(
+        updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-1'), {
+          turmaNome: '3º Ano B - Vespertino', updatedAt: '2026-03-12T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+
+    it('arquivamento válido (statusRegistro) continua permitido depois do endurecimento da integridade de turma', async () => {
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'farol_estudante', 'farol-1'), payload());
+      });
+      await assertSucceeds(
+        updateDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-1'), {
+          statusRegistro: 'arquivado', updatedAt: '2026-03-20T00:00:00.000Z', updatedBy: ACTIVE_A_EMAIL,
+        })
+      );
+    });
+  });
+
+  describe('integridade canônica da turma na criação', () => {
+    it('nome semelhante, mas não idêntico ao nome real da turma, é rejeitado', async () => {
+      await assertFails(
+        setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-nome-parecido'), payload({
+          id: 'farol-nome-parecido', turmaNome: 'Turma A -Teste',
+        }))
+      );
+    });
+
+    it('turma real, mas de outro ano letivo, é rejeitada', async () => {
+      const turmaOutroAnoId = 'turma-outro-ano-farol';
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'turmas', turmaOutroAnoId), {
+          schoolId: SCHOOL_A_ID, escolaId: SCHOOL_A_ID, escolaNome: ESCOLA_A,
+          nome: 'Turma Ano Anterior', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0, anoLetivo: ANO_LETIVO - 1,
+        });
+      });
+      await assertFails(
+        setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-outro-ano'), payload({
+          id: 'farol-outro-ano', turmaId: turmaOutroAnoId, turmaNome: 'Turma Ano Anterior',
+        }))
+      );
+    });
+
+    it('turma real, mas de outra escola, é rejeitada', async () => {
+      const turmaOutraEscolaId = 'turma-outra-escola-farol';
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'turmas', turmaOutraEscolaId), {
+          schoolId: SCHOOL_B_ID, escolaId: SCHOOL_B_ID, escolaNome: ESCOLA_B,
+          nome: 'Turma Escola B', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0, anoLetivo: ANO_LETIVO,
+        });
+      });
+      await assertFails(
+        setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-outra-escola'), payload({
+          id: 'farol-outra-escola', turmaId: turmaOutraEscolaId, turmaNome: 'Turma Escola B',
+        }))
+      );
+    });
+  });
+
+  // Correção do code review do PR #19, seção 4: a checagem anterior só
+  // media o tamanho da string (10 caracteres) — "2026-99-99" também tinha
+  // 10 caracteres e passava.
+  describe('validação da data de referência', () => {
+    it('formato correto (AAAA-MM-DD) é aceito', async () => {
+      await assertSucceeds(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-data-ok'), payload({ id: 'farol-data-ok', referenceDate: '2026-03-08' })));
+    });
+
+    it('mês fora de 01-12 é rejeitado, mesmo com 10 caracteres', async () => {
+      await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-data-mes'), payload({ id: 'farol-data-mes', referenceDate: '2026-99-10' })));
+    });
+
+    it('dia fora de 01-31 é rejeitado, mesmo com 10 caracteres', async () => {
+      await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-data-dia'), payload({ id: 'farol-data-dia', referenceDate: '2026-03-99' })));
+    });
+
+    it('formato diferente de AAAA-MM-DD (com barras) é rejeitado', async () => {
+      await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'farol_estudante', 'farol-data-formato'), payload({ id: 'farol-data-formato', referenceDate: '08/03/2026' })));
+    });
+  });
 });
 
 describe('Reestruturação SIFEC — recomposicao_planos', () => {
@@ -452,5 +568,164 @@ describe('Reestruturação SIFEC — grade_entry_monitoring_disciplina', () => {
     });
     await assertFails(deleteDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id)));
     await assertSucceeds(deleteDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id)));
+  });
+
+  // Correção do code review do PR #19, seção 5: entryId é uma chave
+  // composta (schoolId_ano_bBimestre_turmaId_disciplinaId) que pode
+  // ultrapassar 128 caracteres mesmo com cada componente dentro do próprio
+  // limite — isValidId() rejeitaria isso incorretamente. isValidGradeDisciplineCompositeId
+  // usa um teto mais alto (512), mas nunca deixa de exigir igualdade exata
+  // com a chave composta nem aceita caracteres inseguros.
+  describe('isValidGradeDisciplineCompositeId — ID composto longo', () => {
+    it('ID comum (curto) continua permitido', async () => {
+      const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_matematica`;
+      await assertSucceeds(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ id })));
+    });
+
+    it('combinação próxima do tamanho máximo permitido (schoolId/turmaId longos) é aceita', async () => {
+      const longSchoolId = 'escola-' + 'a'.repeat(110); // <= 128
+      const longTurmaId = 'turma-' + 'b'.repeat(110); // <= 128
+      const id = `${longSchoolId}_${ANO_LETIVO}_b1_${longTurmaId}_matematica`;
+      expect(id.length).toBeLessThanOrEqual(512);
+      expect(id.length).toBeGreaterThan(128);
+      await testEnv.withSecurityRulesDisabled(async (context) => {
+        await setDoc(doc(context.firestore(), 'schools', longSchoolId), {
+          nome: 'Escola Longa - Teste', codInep: '00000699', cidade: 'Fortaleza',
+          matriculas: 100, idebMedio: 6.0, metaIdeb: 6.5, status: 'Ativo',
+        });
+        await setDoc(doc(context.firestore(), 'turmas', longTurmaId), {
+          schoolId: longSchoolId, escolaId: longSchoolId, escolaNome: 'Escola Longa - Teste',
+          nome: 'Turma Longa - Teste', ano: '1º Ano', periodo: 'Manhã', alunosSinalizados: 0, anoLetivo: ANO_LETIVO,
+        });
+        await setDoc(doc(context.firestore(), 'superintendentes', 'super.longa@example.com'), {
+          id: 'super-longa', nome: 'Superintendente Longa (Teste)', cargo: 'Superintendente Regional',
+          email: 'super.longa@example.com', escolas: ['Escola Longa - Teste'], ativo: true, role: 'superintendent',
+        });
+      });
+      await assertSucceeds(
+        setDoc(
+          doc(ctxFor('super.longa@example.com').firestore(), 'grade_entry_monitoring_disciplina', id),
+          payload({
+            id, schoolId: longSchoolId, codInep: '00000699', escolaNome: 'Escola Longa - Teste',
+            turmaId: longTurmaId, turmaNome: 'Turma Longa - Teste',
+          })
+        )
+      );
+    });
+
+    it('ID maior que o limite conservador (512) é rejeitado', async () => {
+      const hugeId = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_` + 'x'.repeat(500);
+      expect(hugeId.length).toBeGreaterThan(512);
+      await assertFails(
+        setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', hugeId), payload({ id: hugeId, disciplinaId: 'x'.repeat(500) }))
+      );
+    });
+
+    // Um "/" literal é estruturalmente impossível num ID de documento do
+    // Firestore (é separador de caminho — o próprio SDK cliente trataria
+    // como sub-caminho, não como parte do ID). O charset de
+    // isValidGradeDisciplineCompositeId (`^[a-zA-Z0-9_\-]+$`) bloqueia TODO
+    // caractere fora de letras/dígitos/underscore/hífen — incluindo `.`,
+    // que por si só já torna `..` (path traversal) estruturalmente
+    // impossível. Este teste prova essa restrição de charset com um `.`.
+    it('caractere de path (`.`) no disciplinaId torna o ID inválido — rejeitado', async () => {
+      const idComPonto = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_mate.matica`;
+      await assertFails(
+        setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', idComPonto), payload({ id: idComPonto, disciplinaId: 'mate.matica' }))
+      );
+    });
+
+    it('ID divergente da chave composta continua rejeitado mesmo dentro do novo limite de tamanho', async () => {
+      const id = `${SCHOOL_A_ID}_${ANO_LETIVO}_b1_${TURMA_A_ID}_disciplina-errada`;
+      await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'grade_entry_monitoring_disciplina', id), payload({ id, disciplinaId: 'matematica' })));
+    });
+  });
+});
+
+describe('Reestruturação SIFEC — audit_logs das sete coleções novas', () => {
+  // Correção do code review do PR #19, seção 1: isSchoolScopedAuditCollection
+  // não incluía nenhuma das sete coleções novas — um audit_log dessas
+  // coleções só precisava de isAuthorized() (qualquer superintendente
+  // cadastrado e ativo, de QUALQUER escola), nunca exigindo schoolId/codInep
+  // válidos nem acesso de escrita àquela escola específica.
+  const NEW_COLLECTIONS = [
+    'bimonthly_enrollments', 'farol_estudante', 'recomposicao_planos',
+    'cdg_planos', 'cdg_tarefas', 'parecer_bimestral_notas', 'grade_entry_monitoring_disciplina',
+  ];
+
+  function auditPayload(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'log-1',
+      collectionName: 'farol_estudante',
+      documentId: 'doc-1',
+      schoolId: SCHOOL_A_ID,
+      codInep: '00000601',
+      anoLetivo: ANO_LETIVO,
+      operation: 'create',
+      previousValue: null,
+      newValue: { itemId: 'doc-1' },
+      source: 'Manual',
+      userId: ACTIVE_A_EMAIL,
+      userEmail: ACTIVE_A_EMAIL,
+      timestamp: '2026-03-10T00:00:00.000Z',
+      ...overrides,
+    };
+  }
+
+  it('superintendente da Escola A cria log da Escola A, para cada uma das sete coleções — helper protege igualmente todas', async () => {
+    for (const collectionName of NEW_COLLECTIONS) {
+      await assertSucceeds(
+        setDoc(
+          doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'audit_logs', `log-ok-${collectionName}`),
+          auditPayload({ collectionName })
+        )
+      );
+    }
+  });
+
+  it('não cria log da Escola B (schoolId de outra escola), para cada uma das sete coleções', async () => {
+    for (const collectionName of NEW_COLLECTIONS) {
+      await assertFails(
+        setDoc(
+          doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'audit_logs', `log-outra-escola-${collectionName}`),
+          auditPayload({ collectionName, schoolId: SCHOOL_B_ID, codInep: '00000602' })
+        )
+      );
+    }
+  });
+
+  it('não cria log com schoolId inexistente', async () => {
+    await assertFails(
+      setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'audit_logs', 'log-schoolid-inexistente'), auditPayload({ schoolId: 'escola-fantasma' }))
+    );
+  });
+
+  it('não cria log com codInep divergente do real da escola', async () => {
+    await assertFails(
+      setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'audit_logs', 'log-codinep-divergente'), auditPayload({ codInep: '99999999' }))
+    );
+  });
+
+  it('administrador raiz cria log válido para qualquer escola', async () => {
+    await assertSucceeds(
+      setDoc(doc(ctxFor(ADMIN_EMAIL).firestore(), 'audit_logs', 'log-admin'), auditPayload({ userId: ADMIN_EMAIL, userEmail: ADMIN_EMAIL }))
+    );
+  });
+
+  it('usuário não autorizado (não cadastrado) não cria log', async () => {
+    await assertFails(
+      setDoc(doc(ctxFor(STRANGER_EMAIL).firestore(), 'audit_logs', 'log-estranho'), auditPayload({ userId: STRANGER_EMAIL, userEmail: STRANGER_EMAIL }))
+    );
+  });
+
+  it('log escolar sem schoolId, ou sem codInep, é rejeitado', async () => {
+    const fullPayload = auditPayload();
+    const semSchoolId: Record<string, unknown> = { ...fullPayload };
+    delete semSchoolId.schoolId;
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'audit_logs', 'log-sem-schoolid'), semSchoolId));
+
+    const semCodInep: Record<string, unknown> = { ...fullPayload };
+    delete semCodInep.codInep;
+    await assertFails(setDoc(doc(ctxFor(ACTIVE_A_EMAIL).firestore(), 'audit_logs', 'log-sem-codinep'), semCodInep));
   });
 });

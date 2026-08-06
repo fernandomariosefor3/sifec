@@ -155,6 +155,25 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Correção do code review do PR #19: o ID de
+    // grade_entry_monitoring_disciplina é uma chave composta —
+    // schoolId + '_' + anoLetivo + '_b' + bimestre + '_' + turmaId + '_' +
+    // disciplinaId — cuja soma pode ultrapassar 128 caracteres mesmo com
+    // cada componente dentro do próprio limite (schoolId até 128, turmaId
+    // até 128, disciplinaId até 100 — soma máxima teórica ~365). isValidId()
+    // NUNCA é alterado globalmente (usado por todas as outras coleções com
+    // ID simples, cujo limite de 128 continua correto para elas); este
+    // helper é específico desta coleção, com um teto mais alto mas ainda
+    // conservador (512 — folga sobre os ~365 do pior caso real, longe de
+    // qualquer valor perigoso) e o MESMO formato seguro de isValidId (sem
+    // barra, sem ponto, sem espaço — `..`/path traversal são
+    // estruturalmente impossíveis, o charset nem inclui `.` ou `/`). A
+    // igualdade exata entre o ID e a chave composta continua sendo validada
+    // à parte, em isValidGradeEntryMonitoringDisciplineShape.
+    function isValidGradeDisciplineCompositeId(id) {
+      return id is string && id.size() > 0 && id.size() <= 512 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     // Documentos de `superintendentes` são identificados por e-mail (contém
     // "@" e "."), então precisam de um formato de ID diferente de isValidId().
     function isValidEmailId(id) {
@@ -212,10 +231,22 @@ service cloud.firestore {
     // pós-PR #8, seção 11 do plano) — todo log dessas coleções exige
     // schoolId/codInep válidos e acesso à escola; logs de outras coleções
     // (ex.: superintendentes) não são "escolares" e não exigem escola.
+    //
+    // Correção do code review do PR #19: as sete coleções novas da
+    // reestruturação (bimonthly_enrollments, farol_estudante,
+    // recomposicao_planos, cdg_planos, cdg_tarefas, parecer_bimestral_notas,
+    // grade_entry_monitoring_disciplina) faltavam aqui — um audit_log dessas
+    // coleções não exigia schoolId/codInep válidos nem acesso de escrita à
+    // escola, só isAuthorized() (qualquer superintendente cadastrado e
+    // ativo, de qualquer escola). Mesma lacuna que a revisão pós-PR #8 já
+    // havia fechado para as coleções mais antigas.
     function isSchoolScopedAuditCollection(collectionName) {
       return collectionName in [
         'school_years', 'enrollment_snapshots', 'turmas', 'schools', 'imports',
-        'school_flow_results', 'grade_entry_monitoring'
+        'school_flow_results', 'grade_entry_monitoring',
+        'bimonthly_enrollments', 'farol_estudante', 'recomposicao_planos',
+        'cdg_planos', 'cdg_tarefas', 'parecer_bimestral_notas',
+        'grade_entry_monitoring_disciplina'
       ];
     }
 
@@ -1008,7 +1039,16 @@ service cloud.firestore {
         // Fonte sempre fixa 'SISEDU Analytics' — nunca outra origem (nunca
         // afirma sincronização automática, ver farolEstudante.ts).
         data.sourceSystem == 'SISEDU Analytics' &&
-        data.referenceDate is string && data.referenceDate.size() == 10 &&
+        // Correção do code review do PR #19: a checagem anterior só media o
+        // tamanho da string (10 caracteres) — "99/99/9999" ou "2026-99-99"
+        // também tinham 10 caracteres e passavam. Regex exige dígitos nas
+        // posições certas e mês/dia em faixas válidas (mas não valida
+        // calendário real, ex.: 2026-02-30 — isso fica na camada
+        // TypeScript, ver REFERENCE_DATE_PATTERN + validação de data real em
+        // farolEstudanteService.ts, já que a linguagem de regras do
+        // Firestore não tem aritmética de calendário).
+        data.referenceDate is string &&
+        data.referenceDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$') &&
         data.status in ['Identificado', 'Em acompanhamento', 'Superado'] &&
         // Correção final da auditoria, seção 2: statusRegistro é o campo de
         // arquivamento (nunca reaproveita `status`, que é o status de
@@ -1029,14 +1069,30 @@ service cloud.firestore {
       // update cobre tanto edição normal quanto arquivamento (statusRegistro
       // 'ativo' -> 'arquivado') — o superintendente da escola nunca precisa
       // de `delete` para "remover" um registro da lista de trabalho.
+      //
+      // Correção do code review do PR #19: a versão anterior travava só
+      // turmaId, não turmaNome — um update podia manter o turmaId antigo mas
+      // reescrever turmaNome livremente, quebrando a integridade entre os
+      // dois campos (o mesmo turmaId passaria a exibir um nome de turma
+      // diferente do real). turmaNome agora é imutável no update, igual a
+      // turmaId/schoolId/codInep/escolaNome/anoLetivo/bimestre. A
+      // integridade canônica é reconferida com isCanonicalTurmaOfSchoolYearAndName
+      // (não só reafirmada por igualdade com o valor anterior) para o caso
+      // do documento de `turmas` ter mudado de nome depois da criação deste
+      // registro — nunca aceitar silenciosamente uma combinação turmaId/
+      // turmaNome que não bate mais com a turma real. Transferir um
+      // estudante para outra turma exige criar um novo registro e arquivar
+      // o anterior — nunca mudar a identidade dentro do mesmo documento.
       allow update: if isValidId(itemId) &&
         canWriteEscola(resource.data.escolaNome) &&
         incoming().schoolId == resource.data.schoolId &&
         incoming().codInep == resource.data.codInep &&
         incoming().escolaNome == resource.data.escolaNome &&
         incoming().turmaId == resource.data.turmaId &&
+        incoming().turmaNome == resource.data.turmaNome &&
         incoming().anoLetivo == resource.data.anoLetivo &&
         incoming().bimestre == resource.data.bimestre &&
+        isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
         incoming().createdAt == resource.data.createdAt &&
         incoming().createdBy == resource.data.createdBy &&
         isValidFarolEstudanteShape(itemId);
@@ -1267,7 +1323,10 @@ service cloud.firestore {
 
     match /grade_entry_monitoring_disciplina/{entryId} {
       allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
-      allow create: if isValidId(entryId) &&
+      // isValidId(entryId) trocado por isValidGradeDisciplineCompositeId
+      // (correção do code review do PR #19) — entryId é uma chave composta
+      // que pode ultrapassar 128 caracteres; ver comentário da função.
+      allow create: if isValidGradeDisciplineCompositeId(entryId) &&
         canWriteEscola(incoming().escolaNome) &&
         isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
         isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
@@ -1277,7 +1336,7 @@ service cloud.firestore {
       // disciplinaId/disciplinaNome, que travam junto com turmaId/turmaNome
       // abaixo, mesmo princípio de identidade imutável pós-criação já usado
       // nas demais coleções desta reestruturação).
-      allow update: if isValidId(entryId) &&
+      allow update: if isValidGradeDisciplineCompositeId(entryId) &&
         canWriteEscola(resource.data.escolaNome) &&
         incoming().schoolId == resource.data.schoolId &&
         incoming().codInep == resource.data.codInep &&
@@ -1291,7 +1350,7 @@ service cloud.firestore {
         incoming().createdAt == resource.data.createdAt &&
         incoming().createdBy == resource.data.createdBy &&
         isValidGradeEntryMonitoringDisciplineShape(entryId);
-      allow delete: if isPlatformAdmin() && isValidId(entryId);
+      allow delete: if isPlatformAdmin() && isValidGradeDisciplineCompositeId(entryId);
     }
 
     // --- Fase 2A: imports ---
