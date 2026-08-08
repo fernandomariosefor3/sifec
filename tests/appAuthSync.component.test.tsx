@@ -42,6 +42,12 @@ vi.mock('../src/lib/firebase', () => ({
 
 vi.mock('../src/lib/firebaseService', () => ({
   SEED_SCHOOLS: [],
+  // App.tsx assina `schools` do Firestore (hotfix: cabeçalho lê contagem real
+  // em vez de SEED_SCHOOLS) — precisa existir aqui ou o efeito que a chama
+  // quebra o render. O fluxo de autenticação testado neste arquivo não
+  // depende dos dados de escolas, então o stub só devolve um unsubscribe
+  // no-op sem nunca invocar o callback.
+  subscribeToCollection: () => () => {},
 }));
 
 vi.mock('../src/lib/superintendentService', () => ({
