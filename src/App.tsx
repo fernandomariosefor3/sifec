@@ -48,7 +48,7 @@ import {
   isScopedAdmin,
   AdminSchoolScope
 } from './lib/superintendentService';
-import { SEED_SCHOOLS } from './lib/firebaseService';
+import { SEED_SCHOOLS, subscribeToCollection } from './lib/firebaseService';
 
 // SEED_SCHOOLS mirrors the real `schools` collection's full universe of
 // names (it's also what seeds that collection on first run) — used here as
@@ -91,6 +91,27 @@ export default function App() {
   const [superintendents, setSuperintendents] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [adminScope, setAdminScopeState] = useState<AdminSchoolScope>(getAdminSchoolScope());
+
+  // Escolas reais da coleção `schools`. Antes desta correção o cabeçalho
+  // computava countSchools/countMatriculas direto de SEED_SCHOOLS — o array
+  // semeado, fixo no código — enquanto a tabela de Gestão de Escolas já lia
+  // o Firestore. Resultado: os dois números divergiam na mesma tela (o topo
+  // mostrava a matrícula semeada de 3.045 enquanto a soma real era outra).
+  // Mesmo padrão de assinatura já usado em EscolasView: cai de volta para
+  // SEED_SCHOOLS enquanto não há usuário autenticado (sem sessão, as regras
+  // do Firestore não permitem ler `schools`, então não há o que assinar).
+  const [liveSchools, setLiveSchools] = useState<any[]>(SEED_SCHOOLS as any);
+
+  React.useEffect(() => {
+    if (!currentUser) {
+      setLiveSchools(SEED_SCHOOLS as any);
+      return;
+    }
+    const unsub = subscribeToCollection('schools', (loaded) => {
+      if (loaded.length > 0) setLiveSchools(loaded);
+    });
+    return () => unsub();
+  }, [currentUser]);
 
   // Estados explícitos de autenticação (hotfix estabilização, seção 3) — o
   // login Google falhava/ficava inconsistente e os erros só apareciam no
@@ -235,7 +256,7 @@ export default function App() {
   const activeSuper = activeSuperByFind || (superintendents.length > 0 ? superintendents[0] : null);
   const schoolsToCompute = getSchoolsForCurrentScope({
     superintendent: activeSuper,
-    allSchools: SEED_SCHOOLS,
+    allSchools: liveSchools,
     isAuthenticated: !!currentUser,
     adminScope,
   });
@@ -353,10 +374,17 @@ export default function App() {
 
           {/* Sidebar — fixa em desktop (col-span-3), menu off-canvas em mobile.
               No mobile o drawer abre com backdrop e trava scroll do body.
-              Largura máxima 260px no mobile para não cobrir toda a tela. */}
+              Largura máxima 260px no mobile para não cobrir toda a tela.
+
+              `bg-white` vem ANTES do gradiente de propósito: o gradiente começa
+              em from-brand-green-light/80, ou seja, 80% de opacidade. Como em
+              telas < lg esta nav é um drawer `fixed` sobreposto ao conteúdo, o
+              texto de trás vazava visivelmente através do topo translúcido. A
+              base branca opaca corrige isso sem alterar a cor percebida do
+              gradiente (em lg a nav é estática e o problema não aparecia). */}
           <nav
             aria-label="Navegação principal"
-            className={`fixed inset-y-0 left-0 z-50 w-[min(260px,85vw)] overflow-y-auto bg-gradient-to-b from-brand-green-light/80 via-white to-white border-r border-brand-green/20 p-3 flex flex-col gap-1
+            className={`fixed inset-y-0 left-0 z-50 w-[min(260px,85vw)] overflow-y-auto bg-white bg-gradient-to-b from-brand-green-light/80 via-white to-white border-r border-brand-green/20 p-3 flex flex-col gap-1
               transform transition-transform duration-200 shadow-xl lg:shadow-none
               lg:static lg:z-auto lg:col-span-3 lg:w-auto lg:translate-x-0 lg:border lg:rounded-2xl lg:self-start lg:max-h-[calc(100vh-6rem)]
               ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
