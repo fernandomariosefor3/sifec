@@ -73,7 +73,12 @@ const shouldShowCanonicalHostNotice = isGithubPagesHostname(window.location.host
 export default function App() {
   const [activeTab, setActiveTab] = React.useState<TabType>('escolas');
   const [isDevOpen, setIsDevOpen] = useState(false);
-  // Sidebar responsiva: off-canvas em telas < lg, sempre visível em desktop.
+  // Sidebar responsiva: off-canvas em telas < md, sempre visível em desktop.
+  // Breakpoint em md (768px, não lg/1024px) porque em notebooks comuns a
+  // largura efetiva da viewport (zoom, escala do Windows, barra de rolagem)
+  // fica abaixo de 1024px com frequência — nesse ponto a sidebar ficava presa
+  // no estado fixed/off-canvas e sobrepunha o conteúdo em vez de virar coluna
+  // estática do grid.
   // Quando aberta no mobile, o scroll do body é bloqueado para evitar que o
   // conteúdo role por trás do overlay.
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -314,7 +319,7 @@ export default function App() {
                 type="button"
                 onClick={() => setIsSidebarOpen(true)}
                 aria-label="Abrir menu de navegação"
-                className="lg:hidden shrink-0 p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
+                className="md:hidden shrink-0 p-2 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50"
               >
                 <Menu size={18} />
               </button>
@@ -361,12 +366,12 @@ export default function App() {
         </header>
 
         {/* 2. Corpo principal — navegação + conteúdo da aba ativa */}
-        <section className="max-w-[1400px] mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 lg:grid-cols-12 gap-6">
+        <section className="max-w-[1400px] mx-auto px-4 sm:px-6 py-6 grid grid-cols-1 md:grid-cols-12 gap-6">
 
-          {/* Backdrop do menu responsivo (só em telas < lg, só quando aberto) */}
+          {/* Backdrop do menu responsivo (só em telas < md, só quando aberto) */}
           {isSidebarOpen && (
             <div
-              className="fixed inset-0 z-40 bg-slate-950/50 lg:hidden"
+              className="fixed inset-0 z-40 bg-slate-950/50 md:hidden"
               onClick={() => setIsSidebarOpen(false)}
               aria-hidden="true"
             />
@@ -378,18 +383,18 @@ export default function App() {
 
               `bg-white` vem ANTES do gradiente de propósito: o gradiente começa
               em from-brand-green-light/80, ou seja, 80% de opacidade. Como em
-              telas < lg esta nav é um drawer `fixed` sobreposto ao conteúdo, o
+              telas < md esta nav é um drawer `fixed` sobreposto ao conteúdo, o
               texto de trás vazava visivelmente através do topo translúcido. A
               base branca opaca corrige isso sem alterar a cor percebida do
-              gradiente (em lg a nav é estática e o problema não aparecia). */}
+              gradiente (em md a nav é estática e o problema não aparecia). */}
           <nav
             aria-label="Navegação principal"
             className={`fixed inset-y-0 left-0 z-50 w-[min(260px,85vw)] overflow-y-auto bg-white bg-gradient-to-b from-brand-green-light/80 via-white to-white border-r border-brand-green/20 p-3 flex flex-col gap-1
-              transform transition-transform duration-200 shadow-xl lg:shadow-none
-              lg:static lg:z-auto lg:col-span-3 lg:w-auto lg:translate-x-0 lg:border lg:rounded-2xl lg:self-start lg:max-h-[calc(100vh-6rem)]
+              transform transition-transform duration-200 shadow-xl md:shadow-none
+              md:static md:z-auto md:col-span-3 md:w-auto md:translate-x-0 md:border md:rounded-2xl md:self-start md:max-h-[calc(100vh-6rem)]
               ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
           >
-            <div className="flex items-center justify-between lg:hidden mb-1 px-1">
+            <div className="flex items-center justify-between md:hidden mb-1 px-1">
               <span className="text-label uppercase text-slate-400">Menu</span>
               <button
                 type="button"
@@ -563,7 +568,7 @@ export default function App() {
           </nav>
 
           {/* Área de conteúdo — topo com as 4 cores da marca, corpo neutro */}
-          <div className="lg:col-span-9 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+          <div className="md:col-span-9 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
             <div className="h-[3px] w-full flex shrink-0">
               <div className="bg-brand-green flex-[2] h-full" />
               <div className="bg-brand-turquoise flex-[3] h-full" />
