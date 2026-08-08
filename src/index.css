@@ -1,13 +1,53 @@
 @import "tailwindcss";
 
+/* Nova identidade visual do SIFEC — "painel de inteligência e
+   acompanhamento escolar". Paleta reduzida e semântica: verde/turquesa
+   institucionais para identidade, âmbar só para atenção, vermelho/coral só
+   para risco/crítico — nunca decorativos. Ver docs/design-system-sifec.md. */
 @theme {
   --color-brand-turquoise: #26b2b7;
   --color-brand-orange: #ff9111;
   --color-brand-coral: #e04022;
   --color-brand-green: #008249;
-  
+
   --color-brand-turquoise-dark: #1b8d91;
   --color-brand-orange-dark: #d47405;
   --color-brand-coral-dark: #b82e14;
   --color-brand-green-dark: #006034;
+
+  /* Semânticos de status — um único significado cada, nunca decorativos. */
+  --color-status-ok: #059669;
+  --color-status-ok-bg: #ecfdf5;
+  --color-status-ok-border: #a7f3d0;
+
+  --color-status-attention: #b45309;
+  --color-status-attention-bg: #fffbeb;
+  --color-status-attention-border: #fde68a;
+
+  --color-status-critical: #be123c;
+  --color-status-critical-bg: #fff1f2;
+  --color-status-critical-border: #fecdd3;
+
+  --color-status-info: #0e7490;
+  --color-status-info-bg: #ecfeff;
+  --color-status-info-border: #a5f3fc;
+
+  --color-status-neutral: #475569;
+  --color-status-neutral-bg: #f8fafc;
+  --color-status-neutral-border: #e2e8f0;
+}
+
+/* Hierarquia tipográfica consistente (seção 16 da nova identidade visual) —
+   usada via classes utilitárias abaixo em vez de tamanhos soltos (9px,
+   uppercase+tracking-widest em toda parte). Mantém Tailwind como base;
+   estas classes só fixam a ESCALA, sem impor cor. */
+.text-page-title { font-size: 1.375rem; line-height: 1.75rem; font-weight: 800; letter-spacing: -0.01em; }
+.text-section-title { font-size: 0.9375rem; line-height: 1.25rem; font-weight: 700; }
+.text-card-title { font-size: 0.8125rem; line-height: 1.1rem; font-weight: 700; }
+.text-label { font-size: 0.6875rem; line-height: 1rem; font-weight: 700; letter-spacing: 0.02em; }
+.text-body { font-size: 0.8125rem; line-height: 1.2rem; font-weight: 500; }
+.text-caption { font-size: 0.6875rem; line-height: 0.95rem; font-weight: 500; }
+
+@media print {
+  .print\:hidden { display: none !important; }
 }

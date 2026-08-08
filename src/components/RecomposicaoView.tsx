@@ -6,6 +6,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertTriangle, Award, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
+import PageHeader from './ui/PageHeader';
+import ContextBar from './ui/ContextBar';
+import Badge from './ui/Badge';
+import StateMessage from './ui/StateMessage';
+import SurfaceCard from './ui/SurfaceCard';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
   getSuperintendents,
@@ -186,95 +191,95 @@ export default function RecomposicaoView() {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-        <div>
-          <span className="text-[10px] text-brand-coral tracking-wider uppercase font-black font-mono">SEFOR 3 — RECOMPOSIÇÃO DE APRENDIZAGENS</span>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Recomposição</h2>
-          <p className="text-xs text-slate-500 font-normal max-w-2xl">
-            Registro livre do plano próprio de recomposição de cada escola — prazos, áreas/disciplinas, turnos e descrição.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap md:justify-end">
-          <span className="text-[10px] text-slate-500 font-mono font-bold uppercase bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
-            {getSchoolScopeLabel({ superintendent: activeSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: isFirebaseMode, adminScope })}
-          </span>
-          <select value={selectedSchoolId} onChange={e => setSelectedSchoolId(e.target.value)} aria-label="Escola"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs font-bold rounded-xl max-w-[220px]">
-            <option value="">Selecione a escola</option>
-            {visibleSchools.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-          </select>
-          <select value={anoLetivo} onChange={e => setAnoLetivo(Number(e.target.value))} aria-label="Ano letivo"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs font-bold rounded-xl">
-            {anoLetivoOptions.map(ano => <option key={ano} value={ano}>{ano}</option>)}
-          </select>
-          <select value={bimestre} onChange={e => setBimestre(Number(e.target.value) as Bimestre)} aria-label="Bimestre"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs font-bold rounded-xl">
-            <option value={1}>1º Bimestre</option>
-            <option value={2}>2º Bimestre</option>
-            <option value={3}>3º Bimestre</option>
-            <option value={4}>4º Bimestre</option>
-          </select>
-        </div>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="SEFOR 3 — Recomposição de aprendizagens"
+        title="Recomposição"
+        description="Plano próprio de recomposição de cada escola — prazos, áreas/disciplinas, turnos e descrição."
+        actions={
+          selectedSchool && canWrite && isFirebaseMode ? (
+            <button type="button" onClick={openCreate}
+              className="py-2 px-3.5 bg-brand-coral hover:bg-brand-coral/90 text-white rounded-lg text-[13px] font-bold flex items-center gap-1.5 transition shadow-sm shrink-0">
+              <Plus size={14} /> Registrar plano
+            </button>
+          ) : undefined
+        }
+        context={
+          <ContextBar>
+            <span className="text-caption text-slate-500 font-bold uppercase">
+              {getSchoolScopeLabel({ superintendent: activeSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: isFirebaseMode, adminScope })}
+            </span>
+            <select value={selectedSchoolId} onChange={e => setSelectedSchoolId(e.target.value)} aria-label="Escola"
+              className="py-1 px-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs font-bold rounded-lg max-w-[220px]">
+              <option value="">Selecione a escola</option>
+              {visibleSchools.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
+            </select>
+            <select value={anoLetivo} onChange={e => setAnoLetivo(Number(e.target.value))} aria-label="Ano letivo"
+              className="py-1 px-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs font-bold rounded-lg">
+              {anoLetivoOptions.map(ano => <option key={ano} value={ano}>{ano}</option>)}
+            </select>
+            <select value={bimestre} onChange={e => setBimestre(Number(e.target.value) as Bimestre)} aria-label="Bimestre"
+              className="py-1 px-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs font-bold rounded-lg">
+              <option value={1}>1º Bimestre</option>
+              <option value={2}>2º Bimestre</option>
+              <option value={3}>3º Bimestre</option>
+              <option value={4}>4º Bimestre</option>
+            </select>
+          </ContextBar>
+        }
+      />
 
       {!selectedSchool ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
-          Selecione uma escola para ver os planos de recomposição.
-        </div>
+        <StateMessage kind="empty" title="Selecione uma escola para ver os planos de recomposição." />
       ) : (
         <>
-          {canWrite && isFirebaseMode && (
-            <div className="flex justify-end">
-              <button type="button" onClick={openCreate}
-                className="py-1.5 px-3 bg-brand-coral hover:bg-brand-coral/90 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm">
-                <Plus size={14} /> Registrar plano
-              </button>
-            </div>
-          )}
-
           {loadError && (
-            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-              <span>{loadError}</span>
-              <button type="button" onClick={() => setReloadTick(t => t + 1)}
-                className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0">
-                Tentar novamente
-              </button>
-            </div>
+            <StateMessage
+              kind="error"
+              title={loadError}
+              compact
+              action={
+                <button type="button" onClick={() => setReloadTick(t => t + 1)}
+                  className="px-3 py-1.5 bg-white border border-status-critical-border hover:bg-status-critical-bg rounded-lg text-[11px] font-bold text-status-critical transition">
+                  Tentar novamente
+                </button>
+              }
+            />
           )}
 
           {loading ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">Carregando...</div>
+            <StateMessage kind="loading" title="Carregando..." />
           ) : planos.length === 0 ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
-              Nenhum plano de recomposição registrado para este bimestre.
-            </div>
+            <StateMessage kind="nodata" title="Nenhum plano de recomposição registrado para este bimestre." />
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {planos.map(plan => (
-                <div key={plan.id} className="bg-white border border-slate-200 rounded-2xl p-4 space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-1.5 text-brand-coral font-black text-xs">
-                      <Award size={14} /> {plan.areaDisciplina}
-                    </div>
-                    {canWrite && isFirebaseMode && (
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => openEdit(plan)} className="p-1 hover:bg-slate-100 hover:text-blue-700 text-slate-400 rounded-md transition" title="Editar">
-                          <Pencil size={12} />
-                        </button>
-                        <button onClick={() => handleDelete(plan)} className="p-1 hover:bg-slate-100 hover:text-rose-600 text-slate-400 rounded-md transition" title="Remover">
-                          <Trash2 size={12} />
-                        </button>
+            <div>
+              <h3 className="text-section-title text-slate-700 mb-2">Plano atual</h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {planos.map(plan => (
+                  <SurfaceCard key={plan.id} className="space-y-2">
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="flex items-center gap-1.5 text-brand-coral font-extrabold text-[13px]">
+                        <Award size={14} /> {plan.areaDisciplina}
                       </div>
-                    )}
-                  </div>
-                  <div className="flex flex-wrap gap-2 text-[10px] font-bold">
-                    <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-600">Turno: {plan.turno}</span>
-                    <span className="px-2 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-600">Prazo: {plan.prazo}</span>
-                  </div>
-                  <p className="text-[11px] text-slate-600 leading-relaxed whitespace-pre-wrap">{plan.descricao}</p>
-                </div>
-              ))}
+                      {canWrite && isFirebaseMode && (
+                        <div className="flex items-center gap-1">
+                          <button onClick={() => openEdit(plan)} className="p-1 hover:bg-slate-100 hover:text-blue-700 text-slate-400 rounded-md transition" title="Editar">
+                            <Pencil size={12} />
+                          </button>
+                          <button onClick={() => handleDelete(plan)} className="p-1 hover:bg-slate-100 hover:text-rose-600 text-slate-400 rounded-md transition" title="Remover">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-1.5">
+                      <Badge tone="neutral">Turno: {plan.turno}</Badge>
+                      <Badge tone="neutral">Prazo: {plan.prazo}</Badge>
+                    </div>
+                    <p className="text-caption text-slate-600 leading-relaxed whitespace-pre-wrap">{plan.descricao}</p>
+                  </SurfaceCard>
+                ))}
+              </div>
             </div>
           )}
         </>
@@ -296,26 +301,26 @@ export default function RecomposicaoView() {
                 </div>
               )}
               <div className="space-y-1">
-                <label htmlFor="recomp-prazo" className="text-[9px] font-black uppercase text-slate-600 block">Prazo</label>
+                <label htmlFor="recomp-prazo" className="text-label uppercase text-slate-600 block">Prazo</label>
                 <input id="recomp-prazo" type="text" placeholder="Ex.: até o fim do 2º bimestre" value={draft.prazo}
                   onChange={e => setDraft({ ...draft, prazo: e.target.value })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs rounded-lg" />
               </div>
               <div className="space-y-1">
-                <label htmlFor="recomp-area" className="text-[9px] font-black uppercase text-slate-600 block">Área / Disciplina</label>
+                <label htmlFor="recomp-area" className="text-label uppercase text-slate-600 block">Área / Disciplina</label>
                 <input id="recomp-area" type="text" placeholder="Ex.: Língua Portuguesa e Matemática" value={draft.areaDisciplina}
                   onChange={e => setDraft({ ...draft, areaDisciplina: e.target.value })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs rounded-lg" />
               </div>
               <div className="space-y-1">
-                <label htmlFor="recomp-turno" className="text-[9px] font-black uppercase text-slate-600 block">Turno</label>
+                <label htmlFor="recomp-turno" className="text-label uppercase text-slate-600 block">Turno</label>
                 <select id="recomp-turno" value={draft.turno} onChange={e => setDraft({ ...draft, turno: e.target.value as RecomposicaoTurno })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs rounded-lg font-bold">
                   {RECOMPOSICAO_TURNOS.map(t => <option key={t} value={t}>{t}</option>)}
                 </select>
               </div>
               <div className="space-y-1">
-                <label htmlFor="recomp-descricao" className="text-[9px] font-black uppercase text-slate-600 block">Descrição do plano</label>
+                <label htmlFor="recomp-descricao" className="text-label uppercase text-slate-600 block">Descrição do plano</label>
                 <textarea id="recomp-descricao" value={draft.descricao} onChange={e => setDraft({ ...draft, descricao: e.target.value })} rows={5} maxLength={2000}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-coral text-xs rounded-lg" />
               </div>

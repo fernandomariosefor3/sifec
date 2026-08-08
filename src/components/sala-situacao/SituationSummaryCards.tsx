@@ -23,24 +23,27 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
     escolasComFontesIndisponiveis,
   } = summary;
 
+  // Nova identidade visual — paleta reduzida e semântica (seção 1): neutro
+  // para indicadores informativos, âmbar só para atenção real, vermelho só
+  // para o que precisa de ação — nunca uma cor decorativa por cartão.
   const cards = [
     {
       label: 'Escolas acompanhadas', icon: <GraduationCap size={16} />,
       value: escolasAcompanhadas,
       detail: `${escolasComAnoConfigurado} com ano letivo configurado`,
-      accent: 'border-brand-turquoise/20 bg-brand-turquoise/10 text-brand-turquoise',
+      accent: 'neutral',
     },
     {
       label: 'Turmas ativas', icon: <LayoutGrid size={16} />,
       value: turmasAtivas,
       detail: `${matriculaAtual.toLocaleString('pt-BR')} matrículas atuais`,
-      accent: 'border-emerald-200 bg-emerald-50 text-emerald-700',
+      accent: 'neutral',
     },
     {
       label: 'Registro mensal em dia', icon: <CalendarCheck size={16} />,
       value: escolasComRegistroMensalEmDia,
       detail: `de ${escolasAcompanhadas} escola(s)`,
-      accent: 'border-sky-200 bg-sky-50 text-sky-700',
+      accent: 'neutral',
     },
     {
       // Revisão do code review do PR #17, seção 5: percentual ponderado
@@ -52,19 +55,19 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
       detail: percentualPreenchimentoNotas == null
         ? 'Nenhuma escola com dado calculável'
         : `ponderado — ${escolasComNotasConsideradas} escola(s) consideradas`,
-      accent: 'border-violet-200 bg-violet-50 text-violet-700',
+      accent: 'neutral',
     },
     {
       label: 'Fluxo informado', icon: <FileCheck2 size={16} />,
       value: escolasComFluxoInformado,
       detail: `de ${escolasAcompanhadas} escola(s)`,
-      accent: 'border-amber-200 bg-amber-50 text-amber-700',
+      accent: 'neutral',
     },
     {
       label: 'Escolas com pendências', icon: <AlertTriangle size={16} />,
       value: escolasComPendencias,
       detail: `de ${escolasAcompanhadas} escola(s)`,
-      accent: 'border-rose-200 bg-rose-50 text-rose-700',
+      accent: 'attention',
     },
     {
       // Revisão do code review do PR #16, seção 9: quantas escolas do
@@ -76,24 +79,30 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
       detail: escolasComFontesIndisponiveis === 0
         ? 'nenhuma escola com falha de leitura'
         : `de ${escolasAcompanhadas} escola(s) com dados parcialmente indisponíveis`,
-      accent: 'border-orange-200 bg-orange-50 text-orange-700',
+      accent: escolasComFontesIndisponiveis === 0 ? 'neutral' : 'critical',
     },
-  ];
+  ] as const;
+
+  const ACCENT_CLASSES: Record<'neutral' | 'attention' | 'critical', string> = {
+    neutral: 'text-slate-500 bg-slate-100',
+    attention: 'text-status-attention bg-status-attention-bg',
+    critical: 'text-status-critical bg-status-critical-bg',
+  };
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {cards.map(card => (
-        <div key={card.label} className={`bg-white border rounded-2xl p-5 shadow-sm ${card.accent.split(' ')[0]}`}>
+        <div key={card.label} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
           <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">{card.label}</span>
-            <span className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${card.accent.split(' ').slice(1).join(' ')}`}>
+            <span className="text-label uppercase text-slate-400">{card.label}</span>
+            <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[card.accent]}`}>
               {card.icon}
             </span>
           </div>
-          <div className="text-2xl font-extrabold text-slate-900 font-mono mt-2">
+          <div className="text-xl font-extrabold text-slate-900 mt-2">
             {loading ? '—' : card.value}
           </div>
-          <p className="text-[11px] text-slate-500 font-bold mt-1">{loading ? '' : card.detail}</p>
+          <p className="text-caption text-slate-500 font-semibold mt-1">{loading ? '' : card.detail}</p>
         </div>
       ))}
     </div>

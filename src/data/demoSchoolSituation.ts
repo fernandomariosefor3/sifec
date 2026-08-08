@@ -83,7 +83,7 @@ function buildDemoSituation(
         type: 'turmas_com_preenchimento_parcial', schoolId,
         message: '2 turma(s) com relatório de notas incompleto.',
         period: null, sourceCollection: 'grade_entry_monitoring',
-        resolutionAction: 'Completar o lançamento de notas em Notas Bimestrais.',
+        resolutionAction: 'Completar o lançamento de notas em Acompanhamento de Notas.',
       }]
     : [{
         type: 'ano_letivo_nao_configurado', schoolId,

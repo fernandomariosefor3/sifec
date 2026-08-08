@@ -77,6 +77,6 @@ describe('NotasView — sem painel manual de conexão Firebase (Fase 2C removeu 
     vi.stubEnv('PROD', true);
     render(<NotasView />);
 
-    expect(screen.getByText('Notas Bimestrais')).toBeInTheDocument();
+    expect(screen.getByText('Acompanhamento de Notas')).toBeInTheDocument();
   });
 });

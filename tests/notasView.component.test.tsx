@@ -730,9 +730,9 @@ describe('NotasView', () => {
       await selectSchool('EEM Diva Cabral');
 
       // Escola selecionada, mas grade_entry_monitoring ainda está pendente
-      // (nunca resolvido) — a tabela mostra "Carregando..." e o botão não
-      // pode aparecer até AMBAS as fontes terminarem com sucesso.
-      await waitFor(() => expect(screen.getByText('Carregando...')).toBeInTheDocument());
+      // (nunca resolvido) — a tabela mostra "Carregando turmas..." e o
+      // botão não pode aparecer até AMBAS as fontes terminarem com sucesso.
+      await waitFor(() => expect(screen.getByText('Carregando turmas...')).toBeInTheDocument());
       expect(screen.queryByRole('button', { name: /Registrar relatório do SIGE/ })).not.toBeInTheDocument();
 
       await act(async () => { resolveMonitoring([]); });

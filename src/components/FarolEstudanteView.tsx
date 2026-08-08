@@ -12,6 +12,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Archive, AlertTriangle, Lock, Pencil, Plus, ShieldAlert, X } from 'lucide-react';
 import { auth } from '../lib/firebase';
+import PageHeader from './ui/PageHeader';
+import ContextBar from './ui/ContextBar';
+import Badge from './ui/Badge';
+import StateMessage from './ui/StateMessage';
+import SurfaceCard from './ui/SurfaceCard';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
   getSuperintendents,
@@ -248,56 +253,74 @@ export default function FarolEstudanteView() {
     setReloadTick(t => t + 1);
   }
 
-  return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-        <div>
-          <span className="text-[10px] text-brand-orange tracking-wider uppercase font-black font-mono">SEFOR 3 — ACOMPANHAMENTO PEDAGÓGICO</span>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Alunos com Baixo Desempenho (Farol do Estudante)</h2>
-          <p className="text-xs text-slate-500 font-normal max-w-2xl">
-            Listagem nominal, por turma e disciplina, de estudantes com percentual de acerto abaixo de {FAROL_ACERTO_LIMITE}% no SISEDU Analytics.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap md:justify-end">
-          <span className="text-[10px] text-slate-500 font-mono font-bold uppercase bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
-            {getSchoolScopeLabel({ superintendent: activeSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: isFirebaseMode, adminScope })}
-          </span>
-          <select value={selectedSchoolId} onChange={e => setSelectedSchoolId(e.target.value)} aria-label="Escola"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-xl max-w-[220px]">
-            <option value="">Selecione a escola</option>
-            {visibleSchools.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-          </select>
-          <select value={anoLetivo} onChange={e => setAnoLetivo(Number(e.target.value))} aria-label="Ano letivo"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-xl">
-            {anoLetivoOptions.map(ano => <option key={ano} value={ano}>{ano}</option>)}
-          </select>
-          <select value={bimestre} onChange={e => setBimestre(Number(e.target.value) as Bimestre)} aria-label="Bimestre"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-xl">
-            <option value={1}>1º Bimestre</option>
-            <option value={2}>2º Bimestre</option>
-            <option value={3}>3º Bimestre</option>
-            <option value={4}>4º Bimestre</option>
-          </select>
-        </div>
-      </div>
+  const activeCount = items.filter(i => i.statusRegistro !== 'arquivado').length;
+  const archivedCount = items.length - activeCount;
 
-      <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-2.5 text-[11px] text-rose-700 flex items-center gap-2 font-bold">
-        <ShieldAlert size={16} className="shrink-0" />
-        <span>
-          Informação administrativa sensível — uso interno da equipe pedagógica. Nunca exportar publicamente nem compartilhar fora do SIFEC.
-        </span>
-      </div>
+  return (
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="Farol do Estudante"
+        title="Alunos com Baixo Desempenho"
+        description={`Estudantes com percentual de acerto abaixo de ${FAROL_ACERTO_LIMITE}% no SISEDU Analytics, por turma e disciplina.`}
+        actions={selectedSchool && canWrite && isFirebaseMode ? (
+          <button type="button" onClick={openCreate}
+            className="py-2 px-3.5 bg-brand-orange hover:bg-brand-orange/90 text-white rounded-lg text-[13px] font-bold flex items-center gap-1.5 transition shadow-sm">
+            <Plus size={15} /> Adicionar acompanhamento
+          </button>
+        ) : undefined}
+        context={
+          <ContextBar>
+            <span className="text-caption font-bold text-slate-400 uppercase pr-1">
+              {getSchoolScopeLabel({ superintendent: activeSuper, allSchoolNames: ALL_SCHOOL_NAMES, isAuthenticated: isFirebaseMode, adminScope })}
+            </span>
+            <select value={selectedSchoolId} onChange={e => setSelectedSchoolId(e.target.value)} aria-label="Escola"
+              className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-lg max-w-[220px]">
+              <option value="">Selecione a escola</option>
+              {visibleSchools.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
+            </select>
+            <select value={anoLetivo} onChange={e => setAnoLetivo(Number(e.target.value))} aria-label="Ano letivo"
+              className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-lg">
+              {anoLetivoOptions.map(ano => <option key={ano} value={ano}>{ano}</option>)}
+            </select>
+            <select value={bimestre} onChange={e => setBimestre(Number(e.target.value) as Bimestre)} aria-label="Bimestre"
+              className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-lg">
+              <option value={1}>1º Bimestre</option>
+              <option value={2}>2º Bimestre</option>
+              <option value={3}>3º Bimestre</option>
+              <option value={4}>4º Bimestre</option>
+            </select>
+            <Badge tone="neutral" icon={<Lock size={11} />}>Dado nominal — acesso restrito</Badge>
+          </ContextBar>
+        }
+      />
 
       {!selectedSchool ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
-          Selecione uma escola para carregar a listagem.
-        </div>
+        <StateMessage kind="empty" title="Selecione uma escola para carregar a listagem." />
       ) : (
         <>
+          {/* Nova identidade visual, seção 10: resumo agregado antes da
+              lista nominal — nunca alarmista, só contagem factual. */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <SurfaceCard padding="sm">
+              <div className="text-label uppercase text-slate-400">Em acompanhamento</div>
+              <div className="text-xl font-extrabold text-slate-900 mt-0.5">{activeCount}</div>
+            </SurfaceCard>
+            <SurfaceCard padding="sm">
+              <div className="text-label uppercase text-slate-400">Arquivados</div>
+              <div className="text-xl font-extrabold text-slate-900 mt-0.5">{archivedCount}</div>
+            </SurfaceCard>
+            <SurfaceCard padding="sm" className="col-span-2 sm:col-span-2 flex items-center gap-2.5">
+              <ShieldAlert size={16} className="text-slate-400 shrink-0" />
+              <p className="text-caption text-slate-500 leading-snug">
+                Uso interno da equipe pedagógica — nunca exportar publicamente nem compartilhar fora do SIFEC.
+              </p>
+            </SurfaceCard>
+          </div>
+
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap">
               <select value={turmaFilter} onChange={e => setTurmaFilter(e.target.value)} aria-label="Filtrar turma"
-                className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-xl">
+                className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs font-bold rounded-lg">
                 <option value="todas">Todas as turmas</option>
                 {turmasDaEscola.map(t => <option key={t.id} value={t.id}>{t.nome}</option>)}
               </select>
@@ -307,42 +330,37 @@ export default function FarolEstudanteView() {
                 Mostrar arquivados
               </label>
             </div>
-            {canWrite && isFirebaseMode && (
-              <button type="button" onClick={openCreate}
-                className="py-1.5 px-3 bg-brand-orange hover:bg-brand-orange/90 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm">
-                <Plus size={14} /> Registrar estudante
-              </button>
-            )}
           </div>
 
           {archiveMessage && (
-            <div className="bg-emerald-50 border border-emerald-200 rounded-xl px-4 py-2.5 text-[11px] text-emerald-700 font-bold flex items-center gap-2">
-              <Archive size={14} className="shrink-0" />
-              <span>{archiveMessage}</span>
-            </div>
+            <StateMessage kind="success" title={archiveMessage} compact />
           )}
 
           {loadError && (
-            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-              <span>{loadError}</span>
-              <button type="button" onClick={() => setReloadTick(t => t + 1)}
-                className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0">
-                Tentar novamente
-              </button>
-            </div>
+            <StateMessage
+              kind="error"
+              title={loadError}
+              compact
+              action={
+                <button type="button" onClick={() => setReloadTick(t => t + 1)}
+                  className="px-3 py-1.5 bg-white border border-status-critical-border hover:bg-status-critical-bg rounded-lg text-[11px] font-bold text-status-critical transition">
+                  Tentar novamente
+                </button>
+              }
+            />
           )}
 
-          <div className="border border-slate-200 rounded-xl overflow-hidden">
+          <div className="border border-slate-200 rounded-xl overflow-hidden overflow-x-auto">
             <table className="w-full text-left text-[11px] border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wide">
-                  <th className="py-2 px-3">Estudante</th>
                   <th className="py-2 px-3">Turma</th>
+                  <th className="py-2 px-3">Estudante</th>
                   <th className="py-2 px-3">Disciplina</th>
-                  <th className="py-2 px-3 text-right">% Acerto</th>
-                  <th className="py-2 px-3">Fonte</th>
-                  <th className="py-2 px-3">Data de referência</th>
+                  <th className="py-2 px-3 text-right">Percentual</th>
                   <th className="py-2 px-3">Status</th>
+                  <th className="py-2 px-3">Data de referência</th>
+                  <th className="py-2 px-3">Fonte</th>
                   <th className="py-2 px-3">Observação</th>
                   {canWrite && isFirebaseMode && <th className="py-2 px-3 text-right">Ações</th>}
                 </tr>
@@ -351,28 +369,28 @@ export default function FarolEstudanteView() {
                 {loading || turmasLoading ? (
                   <tr><td colSpan={9} className="py-8 text-center text-slate-400">Carregando...</td></tr>
                 ) : turmasStatus === 'failure' ? (
-                  <tr><td colSpan={9} className="py-8 text-center text-rose-500 font-bold">Não foi possível carregar as turmas desta escola.</td></tr>
+                  <tr><td colSpan={9} className="py-8 text-center text-status-critical font-bold">Não foi possível carregar as turmas desta escola.</td></tr>
                 ) : visibleItems.length === 0 ? (
                   <tr><td colSpan={9} className="py-8 text-center text-slate-400">Nenhum estudante registrado para este filtro.</td></tr>
                 ) : (
                   visibleItems.map(item => (
                     <tr key={item.id} className={item.statusRegistro === 'arquivado' ? 'opacity-60' : ''}>
+                      <td className="py-2 px-3">{item.turmaNome}</td>
                       <td className="py-2 px-3 font-bold text-slate-800">
                         <div className="flex items-center gap-1.5">
                           <span>{item.estudanteNome}</span>
                           {item.statusRegistro === 'arquivado' && (
-                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-slate-100 border border-slate-200 text-slate-500 text-[9px] font-bold uppercase">
-                              Arquivado
-                            </span>
+                            <Badge tone="neutral" className="text-[9px] px-1.5 py-0">Arquivado</Badge>
                           )}
                         </div>
                       </td>
-                      <td className="py-2 px-3">{item.turmaNome}</td>
                       <td className="py-2 px-3">{item.disciplina}</td>
-                      <td className="py-2 px-3 text-right font-mono font-bold text-rose-600">{item.percentualAcerto}%</td>
-                      <td className="py-2 px-3 text-slate-500">{item.sourceSystem}</td>
-                      <td className="py-2 px-3 font-mono text-slate-500">{item.referenceDate}</td>
+                      <td className="py-2 px-3 text-right">
+                        <Badge tone="critical">{item.percentualAcerto}%</Badge>
+                      </td>
                       <td className="py-2 px-3 text-slate-600">{item.status}</td>
+                      <td className="py-2 px-3 font-mono text-slate-500">{item.referenceDate}</td>
+                      <td className="py-2 px-3 text-slate-500">{item.sourceSystem}</td>
                       <td className="py-2 px-3 text-slate-500">{item.observacao ?? '—'}</td>
                       {canWrite && isFirebaseMode && (
                         <td className="py-2 px-3 text-right">
@@ -413,7 +431,7 @@ export default function FarolEstudanteView() {
                 </div>
               )}
               <div className="space-y-1">
-                <label htmlFor="farol-turma" className="text-[9px] font-black uppercase text-slate-600 block">Turma</label>
+                <label htmlFor="farol-turma" className="text-label uppercase text-slate-600 block">Turma</label>
                 <select id="farol-turma" value={draft.turmaId} onChange={e => setDraft({ ...draft, turmaId: e.target.value })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg font-bold">
                   <option value="">Selecione…</option>
@@ -421,17 +439,17 @@ export default function FarolEstudanteView() {
                 </select>
               </div>
               <div className="space-y-1">
-                <label htmlFor="farol-disciplina" className="text-[9px] font-black uppercase text-slate-600 block">Disciplina</label>
+                <label htmlFor="farol-disciplina" className="text-label uppercase text-slate-600 block">Disciplina</label>
                 <input id="farol-disciplina" type="text" value={draft.disciplina} onChange={e => setDraft({ ...draft, disciplina: e.target.value })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg" />
               </div>
               <div className="space-y-1">
-                <label htmlFor="farol-nome" className="text-[9px] font-black uppercase text-slate-600 block">Nome do estudante</label>
+                <label htmlFor="farol-nome" className="text-label uppercase text-slate-600 block">Nome do estudante</label>
                 <input id="farol-nome" type="text" value={draft.estudanteNome} onChange={e => setDraft({ ...draft, estudanteNome: e.target.value })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg" />
               </div>
               <div className="space-y-1">
-                <label htmlFor="farol-percentual" className="text-[9px] font-black uppercase text-slate-600 block">
+                <label htmlFor="farol-percentual" className="text-label uppercase text-slate-600 block">
                   % de acerto (SISEDU Analytics) — abaixo de {FAROL_ACERTO_LIMITE}%
                 </label>
                 <input id="farol-percentual" type="number" inputMode="numeric" min={0} max={FAROL_ACERTO_LIMITE - 1}
@@ -439,7 +457,7 @@ export default function FarolEstudanteView() {
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg font-mono" />
               </div>
               <div className="space-y-1">
-                <label htmlFor="farol-referencia" className="text-[9px] font-black uppercase text-slate-600 block">Data de referência do relatório SISEDU Analytics</label>
+                <label htmlFor="farol-referencia" className="text-label uppercase text-slate-600 block">Data de referência do relatório SISEDU Analytics</label>
                 <input id="farol-referencia" type="date" value={draft.referenceDate} onChange={e => setDraft({ ...draft, referenceDate: e.target.value })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg font-mono" />
                 <p className="text-[9px] text-slate-400">
@@ -447,14 +465,14 @@ export default function FarolEstudanteView() {
                 </p>
               </div>
               <div className="space-y-1">
-                <label htmlFor="farol-status" className="text-[9px] font-black uppercase text-slate-600 block">Status de acompanhamento</label>
+                <label htmlFor="farol-status" className="text-label uppercase text-slate-600 block">Status de acompanhamento</label>
                 <select id="farol-status" value={draft.status} onChange={e => setDraft({ ...draft, status: e.target.value as FarolStatusAcompanhamento })}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg font-bold">
                   {FAROL_STATUS_ACOMPANHAMENTO.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
               </div>
               <div className="space-y-1">
-                <label htmlFor="farol-observacao" className="text-[9px] font-black uppercase text-slate-600 block">Observação (opcional)</label>
+                <label htmlFor="farol-observacao" className="text-label uppercase text-slate-600 block">Observação (opcional)</label>
                 <textarea id="farol-observacao" value={draft.observacao} onChange={e => setDraft({ ...draft, observacao: e.target.value })} rows={2} maxLength={500}
                   className="w-full p-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-orange text-xs rounded-lg" />
               </div>

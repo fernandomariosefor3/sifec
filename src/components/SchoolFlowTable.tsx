@@ -5,6 +5,7 @@
 import { ClipboardList } from 'lucide-react';
 import { calculateTotalResultados, calculateSchoolFlowPercentuais } from '../lib/schoolFlowCalculations';
 import type { SchoolFlowResult } from '../types/schoolFlow';
+import Badge, { type BadgeTone } from './ui/Badge';
 
 interface SchoolLike {
   id: string;
@@ -27,10 +28,10 @@ const STATUS_LABELS: Record<FlowStatusDisplay, string> = {
   confirmado: 'Confirmado',
 };
 
-const STATUS_BADGE_CLASSES: Record<FlowStatusDisplay, string> = {
-  nao_informado: 'bg-slate-100 border-slate-200 text-slate-500',
-  rascunho: 'bg-amber-50 border-amber-200 text-amber-700',
-  confirmado: 'bg-emerald-50 border-emerald-200 text-emerald-700',
+const STATUS_TONES: Record<FlowStatusDisplay, BadgeTone> = {
+  nao_informado: 'neutral',
+  rascunho: 'attention',
+  confirmado: 'ok',
 };
 
 export default function SchoolFlowTable({ schools, results, loading, onPreencherFluxo }: SchoolFlowTableProps) {
@@ -39,7 +40,7 @@ export default function SchoolFlowTable({ schools, results, loading, onPreencher
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs border-collapse">
           <thead>
-            <tr className="bg-slate-50/70 border-b border-slate-200 text-slate-550 font-bold uppercase tracking-wider text-[10px]">
+            <tr className="bg-slate-50/70 border-b border-slate-200 text-label uppercase text-slate-500">
               <th className="py-3.5 px-6">Escola</th>
               <th className="py-3.5 px-6">INEP</th>
               <th className="py-3.5 px-6 text-right">Aprovados</th>
@@ -88,9 +89,7 @@ export default function SchoolFlowTable({ schools, results, loading, onPreencher
                     </td>
                     <td className="py-4 px-6 text-center">
                       {!loading && (
-                        <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold border ${STATUS_BADGE_CLASSES[status]}`}>
-                          {STATUS_LABELS[status]}
-                        </span>
+                        <Badge tone={STATUS_TONES[status]}>{STATUS_LABELS[status]}</Badge>
                       )}
                     </td>
                     <td className="py-4 px-6 text-right">

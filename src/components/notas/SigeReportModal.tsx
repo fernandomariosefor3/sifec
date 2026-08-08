@@ -9,7 +9,7 @@
 // com correspondência de turma e cálculo em tempo real). Etapa 3 — preview
 // agregado antes de salvar. Nada é gravado antes de "Confirmar registro".
 import { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowLeft, ArrowRight, ClipboardCheck, Plus, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, ArrowRight, Check, ClipboardCheck, Plus, X } from 'lucide-react';
 import { auth } from '../../lib/firebase';
 import {
   saveSigeReport,
@@ -47,6 +47,15 @@ interface SigeReportModalProps {
 }
 
 type Step = 1 | 2 | 3;
+
+// Nova identidade visual, seção 8: stepper visual das três etapas — só
+// apresentação, nunca altera a lógica de navegação/validação já existente
+// (goToStep2/goToStep3/handleConfirm, abaixo, continuam intocados).
+const STEPPER_STEPS: { number: Step; label: string }[] = [
+  { number: 1, label: 'Identificação' },
+  { number: 2, label: 'Turmas' },
+  { number: 3, label: 'Revisão' },
+];
 
 function toRowInput(row: SigeReportRowDraft, existingTurmas: readonly Turma[]): SigeReportRowInput {
   const { resolution } = computeRow(row, existingTurmas);
@@ -218,16 +227,39 @@ export default function SigeReportModal({
   return (
     <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-[999] flex items-center justify-center p-4">
       <div className="bg-white border border-slate-200 rounded-2xl w-full max-w-3xl shadow-2xl relative flex flex-col overflow-hidden max-h-[92vh]">
-        <div className="bg-slate-50 border-b border-slate-150 px-6 py-4 flex justify-between items-center shrink-0">
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wide">Registrar relatório do SIGE</h3>
-            <p className="text-[10px] text-slate-500 font-normal mt-0.5">
-              {school.nome} — Etapa {step} de 3: {step === 1 ? 'Identificação' : step === 2 ? 'Turmas do relatório' : 'Revisão e confirmação'}
-            </p>
+        <div className="bg-slate-50 border-b border-slate-150 px-6 py-4 shrink-0">
+          <div className="flex justify-between items-start mb-3">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">Registrar relatório do SIGE</h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {school.nome} — Etapa {step} de 3: {step === 1 ? 'Identificação' : step === 2 ? 'Turmas do relatório' : 'Revisão e confirmação'}
+              </p>
+            </div>
+            <button onClick={onClose} aria-label="Fechar" className="text-slate-400 hover:text-slate-650 transition shrink-0">
+              <X size={18} />
+            </button>
           </div>
-          <button onClick={onClose} aria-label="Fechar" className="text-slate-400 hover:text-slate-650 transition">
-            <X size={18} />
-          </button>
+          <ol className="flex items-center">
+            {STEPPER_STEPS.map((s, idx) => (
+              <li key={s.number} className="flex items-center flex-1 last:flex-none">
+                <span
+                  className={`w-6 h-6 rounded-full flex items-center justify-center text-[11px] font-bold shrink-0 transition-colors ${
+                    step === s.number
+                      ? 'bg-brand-turquoise text-white'
+                      : step > s.number
+                        ? 'bg-status-ok text-white'
+                        : 'bg-slate-200 text-slate-500'
+                  }`}
+                >
+                  {step > s.number ? <Check size={12} /> : s.number}
+                </span>
+                <span className={`ml-1.5 text-[11px] font-bold whitespace-nowrap ${step === s.number ? 'text-slate-900' : 'text-slate-400'}`}>
+                  {s.label}
+                </span>
+                {idx < STEPPER_STEPS.length - 1 && <span className="flex-1 h-px bg-slate-200 mx-2" aria-hidden="true" />}
+              </li>
+            ))}
+          </ol>
         </div>
 
         <div className="p-6 space-y-3 overflow-y-auto">

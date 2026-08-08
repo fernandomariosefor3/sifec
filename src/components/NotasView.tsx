@@ -17,6 +17,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ClipboardPlus, Globe2, Percent } from 'lucide-react';
 import { auth } from '../lib/firebase';
+import PageHeader from './ui/PageHeader';
+import ContextBar from './ui/ContextBar';
+import StateMessage from './ui/StateMessage';
+import Badge from './ui/Badge';
+import SurfaceCard from './ui/SurfaceCard';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
   getSuperintendents,
@@ -112,6 +117,10 @@ export default function NotasView() {
   // Integração do fluxo do PR #18 (registro assistido do relatório do
   // SIGE) ao PR #19 — botão permanente em Acompanhamento de Notas.
   const [showSigeReportModal, setShowSigeReportModal] = useState(false);
+  // Nova identidade visual, seção 7: duas perspectivas visuais claras — só
+  // uma visível por vez (segmented control), nunca as duas tabelas
+  // empilhadas simultaneamente como antes.
+  const [perspective, setPerspective] = useState<'turma' | 'disciplina'>('turma');
   const [visao, setVisao] = useState<Visao>('bimestre');
   const [regionalScope, setRegionalScope] = useState(false);
   const [aggregateGroups, setAggregateGroups] = useState<GradeEntryCounts[][] | null>(null);
@@ -412,107 +421,101 @@ export default function NotasView() {
   const aggregateResult = aggregateGroups ? aggregateGradeEntriesForPeriod(aggregateGroups) : null;
 
   return (
-    <div className="space-y-6">
-      {/* Cabeçalho */}
-      <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-        <div>
-          <span className="text-[10px] text-brand-turquoise tracking-wider uppercase font-black font-mono">SEFOR 3 — ACOMPANHAMENTO PEDAGÓGICO</span>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Notas Bimestrais</h2>
-          <p className="text-xs text-slate-500 font-normal max-w-2xl">
-            Acompanhamento do preenchimento de notas no SIGE Escola por unidade e turma.
-          </p>
-          {!isFirebaseMode && (
-            <span className="inline-flex items-center gap-1.5 mt-1.5 px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-md uppercase tracking-wide">
-              Modo demonstração — faça login para ver e registrar dados reais
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap md:justify-end">
-          <span className="text-[10px] text-slate-500 font-mono font-bold uppercase bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
-            {scopeLabel}
-          </span>
-          <select
-            value={selectedSchoolId}
-            onChange={e => setSelectedSchoolId(e.target.value)}
-            aria-label="Escola"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-xl max-w-[220px]"
-          >
-            <option value="">Selecione a escola</option>
-            {visibleSchools.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
-          </select>
-          <select
-            value={anoLetivo}
-            onChange={e => handleAnoLetivoChange(Number(e.target.value))}
-            aria-label="Ano letivo"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-xl"
-          >
-            {anoLetivoOptions.map(ano => <option key={ano} value={ano}>{ano}</option>)}
-          </select>
-          {visao === 'bimestre' && (
-            <select
-              value={bimestre}
-              onChange={e => setBimestre(Number(e.target.value) as Bimestre)}
-              aria-label="Bimestre"
-              className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-xl"
-            >
-              <option value={1}>1º Bimestre</option>
-              <option value={2}>2º Bimestre</option>
-              <option value={3}>3º Bimestre</option>
-              <option value={4}>4º Bimestre</option>
-            </select>
-          )}
-          <select
-            value={visao}
-            onChange={e => setVisao(e.target.value as Visao)}
-            aria-label="Visão"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-xl"
-          >
-            {(Object.keys(VISAO_LABEL) as Visao[]).map(v => <option key={v} value={v}>{VISAO_LABEL[v]}</option>)}
-          </select>
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="SEFOR 3 — Acompanhamento pedagógico"
+        title="Acompanhamento de Notas"
+        description="Monitore o preenchimento das notas registradas no SIGE por turma, disciplina e bimestre."
+        actions={showRegistrarRelatorioButton ? (
           <button
             type="button"
-            onClick={() => setRegionalScope(prev => !prev)}
-            aria-pressed={regionalScope}
-            className={`py-1.5 px-3 rounded-xl text-xs font-bold flex items-center gap-1.5 transition border ${
-              regionalScope
-                ? 'bg-brand-turquoise text-white border-brand-turquoise-dark/20'
-                : 'bg-white text-slate-600 border-slate-250 hover:border-brand-turquoise'
-            }`}
+            onClick={() => setShowSigeReportModal(true)}
+            className="py-2 px-3.5 bg-brand-turquoise hover:bg-brand-turquoise/90 text-white rounded-lg text-[13px] font-bold flex items-center gap-1.5 transition shadow-sm whitespace-nowrap"
           >
-            <Globe2 size={14} /> Agregados regionais (SEFOR 3 — {anoLetivo})
+            <ClipboardPlus size={15} /> Registrar relatório do SIGE
           </button>
-          {showRegistrarRelatorioButton && (
-            <button
-              type="button"
-              onClick={() => setShowSigeReportModal(true)}
-              className="py-1.5 px-3 bg-brand-turquoise hover:bg-brand-turquoise/90 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow-sm whitespace-nowrap"
-            >
-              <ClipboardPlus size={14} /> Registrar relatório do SIGE
-            </button>
-          )}
-        </div>
-      </div>
+        ) : undefined}
+        context={
+          <>
+            <ContextBar>
+              <span className="text-caption font-bold text-slate-400 uppercase pr-1">{scopeLabel}</span>
+              <select
+                value={selectedSchoolId}
+                onChange={e => setSelectedSchoolId(e.target.value)}
+                aria-label="Escola"
+                className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-lg max-w-[220px]"
+              >
+                <option value="">Selecione a escola</option>
+                {visibleSchools.map(s => <option key={s.id} value={s.id}>{s.nome}</option>)}
+              </select>
+              <select
+                value={anoLetivo}
+                onChange={e => handleAnoLetivoChange(Number(e.target.value))}
+                aria-label="Ano letivo"
+                className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-lg"
+              >
+                {anoLetivoOptions.map(ano => <option key={ano} value={ano}>{ano}</option>)}
+              </select>
+              {visao === 'bimestre' && (
+                <select
+                  value={bimestre}
+                  onChange={e => setBimestre(Number(e.target.value) as Bimestre)}
+                  aria-label="Bimestre"
+                  className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-lg"
+                >
+                  <option value={1}>1º Bimestre</option>
+                  <option value={2}>2º Bimestre</option>
+                  <option value={3}>3º Bimestre</option>
+                  <option value={4}>4º Bimestre</option>
+                </select>
+              )}
+              {!isFirebaseMode && (
+                <Badge tone="attention">Modo demonstração — faça login para ver e registrar dados reais</Badge>
+              )}
+            </ContextBar>
+            <ContextBar className="bg-white">
+              <span className="text-caption font-bold text-slate-400 uppercase pr-1">Período</span>
+              <select
+                value={visao}
+                onChange={e => setVisao(e.target.value as Visao)}
+                aria-label="Visão"
+                className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-lg"
+              >
+                {(Object.keys(VISAO_LABEL) as Visao[]).map(v => <option key={v} value={v}>{VISAO_LABEL[v]}</option>)}
+              </select>
+              <button
+                type="button"
+                onClick={() => setRegionalScope(prev => !prev)}
+                aria-pressed={regionalScope}
+                className={`py-1.5 px-3 rounded-lg text-xs font-bold flex items-center gap-1.5 transition border ${
+                  regionalScope
+                    ? 'bg-brand-turquoise text-white border-brand-turquoise-dark/20'
+                    : 'bg-white text-slate-600 border-slate-250 hover:border-brand-turquoise'
+                }`}
+              >
+                <Globe2 size={14} /> Agregados regionais (SEFOR 3 — {anoLetivo})
+              </button>
+            </ContextBar>
+          </>
+        }
+      />
 
-      <div className="bg-brand-turquoise/5 border border-brand-turquoise/20 rounded-xl px-4 py-2.5 text-[11px] text-slate-600">
+      <div className="bg-status-info-bg border border-status-info-border rounded-xl px-4 py-2.5 text-caption text-status-info">
         Esta visão utiliza somente dados agregados dos relatórios do SIGE Escola. Nenhuma nota individual é armazenada neste painel.
       </div>
 
       {showAggregateView ? (
         <div className="space-y-3">
           {!isFirebaseMode ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
-              Visões de período e agregados regionais ficam disponíveis após o login.
-            </div>
+            <StateMessage kind="nodata" title="Visões de período e agregados regionais ficam disponíveis após o login." />
           ) : aggregateError ? (
-            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold">{aggregateError}</div>
+            <StateMessage kind="error" title={aggregateError} compact />
           ) : !regionalScope && !selectedSchool ? (
-            <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
-              Selecione uma escola, ou ative “Agregados regionais”, para ver esta visão.
-            </div>
+            <StateMessage kind="empty" title="Selecione uma escola, ou ative “Agregados regionais”, para ver esta visão." />
           ) : (
-            <div className="bg-white border border-slate-200 rounded-2xl p-5">
+            <SurfaceCard padding="lg">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-[10px] font-black uppercase text-slate-500 tracking-wider">
+                <span className="text-label uppercase text-slate-500">
                   {VISAO_LABEL[visao]} — {regionalScope ? `SEFOR 3 (${visibleSchools.length} escolas)` : selectedSchool?.nome}
                 </span>
                 {aggregateResult && (
@@ -527,140 +530,176 @@ export default function NotasView() {
                   realmente contribuíram, nunca deixa a falha de algumas
                   passar despercebida nem apaga o resultado das demais. */}
               {regionalScope && !aggregateLoading && aggregateSchoolsAttempted > 0 && (
-                <div className="mb-3 text-[10px] font-bold text-slate-400">
+                <div className="mb-3 text-caption font-bold text-slate-400">
                   {aggregateSchoolsAttempted - aggregateSchoolFailures.length} de {aggregateSchoolsAttempted} escola(s) carregada(s) com sucesso.
                 </div>
               )}
               {aggregateSchoolFailures.length > 0 && (
-                <div className="mb-3 p-2.5 bg-amber-50 border border-amber-200 rounded-lg text-[10px] text-amber-700 font-bold">
-                  {aggregateSchoolFailures.length} escola(s) não puderam ser carregadas e foram excluídas deste agregado (nunca contadas como zero): {aggregateSchoolFailures.map(f => f.escolaNome).join(', ')}.
+                <div className="mb-3">
+                  <Badge tone="attention">
+                    {aggregateSchoolFailures.length} escola(s) não puderam ser carregadas e foram excluídas deste agregado (nunca contadas como zero): {aggregateSchoolFailures.map(f => f.escolaNome).join(', ')}.
+                  </Badge>
                 </div>
               )}
               {aggregateLoading || !aggregateResult ? (
                 <div className="py-6 text-center text-slate-400 text-xs">Carregando...</div>
               ) : (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">Turmas no escopo</div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div className="text-label uppercase text-slate-400">Turmas no escopo</div>
                     <div className="text-sm font-extrabold text-slate-900 mt-0.5">{aggregateResult.turmasNoEscopo}</div>
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">Com ao menos 1 relatório</div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div className="text-label uppercase text-slate-400">Com ao menos 1 relatório</div>
                     <div className="text-sm font-extrabold text-slate-900 mt-0.5">{aggregateResult.turmasComAoMenosUmRelatorio}</div>
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">Sem nenhum relatório</div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div className="text-label uppercase text-slate-400">Sem nenhum relatório</div>
                     <div className="text-sm font-extrabold text-slate-900 mt-0.5">{aggregateResult.turmasSemNenhumRelatorio}</div>
                   </div>
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3">
-                    <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider">Lançamentos (realizados/esperados)</div>
+                  <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                    <div className="text-label uppercase text-slate-400">Lançamentos (realizados/esperados)</div>
                     <div className="text-sm font-extrabold text-slate-900 mt-0.5">{aggregateResult.totalCompletedGradeEntries} / {aggregateResult.totalExpectedGradeEntries}</div>
                   </div>
                   {aggregateResult.turmasComInconsistencia > 0 && (
-                    <div className="col-span-2 sm:col-span-4 bg-orange-50 border border-orange-300 rounded-xl px-3 py-2 text-[11px] text-orange-700 font-bold">
-                      {aggregateResult.turmasComInconsistencia} turma(s) com relatório inconsistente no período — excluídas do percentual geral.
+                    <div className="col-span-2 sm:col-span-4">
+                      <Badge tone="critical" className="w-full justify-start px-3 py-2">
+                        {aggregateResult.turmasComInconsistencia} turma(s) com relatório inconsistente no período — excluídas do percentual geral.
+                      </Badge>
                     </div>
                   )}
                 </div>
               )}
-            </div>
+            </SurfaceCard>
           )}
         </div>
       ) : !selectedSchool ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center text-slate-400 text-xs">
-          Selecione uma escola para carregar o acompanhamento de notas.
-        </div>
+        <StateMessage kind="empty" title="Selecione uma escola para carregar o acompanhamento de notas." />
       ) : turmasUnavailable ? (
-        <div className="bg-white border border-rose-200 rounded-2xl p-10 text-center text-xs">
-          <p className="text-rose-500 font-bold mb-1">
-            Não foi possível carregar as turmas desta escola{turmasError ? `: ${turmasError}` : '.'}
-          </p>
-          <p className="text-slate-400 mb-3">Nenhum dado de turma é exibido enquanto esta falha não for resolvida.</p>
-          <button
-            type="button"
-            onClick={refreshTurmas}
-            className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition"
-          >
-            Tentar novamente
-          </button>
-        </div>
+        <StateMessage
+          kind="error"
+          title={`Não foi possível carregar as turmas desta escola${turmasError ? `: ${turmasError}` : '.'}`}
+          description="Nenhum dado de turma é exibido enquanto esta falha não for resolvida."
+          action={
+            <button
+              type="button"
+              onClick={refreshTurmas}
+              className="px-3 py-1.5 bg-white border border-status-critical-border hover:bg-status-critical-bg rounded-lg text-[11px] font-bold text-status-critical transition"
+            >
+              Tentar novamente
+            </button>
+          }
+        />
       ) : (
         <>
           <NotasSummaryCards stats={consolidated} loading={isLoading || monitoringUnavailable} />
 
           {monitoringError && (
-            <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-              <span>{monitoringError}</span>
-              <button
-                type="button"
-                onClick={refreshMonitoring}
-                className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0"
-              >
-                Tentar novamente
-              </button>
-            </div>
+            <StateMessage
+              kind="error"
+              title={monitoringError}
+              compact
+              action={
+                <button
+                  type="button"
+                  onClick={refreshMonitoring}
+                  className="px-3 py-1.5 bg-white border border-status-critical-border hover:bg-status-critical-bg rounded-lg text-[11px] font-bold text-status-critical transition"
+                >
+                  Tentar novamente
+                </button>
+              }
+            />
           )}
 
           {monitoringUnavailable ? (
-            <div className="bg-white border border-rose-200 rounded-2xl p-10 text-center text-xs text-rose-500 font-bold">
-              Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola.
-            </div>
+            <StateMessage kind="error" title="Acompanhamento indisponível — não foi possível carregar o relatório de notas desta escola." />
           ) : (
             <>
-              <div>
-                <h3 className="text-xs font-black uppercase text-slate-700 mb-2">Resumo por turma</h3>
-                <GradeEntryMonitoringTable
-                  rows={rows}
-                  loading={isLoading}
-                  canWrite={canWrite}
-                  statusFilter={statusFilter}
-                  onStatusFilterChange={setStatusFilter}
-                  onRegistrar={setModalRow}
-                />
+              {/* Nova identidade visual, seção 7: duas perspectivas visuais
+                  claras, uma visível por vez — segmented control simples. */}
+              <div className="inline-flex bg-slate-100 border border-slate-200 rounded-lg p-1 gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPerspective('turma')}
+                  className={`px-3.5 py-1.5 rounded-md text-[13px] font-bold transition ${
+                    perspective === 'turma' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  Visão geral por turma
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPerspective('disciplina')}
+                  className={`px-3.5 py-1.5 rounded-md text-[13px] font-bold transition ${
+                    perspective === 'disciplina' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  Detalhamento por disciplina
+                </button>
               </div>
 
-              <div>
-                <h3 className="text-xs font-black uppercase text-slate-700 mb-2">Acompanhamento por turma e disciplina</h3>
-                {/* Correção final da auditoria, seção 3: consolidação por
-                    ÁREA — sempre calculada em tempo real a partir das
-                    disciplinas já registradas, nunca um percentual
-                    persistido separadamente. */}
-                {disciplineAreaAggregates.length > 0 && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
-                    {disciplineAreaAggregates.map(area => {
-                      const band = COMPLETION_COLOR_BAND_INFO[classifyCompletionColorBand(area.percentualGeral)];
-                      return (
-                        <div key={area.areaConhecimento} className="bg-slate-50 border border-slate-200 rounded-xl p-2.5">
-                          <div className="text-[9px] uppercase text-slate-400 font-bold tracking-wider truncate">{area.areaConhecimento}</div>
-                          <div className={`text-sm font-extrabold mt-0.5 ${band.textClassName}`}>
-                            {area.percentualGeral == null ? 'Não informado' : `${area.percentualGeral.toFixed(0)}%`}
-                          </div>
-                          <div className="text-[9px] text-slate-400">{area.disciplinasNoEscopo} disciplina(s)</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-                {disciplineError ? (
-                  <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-                    <span>{disciplineError}</span>
-                    <button type="button" onClick={() => setDisciplineReloadTick(t => t + 1)}
-                      className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0">
-                      Tentar novamente
-                    </button>
-                  </div>
-                ) : (
-                  <GradeEntryMonitoringByDisciplineTable
-                    rows={disciplineRows}
-                    turmas={turmasDaEscola}
-                    loading={disciplineLoading || turmasLoading}
+              {perspective === 'turma' && (
+                <div>
+                  <h3 className="text-section-title text-slate-700 mb-2">Resumo por turma</h3>
+                  <GradeEntryMonitoringTable
+                    rows={rows}
+                    loading={isLoading}
                     canWrite={canWrite}
-                    anoLetivo={anoLetivo}
-                    bimestre={bimestre}
-                    onSave={handleSaveDisciplineRow}
+                    statusFilter={statusFilter}
+                    onStatusFilterChange={setStatusFilter}
+                    onRegistrar={setModalRow}
                   />
-                )}
-              </div>
+                </div>
+              )}
+
+              {perspective === 'disciplina' && (
+                <div>
+                  <h3 className="text-section-title text-slate-700 mb-2">Acompanhamento por turma e disciplina</h3>
+                  {/* Correção final da auditoria, seção 3: consolidação por
+                      ÁREA — sempre calculada em tempo real a partir das
+                      disciplinas já registradas, nunca um percentual
+                      persistido separadamente. */}
+                  {disciplineAreaAggregates.length > 0 && (
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3">
+                      {disciplineAreaAggregates.map(area => {
+                        const band = COMPLETION_COLOR_BAND_INFO[classifyCompletionColorBand(area.percentualGeral)];
+                        return (
+                          <div key={area.areaConhecimento} className="bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                            <div className="text-label uppercase text-slate-400 truncate">{area.areaConhecimento}</div>
+                            <div className={`text-sm font-extrabold mt-0.5 ${band.textClassName}`}>
+                              {area.percentualGeral == null ? 'Não informado' : `${area.percentualGeral.toFixed(0)}%`}
+                            </div>
+                            <div className="text-caption text-slate-400">{area.disciplinasNoEscopo} disciplina(s)</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {disciplineError ? (
+                    <StateMessage
+                      kind="error"
+                      title={disciplineError}
+                      compact
+                      action={
+                        <button type="button" onClick={() => setDisciplineReloadTick(t => t + 1)}
+                          className="px-3 py-1.5 bg-white border border-status-critical-border hover:bg-status-critical-bg rounded-lg text-[11px] font-bold text-status-critical transition">
+                          Tentar novamente
+                        </button>
+                      }
+                    />
+                  ) : (
+                    <GradeEntryMonitoringByDisciplineTable
+                      rows={disciplineRows}
+                      turmas={turmasDaEscola}
+                      loading={disciplineLoading || turmasLoading}
+                      canWrite={canWrite}
+                      anoLetivo={anoLetivo}
+                      bimestre={bimestre}
+                      onSave={handleSaveDisciplineRow}
+                    />
+                  )}
+                </div>
+              )}
             </>
           )}
         </>
