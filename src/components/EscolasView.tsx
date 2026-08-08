@@ -1,17 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { GraduationCap, PlusCircle, Search, MapPin, BarChart2, Plus, X, ClipboardList } from 'lucide-react';
 import { auth } from '../lib/firebase';
-import { subscribeToCollection, addDocument, updateDocument, SEED_SCHOOLS } from '../lib/firebaseService';
+import { subscribeToCollection, addDocument, updateDocument, SEED_SCHOOLS, SEED_TURMAS } from '../lib/firebaseService';
 import { isSchoolVisible, getActiveSuperintendentId, addSchoolToLoggedInSuperintendent, isCurrentUserAdmin } from '../lib/superintendentService';
-import { useSchoolEnrollmentSummaries } from '../hooks/useSchoolEnrollmentSummaries';
+import { getClassroomsForSchool, getActiveClassroomCount } from '../lib/classService';
 import SchoolEnrollmentPanel from './SchoolEnrollmentPanel';
 import SchoolsTable from './SchoolsTable';
+import PageHeader from './ui/PageHeader';
+import SurfaceCard from './ui/SurfaceCard';
+import type { Turma } from '../types/classroom';
+
+// Reestruturação SIFEC — Gestão de Escolas: campo cadastral novo "Região"
+// (4ª ou 5ª) exigido pelo plano. Opcional no tipo porque as 56 escolas
+// semeadas (SEED_SCHOOLS) nunca tiveram essa informação real cadastrada —
+// nunca inventar a região de uma escola real sem confirmação (ver
+// conhecimento_sifec.md); a interface mostra "Não informado" até alguém
+// preencher pela edição.
+export type SchoolRegiao = '4ª' | '5ª';
 
 interface School {
   id: string;
   nome: string;
   codInep: string;
   cidade: string;
+  regiao?: SchoolRegiao;
   matriculas: number;
   idebMedio: number;
   metaIdeb: number;
@@ -32,6 +44,7 @@ export default function EscolasView() {
   const [nome, setNome] = useState('');
   const [codInep, setCodInep] = useState('');
   const [cidade, setCidade] = useState('Fortaleza');
+  const [regiao, setRegiao] = useState<SchoolRegiao | ''>('');
   const [matriculas, setMatriculas] = useState('');
   const [idebMedio, setIdebMedio] = useState('');
   const [metaIdeb, setMetaIdeb] = useState('');
@@ -112,6 +125,7 @@ export default function EscolasView() {
         nome: editingSchool.nome,
         codInep: editingSchool.codInep,
         cidade,
+        ...(regiao ? { regiao } : {}),
         matriculas: parseInt(matriculas),
         idebMedio: parseFloat(idebMedio),
         metaIdeb: parseFloat(metaIdeb)
@@ -145,6 +159,7 @@ export default function EscolasView() {
         nome,
         codInep,
         cidade,
+        ...(regiao ? { regiao } : {}),
         matriculas: parseInt(matriculas),
         idebMedio: parseFloat(idebMedio),
         metaIdeb: parseFloat(metaIdeb),
@@ -174,6 +189,7 @@ export default function EscolasView() {
     setNome('');
     setCodInep('');
     setCidade('Fortaleza');
+    setRegiao('');
     setMatriculas('');
     setIdebMedio('');
     setMetaIdeb('');
@@ -185,6 +201,7 @@ export default function EscolasView() {
     setNome(school.nome);
     setCodInep(school.codInep);
     setCidade(school.cidade);
+    setRegiao(school.regiao ?? '');
     setMatriculas(school.matriculas.toString());
     setIdebMedio(school.idebMedio.toString());
     setMetaIdeb(school.metaIdeb.toString());
@@ -201,74 +218,107 @@ export default function EscolasView() {
     return matchesSearch && matchesCity;
   });
 
-  // Fase 2A — matrícula inicial/atual, turmas ativas, média por turma e
-  // entradas/saídas acumuladas, buscados por escola (nunca a coleção
-  // inteira sem filtro — ver useSchoolEnrollmentSummaries).
-  const { summaries, summariesLoading, summaryErrors, turmas: turmasFase2A, refresh: refreshEnrollmentSummaries } = useSchoolEnrollmentSummaries(filteredSchools, isFirebaseMode);
+  // Reestruturação SIFEC — Gestão de Escolas simplificada: turmas ativas por
+  // escola calculado direto de `turmas` (sem depender mais de
+  // school_years/enrollment_snapshots, removidos desta tela). Contagem
+  // síncrona — nunca precisa de um estado de "carregando" próprio, porque
+  // `turmasFase2A` já reflete a assinatura em tempo real abaixo.
+  const [turmasFase2A, setTurmasFase2A] = useState<Turma[]>(SEED_TURMAS as unknown as Turma[]);
+  useEffect(() => {
+    if (!isFirebaseMode) {
+      setTurmasFase2A(SEED_TURMAS as unknown as Turma[]);
+      return;
+    }
+    const unsubscribe = subscribeToCollection('turmas', loaded => setTurmasFase2A(loaded as Turma[]));
+    return () => unsubscribe();
+  }, [isFirebaseMode]);
+  const turmasAtivasPorEscola: Record<string, number> = {};
+  filteredSchools.forEach(school => {
+    turmasAtivasPorEscola[school.id] = getActiveClassroomCount(getClassroomsForSchool(turmasFase2A, school));
+  });
+
+  // Auditoria da reestruturação SIFEC, seção 4: cobertura de região sempre
+  // visível — nunca calcular 4ª/5ª sobre o total de escolas (que incluiria
+  // "não informado" como se fosse uma das duas regiões) e nunca apresentar
+  // essa cobertura parcial como se fosse o total da carteira/visão.
+  const regiao4Count = visibleSchools.filter(s => s.regiao === '4ª').length;
+  const regiao5Count = visibleSchools.filter(s => s.regiao === '5ª').length;
+  const semRegiaoCount = visibleSchools.length - regiao4Count - regiao5Count;
 
   return (
-    <div className="space-y-6">
-      {/* Page header with subtitle and trigger */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <span className="text-[10px] text-emerald-700 tracking-wider uppercase font-black font-mono">SEFOR 3 - GESTÃO ESCOLAR</span>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Escolas da Coordenadoria Regional</h2>
-          <p className="text-xs text-slate-500 font-normal">Controle cadastral, matrículas ativas e monitoramento de desempenho do IDEB.</p>
-        </div>
-        {isCurrentUserAdmin() && (
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="SEFOR 3 — Gestão escolar"
+        title="Gestão de Escolas"
+        description="Identificação cadastral, matrícula por bimestre e turmas de cada unidade da carteira."
+        actions={isCurrentUserAdmin() ? (
           <button
             onClick={() => {
               setEditingSchool(null);
               setNome('');
               setCodInep('');
               setCidade('Fortaleza');
+              setRegiao('');
               setMatriculas('');
               setIdebMedio('');
               setMetaIdeb('');
               setShowAddForm(true);
             }}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold font-sans transition flex items-center gap-1.5 shadow-sm"
+            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[13px] font-bold transition flex items-center gap-1.5 shadow-sm"
           >
             <Plus size={16} /> Cadastrar Nova Escola
           </button>
-        )}
-      </div>
+        ) : undefined}
+      />
 
-      {/* Grid summarizing core regional school markers */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-lg bg-brand-turquoise/10 border border-brand-turquoise/20 text-brand-turquoise flex items-center justify-center shrink-0">
-            <GraduationCap size={20} />
+      {/* Resumo — nível único de superfície, ícones com acento sutil em vez
+          de gradiente por cartão. */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <SurfaceCard className="flex items-center gap-3.5">
+          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
+            <GraduationCap size={18} />
           </div>
           <div>
-            <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Total de Unidades</div>
-            <div className="text-lg font-extrabold text-slate-900">{visibleSchools.length} Escolas</div>
+            <div className="text-label uppercase text-slate-400">Total de Unidades</div>
+            <div className="text-base font-extrabold text-slate-900">{visibleSchools.length} Escolas</div>
           </div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-lg bg-brand-green/10 border border-brand-green/20 text-brand-green flex items-center justify-center shrink-0">
-            <BarChart2 size={20} />
+        </SurfaceCard>
+        <SurfaceCard className="flex items-center gap-3.5">
+          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
+            <BarChart2 size={18} />
           </div>
           <div>
-            <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Total de Matrículas</div>
-            <div className="text-lg font-extrabold text-slate-900">
+            <div className="text-label uppercase text-slate-400">Total de Matrículas</div>
+            <div className="text-base font-extrabold text-slate-900">
               {visibleSchools.reduce((sum, s) => sum + s.matriculas, 0).toLocaleString()} Alunos
             </div>
           </div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-xl p-4 flex items-center gap-4">
-          <div className="w-10 h-10 rounded-lg bg-brand-orange/10 border border-brand-orange/20 text-brand-orange flex items-center justify-center shrink-0">
-            <MapPin size={20} />
+        </SurfaceCard>
+        <SurfaceCard className="flex items-center gap-3.5">
+          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
+            <MapPin size={18} />
           </div>
           <div>
-            <div className="text-[10px] uppercase text-slate-400 font-bold tracking-wider">Cidades Cooperantes</div>
-            <div className="text-lg font-extrabold text-slate-900">{cities.length - 1} Cidade</div>
+            <div className="text-label uppercase text-slate-400">Cidades Cooperantes</div>
+            <div className="text-base font-extrabold text-slate-900">{cities.length - 1} Cidade</div>
           </div>
-        </div>
+        </SurfaceCard>
+        <SurfaceCard className="flex items-center gap-3.5">
+          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
+            <MapPin size={18} />
+          </div>
+          <div>
+            <div className="text-label uppercase text-slate-400">Cobertura de Região</div>
+            <div className="text-base font-extrabold text-slate-900">4ª: {regiao4Count} · 5ª: {regiao5Count}</div>
+            {semRegiaoCount > 0 && (
+              <div className="text-caption text-status-attention font-bold mt-0.5">{semRegiaoCount} escola(s) sem região informada</div>
+            )}
+          </div>
+        </SurfaceCard>
       </div>
 
       {/* Filters and search box */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-sm">
+      <SurfaceCard className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         {/* Search */}
         <div className="relative flex-1 max-w-md">
           <input
@@ -276,7 +326,7 @@ export default function EscolasView() {
             placeholder="Buscar por escola ou código INEP..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 focus:border-brand-turquoise focus:outline-none text-xs text-slate-800 rounded-xl"
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 focus:border-brand-turquoise focus:outline-none text-xs text-slate-800 rounded-lg"
           />
           <Search size={14} className="absolute left-3 top-3 text-slate-400" />
         </div>
@@ -284,12 +334,12 @@ export default function EscolasView() {
         {/* City Filter */}
         <div className="flex items-center gap-2">
           <span className="text-xs text-slate-500 font-bold">Filtrar Cidade:</span>
-          <div className="flex gap-1.5 p-1 bg-slate-50 border border-slate-150 rounded-xl">
+          <div className="flex gap-1.5 p-1 bg-slate-50 border border-slate-150 rounded-lg">
             {cities.map((city) => (
               <button
                 key={city}
                 onClick={() => setCityFilter(city)}
-                className={`px-3 py-1 text-xs font-bold rounded-lg transition-all ${
+                className={`px-3 py-1 text-xs font-bold rounded-md transition-all ${
                   cityFilter === city
                     ? 'bg-brand-turquoise text-white shadow-sm'
                     : 'text-slate-600 hover:text-slate-850'
@@ -300,25 +350,22 @@ export default function EscolasView() {
             ))}
           </div>
         </div>
-      </div>
+      </SurfaceCard>
 
-      {/* Faixa de orientação — antes o único caminho para preencher matrícula/
-          turmas/registro mensal era um ícone escondido na coluna Ações; o
-          usuário não descobria onde entrar. Discreta, aparece para admin e
-          superintendente, não repete por linha (correção de usabilidade). */}
-      <div className="bg-brand-turquoise/5 border border-brand-turquoise/20 rounded-xl px-4 py-2.5 text-[11px] text-slate-600 flex items-center gap-2">
-        <ClipboardList size={14} className="text-brand-turquoise shrink-0" />
+      {/* Faixa de orientação — o caminho para lançar a matrícula por
+          bimestre e cadastrar turmas. Discreta, aparece para admin e
+          superintendente, não repete por linha. */}
+      <div className="bg-status-info-bg border border-status-info-border rounded-xl px-4 py-2.5 text-caption text-status-info flex items-center gap-2">
+        <ClipboardList size={14} className="shrink-0" />
         <span>
-          Para informar matrícula inicial, cadastrar turmas ou lançar a movimentação mensal, clique em <strong>“Preencher dados 2026”</strong> na escola desejada.
+          Para lançar a matrícula por bimestre ou cadastrar turmas, clique em <strong>“Matrícula por bimestre”</strong> na escola desejada.
         </span>
       </div>
 
       {/* Schools List Render */}
       <SchoolsTable
         schools={filteredSchools}
-        summaries={summaries}
-        summariesLoading={summariesLoading}
-        summaryErrors={summaryErrors}
+        turmasAtivasPorEscola={turmasAtivasPorEscola}
         onEdit={handleOpenEdit}
         onOpenEnrollmentPanel={setPanelSchool}
       />
@@ -393,6 +440,19 @@ export default function EscolasView() {
                 </div>
               </div>
 
+              <div className="space-y-1">
+                <label className="text-[10px] font-black uppercase text-slate-700 block">Região</label>
+                <select
+                  value={regiao}
+                  onChange={(e) => setRegiao(e.target.value as SchoolRegiao | '')}
+                  className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl"
+                >
+                  <option value="">Não informado</option>
+                  <option value="4ª">4ª</option>
+                  <option value="5ª">5ª</option>
+                </select>
+              </div>
+
               <div className="grid grid-cols-3 gap-3">
                 <div className="space-y-1">
                   <label className="text-[10px] font-black uppercase text-slate-700 block">Matrículas *</label>
@@ -455,7 +515,6 @@ export default function EscolasView() {
           turmas={turmasFase2A}
           isFirebaseMode={isFirebaseMode}
           onClose={() => setPanelSchool(null)}
-          onDataChanged={refreshEnrollmentSummaries}
         />
       )}
     </div>

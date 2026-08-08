@@ -86,6 +86,16 @@ describe('buildAuditLogEntry', () => {
     expect(() => buildAuditLogEntry(baseInput({ newValue: { nomeAluno: 'Fulano' } }), 'log-11')).toThrow(AuditPayloadError);
   });
 
+  // Correção final da auditoria da reestruturação, seção 2: garantia
+  // estrutural de que o audit_log de arquivamento do Farol do Estudante
+  // nunca inclui o nome do estudante, mesmo que um chamador futuro esqueça
+  // de sanitizar o payload manualmente (ver buildFarolArchiveAuditInput em
+  // farolEstudanteService.ts, que já nasce sem esse campo).
+  it('nunca registra "estudanteNome" (Farol do Estudante)', () => {
+    expect(() => buildAuditLogEntry(baseInput({ newValue: { estudanteNome: 'Fulano' } }), 'log-11b')).toThrow(AuditPayloadError);
+    expect(() => buildAuditLogEntry(baseInput({ previousValue: { estudanteNome: 'Fulano' } }), 'log-11c')).toThrow(AuditPayloadError);
+  });
+
   it('não bloqueia "nome" isoladamente (campo de negócio legítimo, ex.: turmaNome/escolaNome)', () => {
     expect(() =>
       buildAuditLogEntry(baseInput({ newValue: { turmaNome: '3º Ano A', escolaNome: 'EEM Diva Cabral' } }), 'log-12')

@@ -32,6 +32,11 @@ const ESCOLA_B = 'Escola B - Teste';
 
 let testEnv: RulesTestEnvironment;
 
+// Timeout explícito de 30s (padrão do Vitest é 10s) — mesmo ajuste de
+// tests/gradeEntryMonitoringRules.test.ts: com mais arquivos de regras
+// conectando ao MESMO emulador local dentro de `npm run test:rules`,
+// initializeTestEnvironment pode passar dos 10s default sob a carga
+// acumulada, mesmo a suíte inteira terminando bem dentro de 30s.
 beforeAll(async () => {
   testEnv = await initializeTestEnvironment({
     projectId: 'sifec-rules-test',
@@ -41,7 +46,7 @@ beforeAll(async () => {
       port: 8090,
     },
   });
-});
+}, 30000);
 
 afterAll(async () => {
   await testEnv.cleanup();

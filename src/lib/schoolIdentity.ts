@@ -4,8 +4,9 @@
 //
 // Problema que isto resolve: em toda a base, o vínculo entre um
 // superintendente/admin e uma escola — e entre turmas/visitas/ações do
-// Circuito de Gestão/Busca Ativa/PPDT e a escola a que pertencem — é feito
-// comparando o NOME DE EXIBIÇÃO por igualdade exata (=== ou Array.includes).
+// Ciclo de Gestão/Farol do Estudante/Recomposição e a escola a que pertencem
+// — é feito comparando o NOME DE EXIBIÇÃO por igualdade exata (=== ou
+// Array.includes).
 // Documentos reais de `schools` podem ter diferenças de caixa, espaços
 // finais ou acentuação (ex.: "EEMTI ANISIO TEIXEIRA " vs "EEMTI Anísio
 // Teixeira") que quebram essa comparação exata sem quebrar o significado —

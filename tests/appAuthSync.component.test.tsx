@@ -62,12 +62,10 @@ vi.mock('../src/components/EscolasView', () => ({ default: () => <div>EscolasVie
 vi.mock('../src/components/FluxoView', () => ({ default: () => <div>FluxoView (stub)</div> }));
 vi.mock('../src/components/NotasView', () => ({ default: () => <div>NotasView (stub)</div> }));
 vi.mock('../src/components/CdgView', () => ({ default: () => <div>CdgView (stub)</div> }));
-vi.mock('../src/components/ExtraViews', () => ({
-  BuscaAtivaView: () => <div>BuscaAtivaView (stub)</div>,
-  PpdtView: () => <div>PpdtView (stub)</div>,
-  RecomposicaoView: () => <div>RecomposicaoView (stub)</div>,
-}));
+vi.mock('../src/components/FarolEstudanteView', () => ({ default: () => <div>FarolEstudanteView (stub)</div> }));
+vi.mock('../src/components/RecomposicaoView', () => ({ default: () => <div>RecomposicaoView (stub)</div> }));
 vi.mock('../src/components/SuperintendentesView', () => ({ default: () => <div>SuperintendentesView (stub)</div> }));
+vi.mock('../src/components/ParecerBimestralView', () => ({ default: () => <div>ParecerBimestralView (stub)</div> }));
 vi.mock('../src/components/DevPanel', () => ({ default: () => <div>DevPanel (stub)</div> }));
 
 describe('App — sincronização pós-login', () => {

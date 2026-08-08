@@ -75,3 +75,35 @@ export function buildGradeEntryMonitoringId(
 ): string {
   return `${schoolId}_${anoLetivo}_b${bimestre}_${turmaId}`;
 }
+
+// `bimonthly_enrollments/{schoolId_anoLetivo_bBimestre}` — ex.:
+// "diva-cabral_2026_b1". Reestruturação SIFEC: matrícula por ESCOLA e por
+// bimestre (nunca por turma) — mesmo formato de buildGradeEntryMonitoringId
+// sem o sufixo de turma.
+export function buildBimonthlyEnrollmentId(
+  schoolId: string,
+  anoLetivo: number,
+  bimestre: number
+): string {
+  return `${schoolId}_${anoLetivo}_b${bimestre}`;
+}
+
+// `grade_entry_monitoring_disciplina/{schoolId_anoLetivo_bBimestre_turmaId_disciplinaId}`
+// — ex.: "diva-cabral_2026_b1_turma-3a-diva_lingua-portuguesa". Auditoria da
+// reestruturação SIFEC: dimensão disciplina/área do acompanhamento de
+// notas, chave própria (nunca reaproveita buildGradeEntryMonitoringId, que
+// identifica o total por TURMA sem disciplina). Correção final da
+// auditoria, seção 3: disciplinaId é sempre a versão JÁ NORMALIZADA (ver
+// normalizeDisciplinaId em types/gradeEntryMonitoringDiscipline.ts) — este
+// arquivo nunca importa lógica de domínio/Firebase de propósito, então a
+// normalização é responsabilidade do chamador (gradeEntryMonitoringDisciplineService.ts),
+// nunca texto livre bruto direto no ID do documento.
+export function buildGradeEntryMonitoringByDisciplineId(
+  schoolId: string,
+  anoLetivo: number,
+  bimestre: number,
+  turmaId: string,
+  disciplinaId: string
+): string {
+  return `${schoolId}_${anoLetivo}_b${bimestre}_${turmaId}_${disciplinaId}`;
+}

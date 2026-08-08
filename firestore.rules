@@ -155,6 +155,25 @@ service cloud.firestore {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    // Correção do code review do PR #19: o ID de
+    // grade_entry_monitoring_disciplina é uma chave composta —
+    // schoolId + '_' + anoLetivo + '_b' + bimestre + '_' + turmaId + '_' +
+    // disciplinaId — cuja soma pode ultrapassar 128 caracteres mesmo com
+    // cada componente dentro do próprio limite (schoolId até 128, turmaId
+    // até 128, disciplinaId até 100 — soma máxima teórica ~365). isValidId()
+    // NUNCA é alterado globalmente (usado por todas as outras coleções com
+    // ID simples, cujo limite de 128 continua correto para elas); este
+    // helper é específico desta coleção, com um teto mais alto mas ainda
+    // conservador (512 — folga sobre os ~365 do pior caso real, longe de
+    // qualquer valor perigoso) e o MESMO formato seguro de isValidId (sem
+    // barra, sem ponto, sem espaço — `..`/path traversal são
+    // estruturalmente impossíveis, o charset nem inclui `.` ou `/`). A
+    // igualdade exata entre o ID e a chave composta continua sendo validada
+    // à parte, em isValidGradeEntryMonitoringDisciplineShape.
+    function isValidGradeDisciplineCompositeId(id) {
+      return id is string && id.size() > 0 && id.size() <= 512 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     // Documentos de `superintendentes` são identificados por e-mail (contém
     // "@" e "."), então precisam de um formato de ID diferente de isValidId().
     function isValidEmailId(id) {
@@ -212,10 +231,22 @@ service cloud.firestore {
     // pós-PR #8, seção 11 do plano) — todo log dessas coleções exige
     // schoolId/codInep válidos e acesso à escola; logs de outras coleções
     // (ex.: superintendentes) não são "escolares" e não exigem escola.
+    //
+    // Correção do code review do PR #19: as sete coleções novas da
+    // reestruturação (bimonthly_enrollments, farol_estudante,
+    // recomposicao_planos, cdg_planos, cdg_tarefas, parecer_bimestral_notas,
+    // grade_entry_monitoring_disciplina) faltavam aqui — um audit_log dessas
+    // coleções não exigia schoolId/codInep válidos nem acesso de escrita à
+    // escola, só isAuthorized() (qualquer superintendente cadastrado e
+    // ativo, de qualquer escola). Mesma lacuna que a revisão pós-PR #8 já
+    // havia fechado para as coleções mais antigas.
     function isSchoolScopedAuditCollection(collectionName) {
       return collectionName in [
         'school_years', 'enrollment_snapshots', 'turmas', 'schools', 'imports',
-        'school_flow_results', 'grade_entry_monitoring'
+        'school_flow_results', 'grade_entry_monitoring',
+        'bimonthly_enrollments', 'farol_estudante', 'recomposicao_planos',
+        'cdg_planos', 'cdg_tarefas', 'parecer_bimestral_notas',
+        'grade_entry_monitoring_disciplina'
       ];
     }
 
@@ -918,6 +949,408 @@ service cloud.firestore {
       // Sem exclusão comum — mesmo padrão de school_years/school_flow_results,
       // só o admin raiz exclui, em manutenção excepcional.
       allow delete: if isPlatformAdmin() && isValidId(monitoringId);
+    }
+
+    // ============================================================================
+    // REESTRUTURAÇÃO SIFEC — seis coleções novas, mesmo modelo de autorização e
+    // integridade canônica de grade_entry_monitoring/school_years acima
+    // (canWriteEscola/canWriteSchoolById + isCanonicalSchoolMatch + hasOnly()).
+    // bimonthly_enrollments, cdg_planos e parecer_bimestral_notas usam ID
+    // determinístico por chave composta (mesmo princípio de
+    // buildGradeEntryMonitoringId); farol_estudante, recomposicao_planos e
+    // cdg_tarefas usam ID opaco (crypto.randomUUID() no cliente — nunca
+    // derivado de nome de estudante ou texto livre, mesmo cuidado de
+    // buildStudentRosterId). Exclusão comum (não só admin) é permitida em
+    // farol_estudante/recomposicao_planos/cdg_tarefas — são listas de
+    // trabalho da própria escola, não histórico auditável imutável como
+    // grade_entry_monitoring; bimonthly_enrollments/cdg_planos/
+    // parecer_bimestral_notas seguem restritos ao admin raiz na exclusão,
+    // mesmo padrão de school_years/school_flow_results.
+    // ============================================================================
+
+    // --- Reestruturação SIFEC: bimonthly_enrollments ---
+    // Matrícula por escola+bimestre (substitui o registro mensal por turma
+    // no fluxo de Gestão de Escolas — enrollment_snapshots continua existindo
+    // só para leitura da Sala de Situação, nunca mais gravado pela UI).
+    function isValidBimonthlyEnrollmentShape(enrollmentId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo', 'bimestre',
+          'matricula', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == enrollmentId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.bimestre in [1, 2, 3, 4] &&
+        enrollmentId == data.schoolId + '_' + string(data.anoLetivo) + '_b' + string(data.bimestre) &&
+        isNonNegInt(data.matricula) &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /bimonthly_enrollments/{enrollmentId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isValidId(enrollmentId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isValidBimonthlyEnrollmentShape(enrollmentId);
+      allow update: if isValidId(enrollmentId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().bimestre == resource.data.bimestre &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidBimonthlyEnrollmentShape(enrollmentId);
+      allow delete: if isPlatformAdmin() && isValidId(enrollmentId);
+    }
+
+    // --- Reestruturação SIFEC: farol_estudante ---
+    // "Alunos com Baixo Desempenho (Farol do Estudante)" — lista NOMINAL
+    // (estudanteNome) de estudantes com percentual de acerto < 25% no SISEDU
+    // Analytics, lançada manualmente. Dado sensível: leitura restrita à
+    // mesma escola do superintendente (ou admin), nunca mais amplo.
+    // isCanonicalTurmaOfSchoolYearAndName garante que a turma referenciada
+    // existe de fato e pertence à mesma escola/ano — mesmo princípio de
+    // grade_entry_monitoring.
+    function isValidFarolEstudanteShape(itemId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
+          'disciplina', 'anoLetivo', 'bimestre', 'estudanteNome', 'percentualAcerto',
+          'sourceSystem', 'referenceDate', 'status', 'statusRegistro',
+          'observacao', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == itemId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        data.turmaId is string && data.turmaId.size() <= 128 &&
+        data.turmaNome is string && data.turmaNome.size() <= 150 &&
+        data.disciplina is string && data.disciplina.size() > 0 && data.disciplina.size() <= 100 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.bimestre in [1, 2, 3, 4] &&
+        data.estudanteNome is string && data.estudanteNome.size() > 0 && data.estudanteNome.size() <= 150 &&
+        data.percentualAcerto is int && data.percentualAcerto >= 0 && data.percentualAcerto < 25 &&
+        // Fonte sempre fixa 'SISEDU Analytics' — nunca outra origem (nunca
+        // afirma sincronização automática, ver farolEstudante.ts).
+        data.sourceSystem == 'SISEDU Analytics' &&
+        // Correção do code review do PR #19: a checagem anterior só media o
+        // tamanho da string (10 caracteres) — "99/99/9999" ou "2026-99-99"
+        // também tinham 10 caracteres e passavam. Regex exige dígitos nas
+        // posições certas e mês/dia em faixas válidas (mas não valida
+        // calendário real, ex.: 2026-02-30 — isso fica na camada
+        // TypeScript, ver REFERENCE_DATE_PATTERN + validação de data real em
+        // farolEstudanteService.ts, já que a linguagem de regras do
+        // Firestore não tem aritmética de calendário).
+        data.referenceDate is string &&
+        data.referenceDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$') &&
+        data.status in ['Identificado', 'Em acompanhamento', 'Superado'] &&
+        // Correção final da auditoria, seção 2: statusRegistro é o campo de
+        // arquivamento (nunca reaproveita `status`, que é o status de
+        // acompanhamento pedagógico do estudante — semânticas diferentes).
+        data.statusRegistro in ['ativo', 'arquivado'] &&
+        (!('observacao' in data) || (data.observacao is string && data.observacao.size() <= 500)) &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /farol_estudante/{itemId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isValidId(itemId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
+        isValidFarolEstudanteShape(itemId);
+      // update cobre tanto edição normal quanto arquivamento (statusRegistro
+      // 'ativo' -> 'arquivado') — o superintendente da escola nunca precisa
+      // de `delete` para "remover" um registro da lista de trabalho.
+      //
+      // Correção do code review do PR #19: a versão anterior travava só
+      // turmaId, não turmaNome — um update podia manter o turmaId antigo mas
+      // reescrever turmaNome livremente, quebrando a integridade entre os
+      // dois campos (o mesmo turmaId passaria a exibir um nome de turma
+      // diferente do real). turmaNome agora é imutável no update, igual a
+      // turmaId/schoolId/codInep/escolaNome/anoLetivo/bimestre. A
+      // integridade canônica é reconferida com isCanonicalTurmaOfSchoolYearAndName
+      // (não só reafirmada por igualdade com o valor anterior) para o caso
+      // do documento de `turmas` ter mudado de nome depois da criação deste
+      // registro — nunca aceitar silenciosamente uma combinação turmaId/
+      // turmaNome que não bate mais com a turma real. Transferir um
+      // estudante para outra turma exige criar um novo registro e arquivar
+      // o anterior — nunca mudar a identidade dentro do mesmo documento.
+      allow update: if isValidId(itemId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().turmaId == resource.data.turmaId &&
+        incoming().turmaNome == resource.data.turmaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().bimestre == resource.data.bimestre &&
+        isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidFarolEstudanteShape(itemId);
+      // Correção final da auditoria, seção 2: exclusão física NUNCA é
+      // permitida para o superintendente comum (nem o da própria escola) —
+      // "exclusão bloqueada para usuário comum" era o requisito não
+      // atendido pela versão anterior desta regra (que usava
+      // canWriteEscola()). Só o admin raiz pode excluir fisicamente, em
+      // manutenção excepcional (ex.: registro de teste/erro grave de
+      // digitação) — o caminho normal para a escola é arquivar (update).
+      allow delete: if isPlatformAdmin() && isValidId(itemId);
+    }
+
+    // --- Reestruturação SIFEC: recomposicao_planos ---
+    // Formulário livre do plano de recomposição da própria escola (prazo,
+    // área/disciplina, turno, descrição) — substitui o protótipo anterior
+    // com progresso numérico e planos padrão gerados automaticamente.
+    function isValidRecomposicaoPlanShape(planId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo', 'bimestre',
+          'prazo', 'areaDisciplina', 'turno', 'descricao',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == planId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.bimestre in [1, 2, 3, 4] &&
+        data.prazo is string && data.prazo.size() > 0 && data.prazo.size() <= 200 &&
+        data.areaDisciplina is string && data.areaDisciplina.size() > 0 && data.areaDisciplina.size() <= 200 &&
+        data.turno in ['Matutino', 'Vespertino', 'Noturno', 'Integral'] &&
+        data.descricao is string && data.descricao.size() > 0 && data.descricao.size() <= 2000 &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /recomposicao_planos/{planId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isValidId(planId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isValidRecomposicaoPlanShape(planId);
+      allow update: if isValidId(planId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().bimestre == resource.data.bimestre &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidRecomposicaoPlanShape(planId);
+      allow delete: if canWriteEscola(resource.data.escolaNome) && isValidId(planId);
+    }
+
+    // --- Reestruturação SIFEC: cdg_planos ---
+    // Ciclo de Gestão simplificado — um plano por escola+ano letivo:
+    // situação (Ativo/Inativo) + status de execução.
+    function isValidCdgPlanShape(planId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo',
+          'situacao', 'statusExecucao', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == planId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        planId == data.schoolId + '_' + string(data.anoLetivo) &&
+        data.situacao in ['Ativo', 'Inativo'] &&
+        data.statusExecucao in ['Não iniciado', 'Em execução', 'Concluído'] &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /cdg_planos/{planId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isValidId(planId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isValidCdgPlanShape(planId);
+      allow update: if isValidId(planId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidCdgPlanShape(planId);
+      allow delete: if isPlatformAdmin() && isValidId(planId);
+    }
+
+    // --- Reestruturação SIFEC: cdg_tarefas ---
+    // Ações/tarefas do plano de Ciclo de Gestão — cada uma com seu próprio
+    // status (inclui "Concluído com Atraso"/"Atrasado", pedidos pelo plano).
+    function isValidCdgTaskShape(taskId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo',
+          'acao', 'responsavel', 'prazo', 'status',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == taskId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.acao is string && data.acao.size() > 0 && data.acao.size() <= 300 &&
+        data.responsavel is string && data.responsavel.size() > 0 && data.responsavel.size() <= 150 &&
+        data.prazo is string && data.prazo.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$') &&
+        data.status in ['Não Iniciado', 'Previsto', 'Em Andamento', 'Concluído', 'Concluído com Atraso', 'Atrasado'] &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /cdg_tarefas/{taskId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isValidId(taskId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isValidCdgTaskShape(taskId);
+      allow update: if isValidId(taskId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidCdgTaskShape(taskId);
+      allow delete: if canWriteEscola(resource.data.escolaNome) && isValidId(taskId);
+    }
+
+    // --- Reestruturação SIFEC: parecer_bimestral_notas ---
+    // Único dado que o Parecer Bimestral efetivamente grava: os
+    // encaminhamentos da superintendência para a escola, por bimestre. Os
+    // outros 8 cards do parecer só leem dados já existentes de outras
+    // coleções.
+    function isValidParecerBimestralNoteShape(noteId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'anoLetivo', 'bimestre',
+          'encaminhamentos', 'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == noteId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.bimestre in [1, 2, 3, 4] &&
+        noteId == data.schoolId + '_' + string(data.anoLetivo) + '_b' + string(data.bimestre) &&
+        data.encaminhamentos is string && data.encaminhamentos.size() <= 4000 &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /parecer_bimestral_notas/{noteId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      allow create: if isValidId(noteId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isValidParecerBimestralNoteShape(noteId);
+      allow update: if isValidId(noteId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().bimestre == resource.data.bimestre &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidParecerBimestralNoteShape(noteId);
+      allow delete: if isPlatformAdmin() && isValidId(noteId);
+    }
+
+    // --- Auditoria da reestruturação SIFEC: grade_entry_monitoring_disciplina ---
+    // Requisito central do Acompanhamento de Notas: dimensão turma+
+    // disciplina, coleção NOVA e separada de grade_entry_monitoring (que
+    // continua intocada — total por turma, sem disciplina, ainda usado pelo
+    // fluxo de registro do SIGE). Mesma integridade canônica de
+    // grade_entry_monitoring (isCanonicalTurmaOfSchoolYearAndName).
+    // Correção final da auditoria, seção 3: disciplina deixou de ser uma
+    // lista fechada de 4 áreas — disciplinaId (chave normalizada e segura)
+    // + disciplinaNome (texto livre, exibição) + areaConhecimento
+    // (opcional). As regras NÃO replicam a normalização Unicode completa do
+    // cliente (normalizeDisciplinaId — NFD + remoção de diacríticos; sem
+    // suporte equivalente na linguagem de regras do Firestore), então só
+    // validam o FORMATO de disciplinaId (minúsculas/dígitos/hífen, sem
+    // hífen nas pontas) — mesmo tradeoff já aceito para IDs de escola
+    // gerados no cliente em EscolasView.tsx. A integridade real do ID do
+    // documento continua garantida: entryId precisa bater exatamente com a
+    // chave composta usando disciplinaId.
+    function isValidGradeEntryMonitoringDisciplineShape(entryId) {
+      let data = incoming();
+      return data.keys().hasOnly([
+          'id', 'schoolId', 'codInep', 'escolaNome', 'turmaId', 'turmaNome',
+          'anoLetivo', 'bimestre', 'disciplinaId', 'disciplinaNome', 'areaConhecimento',
+          'expectedGradeEntries', 'completedGradeEntries', 'status', 'referenceDate',
+          'createdAt', 'updatedAt', 'createdBy', 'updatedBy'
+        ]) &&
+        data.id == entryId &&
+        data.schoolId is string && data.schoolId.size() <= 128 &&
+        data.codInep is string && data.codInep.size() <= 50 &&
+        data.escolaNome is string && data.escolaNome.size() <= 150 &&
+        data.turmaId is string && data.turmaId.size() <= 128 &&
+        data.turmaNome is string && data.turmaNome.size() <= 150 &&
+        isValidAnoLetivo(data.anoLetivo) &&
+        data.bimestre in [1, 2, 3, 4] &&
+        data.disciplinaId is string && data.disciplinaId.size() > 0 && data.disciplinaId.size() <= 100 &&
+        data.disciplinaId.matches('^[a-z0-9]+(-[a-z0-9]+)*$') &&
+        data.disciplinaNome is string && data.disciplinaNome.size() > 0 && data.disciplinaNome.size() <= 100 &&
+        (!('areaConhecimento' in data) ||
+          data.areaConhecimento in ['Linguagens', 'Matemática', 'Ciências da Natureza', 'Ciências Humanas', 'Formação Técnica', 'Outra']) &&
+        entryId == data.schoolId + '_' + string(data.anoLetivo) + '_b' + string(data.bimestre) + '_' + data.turmaId + '_' + data.disciplinaId &&
+        isNonNegInt(data.expectedGradeEntries) &&
+        isNonNegInt(data.completedGradeEntries) &&
+        data.completedGradeEntries <= data.expectedGradeEntries &&
+        data.status in ['rascunho', 'confirmado'] &&
+        data.referenceDate is string &&
+        data.referenceDate.matches('^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$') &&
+        data.createdAt is string && data.updatedAt is string &&
+        data.createdBy is string && data.updatedBy is string;
+    }
+
+    match /grade_entry_monitoring_disciplina/{entryId} {
+      allow read: if canWriteSchoolById(resource.data.get('schoolId', ''));
+      // isValidId(entryId) trocado por isValidGradeDisciplineCompositeId
+      // (correção do code review do PR #19) — entryId é uma chave composta
+      // que pode ultrapassar 128 caracteres; ver comentário da função.
+      allow create: if isValidGradeDisciplineCompositeId(entryId) &&
+        canWriteEscola(incoming().escolaNome) &&
+        isCanonicalSchoolMatch(incoming().schoolId, incoming().codInep, incoming().escolaNome) &&
+        isCanonicalTurmaOfSchoolYearAndName(incoming().turmaId, incoming().schoolId, incoming().anoLetivo, incoming().turmaNome) &&
+        isValidGradeEntryMonitoringDisciplineShape(entryId);
+      // areaConhecimento NUNCA é travada aqui de propósito — é um campo de
+      // organização/reclassificação, não de identidade (diferente de
+      // disciplinaId/disciplinaNome, que travam junto com turmaId/turmaNome
+      // abaixo, mesmo princípio de identidade imutável pós-criação já usado
+      // nas demais coleções desta reestruturação).
+      allow update: if isValidGradeDisciplineCompositeId(entryId) &&
+        canWriteEscola(resource.data.escolaNome) &&
+        incoming().schoolId == resource.data.schoolId &&
+        incoming().codInep == resource.data.codInep &&
+        incoming().escolaNome == resource.data.escolaNome &&
+        incoming().turmaId == resource.data.turmaId &&
+        incoming().turmaNome == resource.data.turmaNome &&
+        incoming().anoLetivo == resource.data.anoLetivo &&
+        incoming().bimestre == resource.data.bimestre &&
+        incoming().disciplinaId == resource.data.disciplinaId &&
+        incoming().disciplinaNome == resource.data.disciplinaNome &&
+        incoming().createdAt == resource.data.createdAt &&
+        incoming().createdBy == resource.data.createdBy &&
+        isValidGradeEntryMonitoringDisciplineShape(entryId);
+      allow delete: if isPlatformAdmin() && isValidGradeDisciplineCompositeId(entryId);
     }
 
     // --- Fase 2A: imports ---

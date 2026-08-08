@@ -1,10 +1,14 @@
 // @vitest-environment jsdom
-// Hotfix estabilização — o painel de matrículas confundia três estados
-// diferentes sob a mesma mensagem de "Missing or insufficient permissions":
-// (A) escola sem school_year ainda (normal, deve mostrar formulário),
-// (B) falha real de permissão/carregamento (deve mostrar erro + "Tentar
-// novamente", nunca formulário) e (C) usuário não cadastrado/inativo (deve
-// explicar isso, nunca mostrar formulário). Este arquivo testa os três.
+// Hotfix estabilização — o painel de matrículas precisa distinguir três
+// estados: (A) escola autorizada, carregamento normal (deve mostrar a
+// matrícula por bimestre), (B) falha real de permissão/carregamento (deve
+// mostrar erro + "Tentar novamente", nunca formulário) e (C) usuário não
+// cadastrado/inativo (deve explicar isso, nunca mostrar formulário).
+//
+// Reestruturação SIFEC: reescrito para o painel simplificado
+// (bimonthlyEnrollmentService no lugar de schoolYearService/
+// enrollmentSnapshotService — configuração do ano letivo e registro mensal
+// foram removidos da UI).
 import '@testing-library/jest-dom/vitest';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
@@ -15,15 +19,11 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-// vi.mock factories são hoisted acima das declarações normais — vi.hoisted()
-// é a forma documentada de compartilhar valores entre o factory e o corpo
-// do teste sem cair em "Cannot access before initialization".
-const { mockAuth, mockHasSchoolWriteAccess, mockIsCurrentUserAuthorized, mockGetSchoolYear, mockListSnapshots } = vi.hoisted(() => ({
+const { mockAuth, mockHasSchoolWriteAccess, mockIsCurrentUserAuthorized, mockListBimonthly } = vi.hoisted(() => ({
   mockAuth: { currentUser: { email: 'super.a@example.com' } as { email: string } | null },
   mockHasSchoolWriteAccess: vi.fn(),
   mockIsCurrentUserAuthorized: vi.fn(),
-  mockGetSchoolYear: vi.fn(),
-  mockListSnapshots: vi.fn(),
+  mockListBimonthly: vi.fn(),
 }));
 
 vi.mock('../src/lib/firebase', () => ({
@@ -35,16 +35,10 @@ vi.mock('../src/lib/superintendentService', () => ({
   isCurrentUserAuthorized: () => mockIsCurrentUserAuthorized(),
 }));
 
-vi.mock('../src/lib/schoolYearService', () => ({
-  getSchoolYear: (...args: unknown[]) => mockGetSchoolYear(...args),
-  saveSchoolYear: vi.fn(),
-  SchoolYearValidationError: class extends Error {},
-}));
-
-vi.mock('../src/lib/enrollmentSnapshotService', () => ({
-  listEnrollmentSnapshotsForSchool: (...args: unknown[]) => mockListSnapshots(...args),
-  saveEnrollmentSnapshot: vi.fn(),
-  EnrollmentSnapshotValidationError: class extends Error {},
+vi.mock('../src/lib/bimonthlyEnrollmentService', () => ({
+  listBimonthlyEnrollmentsForSchool: (...args: unknown[]) => mockListBimonthly(...args),
+  saveBimonthlyEnrollment: vi.fn(),
+  BimonthlyEnrollmentValidationError: class extends Error {},
 }));
 
 vi.mock('../src/lib/classService', () => ({
@@ -75,63 +69,51 @@ describe('SchoolEnrollmentPanel — estados de acesso (A/B/C)', () => {
     mockAuth.currentUser = { email: 'super.a@example.com' };
   });
 
-  it('A. escola autorizada sem school_year: mostra o formulário e a orientação de estado inicial, sem erro', async () => {
-    mockGetSchoolYear.mockResolvedValue(null);
-    mockListSnapshots.mockResolvedValue([]);
+  it('A. escola autorizada: mostra a matrícula por bimestre e a seção de turmas, sem erro', async () => {
+    mockListBimonthly.mockResolvedValue([]);
     renderPanel();
 
-    await waitFor(() =>
-      expect(
-        screen.getByText(/Esta escola ainda não possui configuração para 2026/)
-      ).toBeInTheDocument()
-    );
+    await waitFor(() => expect(screen.getByText('Matrícula por bimestre')).toBeInTheDocument());
     expect(screen.queryByText('Não foi possível carregar os dados desta escola.')).not.toBeInTheDocument();
     expect(screen.queryByText(/não está cadastrada ou está inativa/i)).not.toBeInTheDocument();
-    expect(screen.getByText(/Configuração do Ano Letivo/)).toBeInTheDocument();
+    expect(screen.getByText('Turmas')).toBeInTheDocument();
   });
 
   it('B. falha real de carregamento: mostra erro e botão "Tentar novamente", sem formulário', async () => {
-    mockGetSchoolYear.mockRejectedValue(new Error('Missing or insufficient permissions.'));
-    mockListSnapshots.mockResolvedValue([]);
+    mockListBimonthly.mockRejectedValue(new Error('Missing or insufficient permissions.'));
     renderPanel();
 
     await waitFor(() =>
       expect(screen.getByText('Não foi possível carregar os dados desta escola.')).toBeInTheDocument()
     );
     expect(screen.getByText('Missing or insufficient permissions.')).toBeInTheDocument();
-    expect(screen.queryByText(/Configuração do Ano Letivo/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Turmas')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Tentar novamente' })).toBeInTheDocument();
   });
 
   it('B. botão "Tentar novamente" refaz o carregamento', async () => {
-    mockGetSchoolYear.mockRejectedValueOnce(new Error('Erro de rede'));
-    mockListSnapshots.mockResolvedValue([]);
+    mockListBimonthly.mockRejectedValueOnce(new Error('Erro de rede'));
     renderPanel();
 
     await waitFor(() => expect(screen.getByText('Erro de rede')).toBeInTheDocument());
 
-    mockGetSchoolYear.mockResolvedValueOnce(null);
+    mockListBimonthly.mockResolvedValueOnce([]);
     fireEvent.click(screen.getByRole('button', { name: 'Tentar novamente' }));
 
-    await waitFor(() =>
-      expect(
-        screen.getByText(/Esta escola ainda não possui configuração para 2026/)
-      ).toBeInTheDocument()
-    );
-    expect(mockGetSchoolYear).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(screen.getByText('Matrícula por bimestre')).toBeInTheDocument());
+    expect(mockListBimonthly).toHaveBeenCalledTimes(2);
   });
 
   it('C. usuário não cadastrado/inativo: explica a situação e nunca mostra formulário', async () => {
     mockIsCurrentUserAuthorized.mockReturnValue(false);
     mockHasSchoolWriteAccess.mockReturnValue(false);
-    mockGetSchoolYear.mockResolvedValue(null);
-    mockListSnapshots.mockResolvedValue([]);
+    mockListBimonthly.mockResolvedValue([]);
     renderPanel();
 
     await waitFor(() =>
       expect(screen.getByText('Sua conta não está cadastrada ou está inativa no SIFEC.')).toBeInTheDocument()
     );
-    expect(screen.queryByText(/Configuração do Ano Letivo/)).not.toBeInTheDocument();
+    expect(screen.queryByText('Turmas')).not.toBeInTheDocument();
     expect(screen.queryByText('Não foi possível carregar os dados desta escola.')).not.toBeInTheDocument();
   });
 

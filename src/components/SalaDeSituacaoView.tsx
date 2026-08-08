@@ -5,8 +5,12 @@
 // Respeita a mesma carteira de 7 escolas / visão global de 56 escolas já
 // usada por FluxoView.tsx/EscolasView.tsx, via getSchoolsForCurrentScope.
 import { useEffect, useMemo, useState } from 'react';
-import { Search, AlertTriangle } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { auth } from '../lib/firebase';
+import PageHeader from './ui/PageHeader';
+import Badge from './ui/Badge';
+import StateMessage from './ui/StateMessage';
+import SurfaceCard from './ui/SurfaceCard';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
   getSuperintendents,
@@ -25,6 +29,7 @@ import SituationFilters from './sala-situacao/SituationFilters';
 import SituationSummaryCards from './sala-situacao/SituationSummaryCards';
 import SituationDataQualityPanel from './sala-situacao/SituationDataQualityPanel';
 import SituationSchoolTable from './sala-situacao/SituationSchoolTable';
+import RankingMethodologyPanel from './sala-situacao/RankingMethodologyPanel';
 import SituationSchoolDetail from './sala-situacao/SituationSchoolDetail';
 import SituationPendingItems, { type PendingItemWithSchool } from './sala-situacao/SituationPendingItems';
 
@@ -128,31 +133,31 @@ export default function SalaDeSituacaoView() {
   const selectedSituation = selectedSchoolId ? situations[selectedSchoolId] : null;
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <span className="text-[10px] text-brand-turquoise tracking-wider uppercase font-black font-mono">SEFOR 3 - ACOMPANHAMENTO</span>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Sala de Situação</h2>
-          <p className="text-xs text-slate-500 font-normal">
-            Visão consolidada do acompanhamento escolar e da qualidade dos dados.
-          </p>
-          <p className="text-[11px] text-slate-400 mt-1">
-            Esta visão apresenta somente dados agregados. Informações nominais permanecem restritas aos módulos autorizados.
-          </p>
-          {!isFirebaseMode && (
-            <span className="inline-flex items-center gap-1.5 mt-1.5 px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-md uppercase tracking-wide">
-              Modo demonstração — faça login para ver dados reais
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="SEFOR 3 — Painel executivo"
+        title="Sala de Situação"
+        description="Prioridades de acompanhamento da carteira selecionada — critério técnico provisório, nunca um julgamento da escola."
+        actions={
+          <button
+            type="button"
+            onClick={refresh}
+            className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[13px] font-bold rounded-lg transition shrink-0"
+          >
+            Atualizar
+          </button>
+        }
+        context={
+          <>
+            <span className="text-caption text-slate-400">
+              Esta visão apresenta somente dados agregados. Informações nominais permanecem restritas aos módulos autorizados.
             </span>
-          )}
-        </div>
-        <button
-          type="button"
-          onClick={refresh}
-          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[11px] font-bold rounded-lg transition shrink-0 self-start"
-        >
-          Atualizar
-        </button>
-      </div>
+            {!isFirebaseMode && (
+              <Badge tone="attention">Modo demonstração — faça login para ver dados reais</Badge>
+            )}
+          </>
+        }
+      />
 
       <SituationFilters
         showScopeToggle={showScopeToggle}
@@ -174,33 +179,37 @@ export default function SalaDeSituacaoView() {
 
       <SituationSummaryCards summary={summary} loading={loading} />
 
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+      <SurfaceCard className="flex items-center justify-between">
         <div className="relative flex-1 max-w-md">
           <input
             type="text"
             placeholder="Buscar unidade escolar..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 focus:border-brand-turquoise focus:outline-none text-xs text-slate-800 rounded-xl"
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 focus:border-brand-turquoise focus:outline-none text-xs text-slate-800 rounded-lg"
           />
           <Search size={14} className="absolute left-3 top-3 text-slate-400" />
         </div>
-        <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">
+        <div className="text-xs text-slate-500 font-bold">
           {filteredSchools.length} Escolas
         </div>
-      </div>
+      </SurfaceCard>
 
       {loadError && (
-        <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-          <span className="flex items-center gap-2"><AlertTriangle size={14} /> {loadError}</span>
-          <button
-            type="button"
-            onClick={refresh}
-            className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0"
-          >
-            Tentar novamente
-          </button>
-        </div>
+        <StateMessage
+          kind="error"
+          title={loadError}
+          compact
+          action={
+            <button
+              type="button"
+              onClick={refresh}
+              className="px-3 py-1.5 bg-white border border-status-critical-border hover:bg-status-critical-bg rounded-lg text-[11px] font-bold text-status-critical transition"
+            >
+              Tentar novamente
+            </button>
+          }
+        />
       )}
 
       {/* Revisão do code review do PR #16, seção 8: enquanto um novo
@@ -209,13 +218,12 @@ export default function SalaDeSituacaoView() {
           do contexto ANTERIOR — mostra um estado de carregamento próprio em
           vez disso, até `situations` refletir o novo contexto. */}
       {selectedSchoolId && loading ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-xs text-slate-400 font-bold">
-          Carregando detalhe da escola...
-        </div>
+        <StateMessage kind="loading" title="Carregando detalhe da escola..." />
       ) : selectedSituation ? (
         <SituationSchoolDetail situation={selectedSituation} onClose={() => setSelectedSchoolId(null)} />
       ) : (
         <>
+          <RankingMethodologyPanel totalEscolas={filteredSchools.length} anoLetivo={anoLetivo} bimestre={bimestre} />
           <SituationSchoolTable
             schools={filteredSchools}
             situations={situations}

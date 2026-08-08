@@ -124,7 +124,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
         message: `${notas.turmasSemRelatorio} turma(s) sem relatório de notas informado.`,
         period: null,
         sourceCollection: 'grade_entry_monitoring',
-        resolutionAction: 'Registrar o relatório de notas em Notas Bimestrais.',
+        resolutionAction: 'Registrar o relatório de notas em Acompanhamento de Notas.',
       });
     }
     // Parcial e sem preenchimento são tratados como a MESMA pendência
@@ -140,7 +140,7 @@ export function buildPendingItems(input: PendingItemsInput): SchoolSituationPend
         message: `${turmasComPreenchimentoParcial} turma(s) com relatório de notas incompleto.`,
         period: null,
         sourceCollection: 'grade_entry_monitoring',
-        resolutionAction: 'Completar o lançamento de notas em Notas Bimestrais.',
+        resolutionAction: 'Completar o lançamento de notas em Acompanhamento de Notas.',
       });
     }
   }

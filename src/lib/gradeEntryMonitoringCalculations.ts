@@ -6,6 +6,7 @@
 // completedGradeEntries=0); a AUSÊNCIA de documento nunca é tratada como
 // zero — ver classifyTurmaGradeEntryStatus.
 import type { GradeEntryMonitoring } from '../types/gradeEntryMonitoring';
+import type { AreaConhecimento, GradeEntryMonitoringByDiscipline } from '../types/gradeEntryMonitoringDiscipline';
 import { isNonNegativeInteger } from './enrollmentCalculations';
 
 export type TurmaGradeEntryStatus =
@@ -91,6 +92,74 @@ export function classifyTurmaGradeEntryStatus(monitoring: GradeEntryCounts | nul
     return 'parcial';
   }
   return 'inconsistente';
+}
+
+// Reestruturação SIFEC — faixas de alerta visual do percentual de
+// preenchimento de notas (item "Lançamento de Notas" do plano):
+//   > 95%        → 'otimo'    (Ótimo / Concluído)
+//   75% – 95%    → 'bom'      (Bom / Em andamento)
+//   50% – 75%    → 'atencao'  (Atenção / Parcial)
+//   ≤ 50%        → 'critico'  (Crítico)
+// Convenção de fronteira (o plano não define os limites como abertos ou
+// fechados dos dois lados ao mesmo tempo): cada faixa inclui seu próprio
+// limite SUPERIOR, exceto a mais alta (> 95, estritamente maior) — garante
+// uma partição sem sobreposição nem lacuna para qualquer percentual real.
+// `null` (nenhum relatório informado) tem faixa própria, nunca cai em
+// 'critico' por omissão.
+export type CompletionColorBand = 'otimo' | 'bom' | 'atencao' | 'critico' | 'sem_dado';
+
+export interface CompletionColorBandInfo {
+  label: string;
+  badgeClassName: string;
+  textClassName: string;
+  dotClassName: string;
+}
+
+export const COMPLETION_COLOR_BAND_INFO: Record<CompletionColorBand, CompletionColorBandInfo> = {
+  otimo: {
+    label: 'Ótimo / Concluído',
+    badgeClassName: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+    textClassName: 'text-emerald-700',
+    dotClassName: 'bg-emerald-500',
+  },
+  bom: {
+    label: 'Bom / Em andamento',
+    badgeClassName: 'bg-emerald-50 text-emerald-600 border-emerald-200',
+    textClassName: 'text-emerald-600',
+    dotClassName: 'bg-emerald-400',
+  },
+  atencao: {
+    label: 'Atenção / Parcial',
+    badgeClassName: 'bg-amber-50 text-amber-700 border-amber-200',
+    textClassName: 'text-amber-600',
+    dotClassName: 'bg-amber-400',
+  },
+  critico: {
+    label: 'Crítico',
+    badgeClassName: 'bg-rose-50 text-rose-700 border-rose-200',
+    textClassName: 'text-rose-600',
+    dotClassName: 'bg-rose-500',
+  },
+  sem_dado: {
+    label: 'Não informado',
+    badgeClassName: 'bg-slate-100 text-slate-500 border-slate-200',
+    textClassName: 'text-slate-400',
+    dotClassName: 'bg-slate-300',
+  },
+};
+
+// Auditoria da reestruturação SIFEC, seção 5 — limites exatos e literais:
+// >95% Ótimo; >=75 e <=95% Bom (limite inferior INCLUSIVO, ao contrário do
+// limite de 95, que é exclusivo do lado de baixo); >50 e <75% Atenção;
+// <=50% Crítico. Corrigido nesta auditoria: a implementação anterior usava
+// `> 75` (exclusivo), classificando exatamente 75% como Atenção — divergia
+// do limite inclusivo pedido explicitamente pela auditoria.
+export function classifyCompletionColorBand(percentage: number | null): CompletionColorBand {
+  if (percentage == null) return 'sem_dado';
+  if (percentage > 95) return 'otimo';
+  if (percentage >= 75) return 'bom';
+  if (percentage > 50) return 'atencao';
+  return 'critico';
 }
 
 export interface TurmaGradeEntryRow {
@@ -210,4 +279,113 @@ export function consolidateGradeEntryMonitoring(
     // não ser "confiável o bastante" para exibir um percentual.
     percentualPreenchimentoGeral: turmasInconsistentes > 0 ? null : calculateCompletionPercentage(totals),
   };
+}
+
+// Reestruturação SIFEC — visões "1º Período" (1º+2º bimestre), "2º Período"
+// (3º+4º bimestre), "Consolidado" (1º ao 4º) e "agregados regionais"
+// (soma de várias escolas). Deliberadamente NÃO reaproveita
+// consolidateGradeEntryMonitoring: aquela função assume um único documento
+// de monitoramento por turma (um bimestre), e `totalStudents`/
+// `studentsWithCompleteGrades`/etc são uma FOTOGRAFIA da turma naquele
+// bimestre — somar essas colunas entre bimestres diferentes contaria a
+// mesma matrícula mais de uma vez. Esta função soma só o que É aditivo por
+// natureza entre bimestres: lançamentos esperados/realizados (cada bimestre
+// tem seus próprios lançamentos, nunca se sobrepõem). Documentos
+// inconsistentes (ver isMathematicallyConsistent) são contados mas nunca
+// somados aos totais, mesmo princípio de consolidateGradeEntryMonitoring.
+export interface PeriodGradeEntryAggregate {
+  turmasNoEscopo: number;
+  turmasComAoMenosUmRelatorio: number;
+  turmasSemNenhumRelatorio: number;
+  turmasComInconsistencia: number;
+  totalExpectedGradeEntries: number;
+  totalCompletedGradeEntries: number;
+  percentualGeral: number | null;
+}
+
+// `monitoringByTurma` — para cada turma no escopo, a lista de documentos de
+// monitoramento encontrados nos bimestres do período (pode ter de 0 a N
+// entradas por turma; N = quantidade de bimestres do período, nunca mais).
+export function aggregateGradeEntriesForPeriod(
+  monitoringByTurma: readonly (readonly GradeEntryCounts[])[]
+): PeriodGradeEntryAggregate {
+  let turmasComAoMenosUmRelatorio = 0;
+  let turmasSemNenhumRelatorio = 0;
+  let turmasComInconsistencia = 0;
+  let totalExpectedGradeEntries = 0;
+  let totalCompletedGradeEntries = 0;
+
+  for (const monitoringDocs of monitoringByTurma) {
+    if (monitoringDocs.length === 0) {
+      turmasSemNenhumRelatorio += 1;
+      continue;
+    }
+    turmasComAoMenosUmRelatorio += 1;
+    const turmaTemInconsistencia = monitoringDocs.some(doc => !isMathematicallyConsistent(doc));
+    if (turmaTemInconsistencia) {
+      turmasComInconsistencia += 1;
+      continue;
+    }
+    for (const doc of monitoringDocs) {
+      totalExpectedGradeEntries += doc.expectedGradeEntries;
+      totalCompletedGradeEntries += doc.completedGradeEntries;
+    }
+  }
+
+  return {
+    turmasNoEscopo: monitoringByTurma.length,
+    turmasComAoMenosUmRelatorio,
+    turmasSemNenhumRelatorio,
+    turmasComInconsistencia,
+    totalExpectedGradeEntries,
+    totalCompletedGradeEntries,
+    percentualGeral: turmasComInconsistencia > 0
+      ? null
+      : calculateCompletionPercentage({
+          expectedGradeEntries: totalExpectedGradeEntries,
+          completedGradeEntries: totalCompletedGradeEntries,
+        }),
+  };
+}
+
+// Correção final da auditoria da reestruturação, seção 3: "a consolidação
+// por área deve ser calculada a partir das disciplinas, nunca persistida
+// como percentual redundante" — esta função é sempre recalculada em tempo
+// real a partir das entradas de grade_entry_monitoring_disciplina, nunca
+// gravada em nenhum documento. Entradas sem areaConhecimento (opcional)
+// entram no grupo 'Sem área', nunca descartadas silenciosamente. Percentual
+// sempre soma(realizados)/soma(esperados) da área inteira — nunca a média
+// dos percentuais de cada disciplina (mesmo princípio de
+// consolidateGradeEntryMonitoring/aggregateGradeEntriesForPeriod acima).
+export interface DisciplineAreaAggregate {
+  areaConhecimento: AreaConhecimento | 'Sem área';
+  disciplinasNoEscopo: number;
+  totalExpectedGradeEntries: number;
+  totalCompletedGradeEntries: number;
+  percentualGeral: number | null;
+}
+
+export function consolidateGradeEntryMonitoringDisciplineByArea(
+  entries: readonly GradeEntryMonitoringByDiscipline[]
+): DisciplineAreaAggregate[] {
+  const byArea = new Map<string, GradeEntryMonitoringByDiscipline[]>();
+  for (const entry of entries) {
+    const key = entry.areaConhecimento ?? 'Sem área';
+    const list = byArea.get(key) ?? [];
+    list.push(entry);
+    byArea.set(key, list);
+  }
+  return Array.from(byArea.entries())
+    .map(([areaConhecimento, list]) => {
+      const totalExpectedGradeEntries = list.reduce((sum, e) => sum + e.expectedGradeEntries, 0);
+      const totalCompletedGradeEntries = list.reduce((sum, e) => sum + e.completedGradeEntries, 0);
+      return {
+        areaConhecimento: areaConhecimento as AreaConhecimento | 'Sem área',
+        disciplinasNoEscopo: list.length,
+        totalExpectedGradeEntries,
+        totalCompletedGradeEntries,
+        percentualGeral: calculateCompletionPercentage({ expectedGradeEntries: totalExpectedGradeEntries, completedGradeEntries: totalCompletedGradeEntries }),
+      };
+    })
+    .sort((a, b) => a.areaConhecimento.localeCompare(b.areaConhecimento));
 }

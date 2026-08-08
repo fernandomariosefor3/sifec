@@ -10,7 +10,7 @@
 // DEMO_SCHOOL_FLOW_RESULTS, claramente identificado no cabeçalho, e nunca é
 // misturado com dado real do Firestore.
 import React, { useEffect, useMemo, useState } from 'react';
-import { Search, AlertTriangle } from 'lucide-react';
+import { Search } from 'lucide-react';
 import { auth } from '../lib/firebase';
 import { SEED_SCHOOLS } from '../lib/firebaseService';
 import {
@@ -26,6 +26,11 @@ import { consolidateSchoolFlowResults } from '../lib/schoolFlowCalculations';
 import SchoolFlowSummaryCards from './SchoolFlowSummaryCards';
 import SchoolFlowTable from './SchoolFlowTable';
 import SchoolFlowResultModal from './SchoolFlowResultModal';
+import PageHeader from './ui/PageHeader';
+import ContextBar from './ui/ContextBar';
+import Badge from './ui/Badge';
+import StateMessage from './ui/StateMessage';
+import SurfaceCard from './ui/SurfaceCard';
 
 // O ano letivo em andamento é 2026 em todo o resto do app (ver
 // SchoolEnrollmentPanel.tsx) — fluxo (aprovação/reprovação/abandono) só
@@ -100,69 +105,69 @@ export default function FluxoView() {
   });
 
   return (
-    <div className="space-y-6">
-      {/* A. Cabeçalho */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-        <div>
-          <span className="text-[10px] text-brand-turquoise tracking-wider uppercase font-black font-mono">SEFOR 3 - GESTÃO ESCOLAR</span>
-          <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Fluxo Escolar</h2>
-          <p className="text-xs text-slate-500 font-normal">
-            Aprovação, reprovação e abandono por escola e ano letivo — dados agregados, sem identificação de estudantes.
-          </p>
-          {!isFirebaseMode && (
-            <span className="inline-flex items-center gap-1.5 mt-1.5 px-2 py-0.5 bg-amber-50 border border-amber-200 text-amber-700 text-[10px] font-bold rounded-md uppercase tracking-wide">
-              Modo demonstração — faça login para ver e registrar dados reais
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-3">
-          <span className="text-[10px] text-slate-500 font-mono font-bold uppercase bg-slate-100 border border-slate-200 px-2.5 py-1.5 rounded-lg whitespace-nowrap">
-            {scopeLabel}
-          </span>
-          <select
-            value={anoLetivo}
-            onChange={e => setAnoLetivo(Number(e.target.value))}
-            aria-label="Ano letivo"
-            className="py-1.5 px-3 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-xl"
-          >
-            {ANOS_DISPONIVEIS.map(ano => (
-              <option key={ano} value={ano}>{ano}</option>
-            ))}
-          </select>
-        </div>
-      </div>
+    <div className="space-y-5">
+      <PageHeader
+        eyebrow="SEFOR 3 — Gestão escolar"
+        title="Fluxo Escolar"
+        description="Aprovação, reprovação e abandono por escola e ano letivo — dados agregados, sem identificação de estudantes."
+        context={
+          <ContextBar>
+            <span className="text-caption text-slate-500 font-bold uppercase">{scopeLabel}</span>
+            <label className="flex items-center gap-1.5 text-caption font-semibold text-slate-500">
+              Ano letivo
+              <select
+                value={anoLetivo}
+                onChange={e => setAnoLetivo(Number(e.target.value))}
+                aria-label="Ano letivo"
+                className="py-1 px-2 bg-white border border-slate-250 focus:outline-none focus:border-brand-turquoise text-xs font-bold rounded-lg"
+              >
+                {ANOS_DISPONIVEIS.map(ano => (
+                  <option key={ano} value={ano}>{ano}</option>
+                ))}
+              </select>
+            </label>
+            {!isFirebaseMode && (
+              <Badge tone="attention">Modo demonstração — faça login para ver e registrar dados reais</Badge>
+            )}
+          </ContextBar>
+        }
+      />
 
       {/* B. Indicadores consolidados */}
       <SchoolFlowSummaryCards consolidated={consolidated} loading={loading} />
 
       {/* Busca */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm flex items-center justify-between">
+      <SurfaceCard className="flex items-center justify-between">
         <div className="relative flex-1 max-w-md">
           <input
             type="text"
             placeholder="Buscar unidade escolar..."
             value={search}
             onChange={e => setSearch(e.target.value)}
-            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 focus:border-brand-turquoise focus:outline-none text-xs text-slate-800 rounded-xl"
+            className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 focus:border-brand-turquoise focus:outline-none text-xs text-slate-800 rounded-lg"
           />
           <Search size={14} className="absolute left-3 top-3 text-slate-400" />
         </div>
-        <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">
+        <div className="text-xs text-slate-500 font-bold">
           {filteredSchools.length} Escolas
         </div>
-      </div>
+      </SurfaceCard>
 
       {loadError && (
-        <div className="bg-rose-50 border border-rose-200 rounded-xl px-4 py-3 text-xs text-rose-700 font-bold flex items-center justify-between gap-3">
-          <span className="flex items-center gap-2"><AlertTriangle size={14} /> {loadError}</span>
-          <button
-            type="button"
-            onClick={refresh}
-            className="px-3 py-1.5 bg-rose-100 hover:bg-rose-200 rounded-lg text-[11px] font-bold text-rose-700 transition shrink-0"
-          >
-            Tentar novamente
-          </button>
-        </div>
+        <StateMessage
+          kind="error"
+          title={loadError}
+          compact
+          action={
+            <button
+              type="button"
+              onClick={refresh}
+              className="px-3 py-1.5 bg-white border border-status-critical-border hover:bg-status-critical-bg rounded-lg text-[11px] font-bold text-status-critical transition"
+            >
+              Tentar novamente
+            </button>
+          }
+        />
       )}
 
       {/* C/D. Tabela por escola + ação "Preencher fluxo" */}

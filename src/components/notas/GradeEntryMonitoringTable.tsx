@@ -8,6 +8,8 @@ import { FilePlus2, FilePenLine } from 'lucide-react';
 import {
   classifyTurmaGradeEntryStatus,
   calculateCompletionPercentage,
+  classifyCompletionColorBand,
+  COMPLETION_COLOR_BAND_INFO,
   type TurmaGradeEntryStatus,
 } from '../../lib/gradeEntryMonitoringCalculations';
 import type { GradeEntryMonitoring } from '../../types/gradeEntryMonitoring';
@@ -106,7 +108,7 @@ export default function GradeEntryMonitoringTable({
                 <tr>
                   <td colSpan={12} className="py-8 text-center text-slate-400">
                     {rows.length === 0
-                      ? 'Nenhuma turma cadastrada para esta escola e ano letivo — cadastre a turma em Gestão de Escolas.'
+                      ? 'Nenhuma turma cadastrada para esta escola e ano letivo.'
                       : 'Nenhuma turma encontrada com a situação selecionada.'}
                   </td>
                 </tr>
@@ -115,6 +117,7 @@ export default function GradeEntryMonitoringTable({
                   const status = classifyTurmaGradeEntryStatus(row.monitoring);
                   const badge = STATUS_BADGE[status];
                   const percentage = row.monitoring ? calculateCompletionPercentage(row.monitoring) : null;
+                  const colorBand = COMPLETION_COLOR_BAND_INFO[classifyCompletionColorBand(percentage)];
                   const m = row.monitoring;
                   return (
                     <tr key={row.turmaId} className="hover:bg-slate-50/30 transition">
@@ -125,8 +128,11 @@ export default function GradeEntryMonitoringTable({
                       <td className="py-4 px-4 text-right font-mono text-slate-500">{m ? m.studentsWithoutGrades : '—'}</td>
                       <td className="py-4 px-4 text-right font-mono text-slate-600">{m ? m.expectedGradeEntries : '—'}</td>
                       <td className="py-4 px-4 text-right font-mono text-slate-600">{m ? m.completedGradeEntries : '—'}</td>
-                      <td className="py-4 px-4 text-right font-mono text-brand-turquoise">
-                        {percentage == null ? 'Não informado' : `${percentage.toFixed(0)}%`}
+                      <td className="py-4 px-4 text-right">
+                        <span className={`inline-flex items-center gap-1.5 justify-end font-mono font-bold ${colorBand.textClassName}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full inline-block ${colorBand.dotClassName}`} />
+                          {percentage == null ? 'Não informado' : `${percentage.toFixed(0)}%`}
+                        </span>
                       </td>
                       <td className="py-4 px-4">
                         <span className={`inline-block px-2 py-0.5 rounded-md border text-[10px] font-bold whitespace-nowrap ${badge.className}`}>
