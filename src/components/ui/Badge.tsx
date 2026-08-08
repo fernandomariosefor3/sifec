@@ -6,11 +6,11 @@ import type { ReactNode } from 'react';
 export type BadgeTone = 'ok' | 'attention' | 'critical' | 'info' | 'neutral';
 
 const TONE_CLASSES: Record<BadgeTone, string> = {
-  ok: 'bg-status-ok-bg text-status-ok border-status-ok-border',
-  attention: 'bg-status-attention-bg text-status-attention border-status-attention-border',
-  critical: 'bg-status-critical-bg text-status-critical border-status-critical-border',
-  info: 'bg-status-info-bg text-status-info border-status-info-border',
-  neutral: 'bg-status-neutral-bg text-status-neutral border-status-neutral-border',
+  ok: 'bg-brand-green-light text-brand-green-dark border-brand-green/30',
+  attention: 'bg-brand-orange-light text-brand-orange-dark border-brand-orange/30',
+  critical: 'bg-brand-coral-light text-brand-coral-dark border-brand-coral/30',
+  info: 'bg-brand-turquoise-light text-brand-turquoise-dark border-brand-turquoise/30',
+  neutral: 'bg-slate-100 text-slate-600 border-slate-200',
 };
 
 interface BadgeProps {

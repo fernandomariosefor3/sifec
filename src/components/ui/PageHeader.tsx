@@ -15,11 +15,12 @@ interface PageHeaderProps {
 
 export default function PageHeader({ eyebrow, title, description, context, actions, className = '' }: PageHeaderProps) {
   return (
-    <div className={`pb-4 mb-5 border-b border-slate-200 space-y-3 ${className}`}>
+    <div className={`pb-4 mb-5 space-y-3 ${className}`}>
+      <div className="h-[3px] w-24 rounded-full bg-brand-turquoise mb-4" />
       <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
         <div className="min-w-0">
           {eyebrow && (
-            <span className="text-label uppercase text-brand-turquoise-dark block mb-1">{eyebrow}</span>
+            <span className="text-label uppercase text-brand-turquoise-dark bg-brand-turquoise-light px-2 py-0.5 rounded-md inline-block mb-1">{eyebrow}</span>
           )}
           <h2 className="text-page-title text-slate-900">{title}</h2>
           {description && <p className="text-body text-slate-500 mt-1 max-w-2xl">{description}</p>}

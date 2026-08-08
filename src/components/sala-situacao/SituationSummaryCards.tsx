@@ -84,22 +84,34 @@ export default function SituationSummaryCards({ summary, loading }: SituationSum
   ] as const;
 
   const ACCENT_CLASSES: Record<'neutral' | 'attention' | 'critical', string> = {
-    neutral: 'text-slate-500 bg-slate-100',
-    attention: 'text-status-attention bg-status-attention-bg',
-    critical: 'text-status-critical bg-status-critical-bg',
+    neutral: 'text-brand-green bg-brand-green-light',
+    attention: 'text-brand-orange-dark bg-brand-orange-light',
+    critical: 'text-brand-coral-dark bg-brand-coral-light',
+  };
+
+  const CARD_BG_CLASSES: Record<'neutral' | 'attention' | 'critical', string> = {
+    neutral: 'bg-brand-green-light border-brand-green/30',
+    attention: 'bg-brand-orange-light border-brand-orange/30',
+    critical: 'bg-brand-coral-light border-brand-coral/30',
+  };
+
+  const VALUE_CLASSES: Record<'neutral' | 'attention' | 'critical', string> = {
+    neutral: 'text-brand-green-dark',
+    attention: 'text-brand-orange-dark',
+    critical: 'text-brand-coral-dark',
   };
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
       {cards.map(card => (
-        <div key={card.label} className="bg-white border border-slate-200 rounded-xl p-4 shadow-sm">
+        <div key={card.label} className={`${CARD_BG_CLASSES[card.accent]} border rounded-xl p-4 shadow-sm`}>
           <div className="flex items-center justify-between">
             <span className="text-label uppercase text-slate-400">{card.label}</span>
             <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${ACCENT_CLASSES[card.accent]}`}>
               {card.icon}
             </span>
           </div>
-          <div className="text-xl font-extrabold text-slate-900 mt-2">
+          <div className={`text-xl font-extrabold mt-2 ${VALUE_CLASSES[card.accent]}`}>
             {loading ? '—' : card.value}
           </div>
           <p className="text-caption text-slate-500 font-semibold mt-1">{loading ? '' : card.detail}</p>

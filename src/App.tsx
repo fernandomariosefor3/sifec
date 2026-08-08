@@ -73,10 +73,19 @@ const shouldShowCanonicalHostNotice = isGithubPagesHostname(window.location.host
 export default function App() {
   const [activeTab, setActiveTab] = React.useState<TabType>('escolas');
   const [isDevOpen, setIsDevOpen] = useState(false);
-  // Nova identidade visual — sidebar vira menu responsivo (off-canvas) em
-  // telas menores que `lg`; em desktop a sidebar fica sempre visível e este
-  // estado não tem efeito (ver classes `lg:` no JSX).
+  // Sidebar responsiva: off-canvas em telas < lg, sempre visível em desktop.
+  // Quando aberta no mobile, o scroll do body é bloqueado para evitar que o
+  // conteúdo role por trás do overlay.
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  React.useEffect(() => {
+    if (isSidebarOpen) {
+      document.body.style.overflow = 'hidden';
+    } else {
+      document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [isSidebarOpen]);
 
   const [activeSuperId, setActiveSuperId] = useState('all');
   const [superintendents, setSuperintendents] = useState<any[]>([]);
@@ -250,8 +259,8 @@ export default function App() {
   function navItemClass(tab: TabType): string {
     return `w-full text-left px-3 py-2.5 rounded-lg text-[13px] font-semibold transition flex items-center gap-2.5 ${
       activeTab === tab
-        ? 'bg-brand-turquoise/10 text-brand-turquoise-dark border-l-[3px] border-brand-turquoise pl-[9px]'
-        : 'text-slate-600 border-l-[3px] border-transparent pl-[9px] hover:bg-slate-50 hover:text-slate-900'
+        ? 'bg-brand-turquoise text-white shadow-md border-l-[3px] border-brand-turquoise-dark pl-[9px] font-extrabold'
+        : 'text-slate-600 border-l-[3px] border-transparent pl-[9px] hover:bg-brand-green-light hover:text-brand-green-dark'
     }`;
   }
 
@@ -271,10 +280,11 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-brand-turquoise selection:text-white flex flex-col justify-between">
       {/* 1. Header — compacto, sem altura excessiva (nova identidade visual, seção 2.A) */}
       <div>
-        <div className="h-1.5 w-full flex">
-          <div className="bg-brand-turquoise flex-1 h-full" />
-          <div className="bg-brand-green flex-1 h-full" />
-          <div className="bg-brand-orange flex-1 h-full" />
+        <div className="h-1 w-full flex">
+          <div className="bg-brand-green flex-[2] h-full" />
+          <div className="bg-brand-turquoise flex-[3] h-full" />
+          <div className="bg-brand-orange flex-[1] h-full" />
+          <div className="bg-brand-coral flex-[1] h-full" />
         </div>
         <header className="border-b border-slate-200 bg-white sticky top-0 z-40 px-4 sm:px-6 py-3">
           <div className="max-w-[1400px] mx-auto flex items-center justify-between gap-4">
@@ -341,11 +351,13 @@ export default function App() {
             />
           )}
 
-          {/* Sidebar — fixa em desktop, menu off-canvas em telas menores (seção 2.B) */}
+          {/* Sidebar — fixa em desktop (col-span-3), menu off-canvas em mobile.
+              No mobile o drawer abre com backdrop e trava scroll do body.
+              Largura máxima 260px no mobile para não cobrir toda a tela. */}
           <nav
             aria-label="Navegação principal"
-            className={`fixed inset-y-0 left-0 z-50 w-[280px] overflow-y-auto bg-white border-r border-slate-200 p-3 flex flex-col gap-1
-              transform transition-transform duration-200
+            className={`fixed inset-y-0 left-0 z-50 w-[min(260px,85vw)] overflow-y-auto bg-gradient-to-b from-brand-green-light/80 via-white to-white border-r border-brand-green/20 p-3 flex flex-col gap-1
+              transform transition-transform duration-200 shadow-xl lg:shadow-none
               lg:static lg:z-auto lg:col-span-3 lg:w-auto lg:translate-x-0 lg:border lg:rounded-2xl lg:self-start lg:max-h-[calc(100vh-6rem)]
               ${isSidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
           >
@@ -361,8 +373,8 @@ export default function App() {
               </button>
             </div>
 
-            {/* Espaço de Trabalho — mesma lógica de sempre, visual mais sóbrio */}
-            <div className="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl mb-2 text-xs">
+            {/* Espaço de Trabalho */}
+            <div className="px-3 py-2.5 bg-brand-green-light/80 border border-brand-green/20 rounded-xl mb-2 text-xs">
               <label className="text-label uppercase text-slate-500 block mb-1.5 flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-brand-green inline-block"></span>
                 Espaço de Trabalho
@@ -466,7 +478,10 @@ export default function App() {
               )}
             </div>
 
-            <span className="text-label uppercase text-slate-400 px-3 py-1 block mb-0.5">Indicadores e Escola</span>
+            <span className="text-label uppercase text-slate-500 px-3 py-2 mb-0.5 flex items-center gap-1.5 bg-brand-turquoise-light rounded-lg font-extrabold text-brand-turquoise-dark">
+              <span className="w-2 h-2 rounded-full bg-brand-turquoise inline-block"></span>
+              Indicadores e Escola
+            </span>
 
             <button onClick={() => handleNavigate('escolas')} className={navItemClass('escolas')}>
               <GraduationCap size={16} className="shrink-0" /> Gestão de Escolas
@@ -484,7 +499,10 @@ export default function App() {
               <Radar size={16} className="shrink-0" /> Sala de Situação
             </button>
 
-            <span className="text-label uppercase text-slate-400 px-3 py-1 block mt-3 mb-0.5">Gestão e Acompanhamento</span>
+            <span className="text-label uppercase text-slate-500 px-3 py-2 mt-3 mb-0.5 flex items-center gap-1.5 bg-brand-green-light rounded-lg font-extrabold text-brand-green-dark">
+              <span className="w-2 h-2 rounded-full bg-brand-green inline-block"></span>
+              Gestão e Acompanhamento
+            </span>
 
             <button onClick={() => handleNavigate('cdg')} className={navItemClass('cdg')}>
               <LayoutDashboard size={16} className="shrink-0" /> Ciclo de Gestão
@@ -506,15 +524,25 @@ export default function App() {
               <Users size={16} className="shrink-0" /> Superintendentes
             </button>
 
-            <span className="text-label uppercase text-slate-400 px-3 py-1 block mt-3 mb-0.5">Relatório</span>
+            <span className="text-label uppercase text-slate-500 px-3 py-2 mt-3 mb-0.5 flex items-center gap-1.5 bg-brand-coral-light rounded-lg font-extrabold text-brand-coral-dark">
+              <span className="w-2 h-2 rounded-full bg-brand-coral inline-block"></span>
+              Relatório
+            </span>
 
             <button onClick={() => handleNavigate('parecer')} className={navItemClass('parecer')}>
               <Presentation size={16} className="shrink-0" /> Parecer Bimestral
             </button>
           </nav>
 
-          {/* Área de conteúdo — uma única superfície neutra, sem acento por aba */}
-          <div className="lg:col-span-9 bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 min-h-[450px] shadow-sm">
+          {/* Área de conteúdo — topo com as 4 cores da marca, corpo neutro */}
+          <div className="lg:col-span-9 bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
+            <div className="h-[3px] w-full flex shrink-0">
+              <div className="bg-brand-green flex-[2] h-full" />
+              <div className="bg-brand-turquoise flex-[3] h-full" />
+              <div className="bg-brand-orange flex-[1] h-full" />
+              <div className="bg-brand-coral flex-[1] h-full" />
+            </div>
+            <div className="p-5 sm:p-6 min-h-[450px]">
             {activeTab === 'escolas' && <ErrorBoundary><EscolasView /></ErrorBoundary>}
             {activeTab === 'fluxo' && <ErrorBoundary><FluxoView /></ErrorBoundary>}
             {activeTab === 'notas' && <ErrorBoundary><NotasView /></ErrorBoundary>}
@@ -524,17 +552,26 @@ export default function App() {
             {activeTab === 'recomposicao' && <ErrorBoundary><RecomposicaoView /></ErrorBoundary>}
             {activeTab === 'superintendentes' && <ErrorBoundary><SuperintendentesView /></ErrorBoundary>}
             {activeTab === 'parecer' && <ErrorBoundary><ParecerBimestralView /></ErrorBoundary>}
+            </div>
           </div>
         </section>
       </div>
 
-      {/* 4. Rodapé discreto com o gatilho oculto do Painel Técnico */}
-      <footer className="mt-12 border-t border-slate-200 max-w-[1400px] w-full mx-auto px-4 sm:px-6 py-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
-        <div>
-          <div className="text-xs font-black text-slate-800">Coordenadoria Regional SEFOR 3</div>
-          <p className="text-[11px] text-slate-500 mt-1 leading-normal">
-            Controle Gerencial da Seduc Ceará para Pactuação Contínua de Metas.
-          </p>
+      {/* 4. Rodapé com barra colorida da marca */}
+      <footer className="mt-12 max-w-[1400px] w-full mx-auto px-4 sm:px-6 pb-6 flex flex-col md:flex-row md:items-center justify-between gap-6">
+        <div className="w-full">
+          <div className="h-[3px] w-full flex rounded-full mb-4">
+            <div className="bg-brand-green flex-[2] h-full rounded-l-full" />
+            <div className="bg-brand-turquoise flex-[3] h-full" />
+            <div className="bg-brand-orange flex-[1] h-full" />
+            <div className="bg-brand-coral flex-[1] h-full rounded-r-full" />
+          </div>
+          <div>
+            <div className="text-xs font-black text-slate-800">Coordenadoria Regional SEFOR 3</div>
+            <p className="text-[11px] text-slate-500 mt-1 leading-normal">
+              Controle Gerencial da Seduc Ceará para Pactuação Contínua de Metas.
+            </p>
+          </div>
         </div>
 
         {/* Floating hidden technical button: dev-only, not shipped in production build */}

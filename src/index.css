@@ -1,9 +1,9 @@
 @import "tailwindcss";
 
-/* Nova identidade visual do SIFEC — "painel de inteligência e
-   acompanhamento escolar". Paleta reduzida e semântica: verde/turquesa
-   institucionais para identidade, âmbar só para atenção, vermelho/coral só
-   para risco/crítico — nunca decorativos. Ver docs/design-system-sifec.md. */
+/* Identidade visual do SIFEC v2 — paleta expandida com presença real
+   das cores de marca. Verde institucional para identidade e ações positivas,
+   turquesa para navegação e destaque primário, laranja para atenção/alertas
+   moderados, coral/vermelho para risco e crítico. Nenhuma cor decorativa. */
 @theme {
   --color-brand-turquoise: #26b2b7;
   --color-brand-orange: #ff9111;
@@ -11,11 +11,16 @@
   --color-brand-green: #008249;
 
   --color-brand-turquoise-dark: #1b8d91;
+  --color-brand-turquoise-light: #e6f7f8;
   --color-brand-orange-dark: #d47405;
+  --color-brand-orange-light: #fff3e5;
   --color-brand-coral-dark: #b82e14;
+  --color-brand-coral-light: #fef0ed;
   --color-brand-green-dark: #006034;
+  --color-brand-green-light: #e6f4ed;
 
-  /* Semânticos de status — um único significado cada, nunca decorativos. */
+  /* Semânticos de status — cada tom com fundo + borda para uso em badges,
+     cards e indicadores de linha de tabela. */
   --color-status-ok: #059669;
   --color-status-ok-bg: #ecfdf5;
   --color-status-ok-border: #a7f3d0;
@@ -35,6 +40,11 @@
   --color-status-neutral: #475569;
   --color-status-neutral-bg: #f8fafc;
   --color-status-neutral-border: #e2e8f0;
+
+  /* Tons de alerta visual para linhas de tabela e indicadores */
+  --color-alert-row-critical: #fef2f2;
+  --color-alert-row-attention: #fffbeb;
+  --color-alert-row-ok: #f0fdf4;
 }
 
 /* Hierarquia tipográfica consistente (seção 16 da nova identidade visual) —

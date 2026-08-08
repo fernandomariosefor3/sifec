@@ -64,36 +64,48 @@ export default function SchoolsTable({ schools, turmasAtivasPorEscola, onEdit, o
               </tr>
             ) : (
               schools.map((school) => (
-                <tr key={school.id} className="hover:bg-slate-55/40 transition">
-                  <td className="py-4 px-6 font-mono text-slate-500 text-[11px] font-bold border-b border-slate-100">{school.codInep}</td>
-                  <td className={`py-4 px-6 font-extrabold text-slate-900 text-sm border-b border-slate-100 ${STICKY_LEFT_CLASSES}`}>
+                <tr
+                  key={school.id}
+                  data-sifec-entity="school"
+                  data-sifec-school-id={school.id}
+                  className={`hover:bg-slate-50/60 transition border-l-[3px] ${
+                    school.status === 'Ativo' ? 'border-l-brand-green/50' : school.status === 'Pendente' ? 'border-l-brand-orange/50' : 'border-l-brand-coral/50'
+                  }`}
+                >
+                  <td className="py-4 px-6 font-mono text-slate-500 text-[11px] font-bold border-b border-slate-100" data-sifec-field="codInep">{school.codInep}</td>
+                  <td className={`py-4 px-6 font-extrabold text-slate-900 text-sm border-b border-slate-100 ${STICKY_LEFT_CLASSES}`} data-sifec-field="nome">
                     {school.nome}
                   </td>
-                  <td className="py-4 px-6 border-b border-slate-100">
+                  <td className="py-4 px-6 border-b border-slate-100" data-sifec-field="cidade">
                     <span className="flex items-center gap-1.5">
                       <MapPin size={12} className="text-slate-400" />
                       {school.cidade}
                     </span>
                   </td>
-                  <td className="py-4 px-6 text-center font-mono font-bold text-slate-600 border-b border-slate-100">
+                  <td className="py-4 px-6 text-center font-mono font-bold text-slate-600 border-b border-slate-100" data-sifec-field="regiao">
                     {school.regiao ?? <span className="text-slate-400 font-normal">Não informado</span>}
                   </td>
-                  <td className="py-4 px-6 text-right font-bold text-slate-800 border-b border-slate-100">
+                  <td className="py-4 px-6 text-right font-bold text-slate-800 border-b border-slate-100" data-sifec-field="matriculas">
                     {school.matriculas.toLocaleString()}
                   </td>
-                  <td className="py-4 px-6 text-right text-slate-700 border-b border-slate-100">
+                  <td className="py-4 px-6 text-right text-slate-700 border-b border-slate-100" data-sifec-field="turmas">
                     {turmasAtivasPorEscola[school.id] ?? 0}
                   </td>
-                  <td className="py-4 px-6 text-center border-b border-slate-100">
+                  <td className="py-4 px-6 text-center border-b border-slate-100" data-sifec-field="metaSpaece">
                     <span className="font-extrabold text-brand-turquoise font-mono text-xs">{school.idebMedio.toFixed(1)}</span>
                   </td>
-                  <td className="py-4 px-6 text-center font-mono font-bold text-slate-500 border-b border-slate-100">{school.metaIdeb.toFixed(1)}</td>
-                  <td className="py-4 px-6 text-center border-b border-slate-100">
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${
+                  <td className="py-4 px-6 text-center font-mono font-bold text-slate-500 border-b border-slate-100" data-sifec-field="metaIdeb">{school.metaIdeb.toFixed(1)}</td>
+                  <td className="py-4 px-6 text-center border-b border-slate-100" data-sifec-field="status">
+                    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-bold border ${
                       school.status === 'Ativo'
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
-                        : 'bg-amber-50 border-amber-200 text-amber-700'
+                        ? 'bg-brand-green-light text-brand-green-dark border-brand-green/30'
+                        : school.status === 'Pendente'
+                        ? 'bg-brand-orange-light text-brand-orange-dark border-brand-orange/30'
+                        : 'bg-brand-coral-light text-brand-coral-dark border-brand-coral/30'
                     }`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${
+                        school.status === 'Ativo' ? 'bg-brand-green' : school.status === 'Pendente' ? 'bg-brand-orange' : 'bg-brand-coral'
+                      }`} />
                       {school.status}
                     </span>
                   </td>

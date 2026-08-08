@@ -264,7 +264,7 @@ export default function EscolasView() {
               setMetaIdeb('');
               setShowAddForm(true);
             }}
-            className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[13px] font-bold transition flex items-center gap-1.5 shadow-sm"
+            className="px-3.5 py-2 bg-brand-green hover:bg-brand-green-dark text-white rounded-lg text-[13px] font-bold transition flex items-center gap-1.5 shadow-sm"
           >
             <Plus size={16} /> Cadastrar Nova Escola
           </button>
@@ -274,38 +274,38 @@ export default function EscolasView() {
       {/* Resumo — nível único de superfície, ícones com acento sutil em vez
           de gradiente por cartão. */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <SurfaceCard className="flex items-center gap-3.5">
-          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
-            <GraduationCap size={18} />
+        <SurfaceCard className="flex items-center gap-3.5 bg-brand-green-light border-brand-green/30">
+          <div className="w-10 h-10 rounded-xl bg-brand-green text-white flex items-center justify-center shrink-0 shadow-sm">
+            <GraduationCap size={20} />
           </div>
           <div>
-            <div className="text-label uppercase text-slate-400">Total de Unidades</div>
-            <div className="text-base font-extrabold text-slate-900">{visibleSchools.length} Escolas</div>
+            <div className="text-label uppercase text-brand-green-dark">Total de Unidades</div>
+            <div className="text-lg font-extrabold text-brand-green-dark">{visibleSchools.length} Escolas</div>
           </div>
         </SurfaceCard>
-        <SurfaceCard className="flex items-center gap-3.5">
-          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
-            <BarChart2 size={18} />
+        <SurfaceCard className="flex items-center gap-3.5 bg-brand-turquoise-light border-brand-turquoise/30">
+          <div className="w-10 h-10 rounded-xl bg-brand-turquoise text-white flex items-center justify-center shrink-0 shadow-sm">
+            <BarChart2 size={20} />
           </div>
           <div>
-            <div className="text-label uppercase text-slate-400">Total de Matrículas</div>
-            <div className="text-base font-extrabold text-slate-900">
+            <div className="text-label uppercase text-brand-turquoise-dark">Total de Matrículas</div>
+            <div className="text-lg font-extrabold text-brand-turquoise-dark">
               {visibleSchools.reduce((sum, s) => sum + s.matriculas, 0).toLocaleString()} Alunos
             </div>
           </div>
         </SurfaceCard>
-        <SurfaceCard className="flex items-center gap-3.5">
-          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
-            <MapPin size={18} />
+        <SurfaceCard className="flex items-center gap-3.5 bg-brand-orange-light border-brand-orange/30">
+          <div className="w-10 h-10 rounded-xl bg-brand-orange text-white flex items-center justify-center shrink-0 shadow-sm">
+            <MapPin size={20} />
           </div>
           <div>
-            <div className="text-label uppercase text-slate-400">Cidades Cooperantes</div>
-            <div className="text-base font-extrabold text-slate-900">{cities.length - 1} Cidade</div>
+            <div className="text-label uppercase text-brand-orange-dark">Cidades Cooperantes</div>
+            <div className="text-lg font-extrabold text-brand-orange-dark">{cities.length - 1} Cidade</div>
           </div>
         </SurfaceCard>
-        <SurfaceCard className="flex items-center gap-3.5">
-          <div className="w-9 h-9 rounded-lg bg-slate-100 text-slate-500 flex items-center justify-center shrink-0">
-            <MapPin size={18} />
+        <SurfaceCard className="flex items-center gap-3.5 bg-brand-coral-light border-brand-coral/30">
+          <div className="w-10 h-10 rounded-xl bg-brand-coral text-white flex items-center justify-center shrink-0 shadow-sm">
+            <MapPin size={20} />
           </div>
           <div>
             <div className="text-label uppercase text-slate-400">Cobertura de Região</div>
@@ -326,6 +326,8 @@ export default function EscolasView() {
             placeholder="Buscar por escola ou código INEP..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            data-sifec-entity="search"
+            data-sifec-field="query"
             className="w-full pl-9 pr-4 py-2 bg-slate-50 border border-slate-200 focus:border-brand-turquoise focus:outline-none text-xs text-slate-800 rounded-lg"
           />
           <Search size={14} className="absolute left-3 top-3 text-slate-400" />
@@ -405,6 +407,8 @@ export default function EscolasView() {
                   placeholder="Ex: EEMTI Cinderela de Nazaré"
                   value={nome}
                   onChange={(e) => setNome(e.target.value)}
+                  data-sifec-entity="school"
+                  data-sifec-field="nome"
                   className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl disabled:bg-slate-100 disabled:text-slate-500"
                 />
               </div>
@@ -422,6 +426,8 @@ export default function EscolasView() {
                     placeholder="Ex: 23075841"
                     value={codInep}
                     onChange={(e) => setCodInep(e.target.value.replace(/\D/g, ''))}
+                    data-sifec-entity="school"
+                    data-sifec-field="codInep"
                     className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs font-mono rounded-xl disabled:bg-slate-100 disabled:text-slate-500"
                   />
                 </div>
@@ -431,6 +437,8 @@ export default function EscolasView() {
                   <select
                     value={cidade}
                     onChange={(e) => setCidade(e.target.value)}
+                    data-sifec-entity="school"
+                    data-sifec-field="cidade"
                     className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl"
                   >
                     {cities.filter(c => c !== 'Todas').map(c => (
@@ -445,6 +453,8 @@ export default function EscolasView() {
                 <select
                   value={regiao}
                   onChange={(e) => setRegiao(e.target.value as SchoolRegiao | '')}
+                  data-sifec-entity="school"
+                  data-sifec-field="regiao"
                   className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl"
                 >
                   <option value="">Não informado</option>
@@ -463,6 +473,8 @@ export default function EscolasView() {
                     placeholder="Ex: 450"
                     value={matriculas}
                     onChange={(e) => setMatriculas(e.target.value)}
+                    data-sifec-entity="school"
+                    data-sifec-field="matriculas"
                     className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs rounded-xl"
                   />
                 </div>
@@ -478,6 +490,8 @@ export default function EscolasView() {
                     placeholder="Ex: 5.8"
                     value={idebMedio}
                     onChange={(e) => setIdebMedio(e.target.value)}
+                    data-sifec-entity="school"
+                    data-sifec-field="metaSpaece"
                     className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs font-mono rounded-xl"
                   />
                 </div>
@@ -493,6 +507,8 @@ export default function EscolasView() {
                     placeholder="Ex: 6.0"
                     value={metaIdeb}
                     onChange={(e) => setMetaIdeb(e.target.value)}
+                    data-sifec-entity="school"
+                    data-sifec-field="metaIdeb"
                     className="w-full p-2.5 bg-slate-50 border border-slate-250 focus:border-slate-350 focus:outline-none text-xs font-mono rounded-xl"
                   />
                 </div>
@@ -500,7 +516,7 @@ export default function EscolasView() {
 
               <button
                 type="submit"
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-extrabold text-xs uppercase cursor-pointer tracking-wider rounded-xl shadow-lg mt-3 transition"
+                className="w-full py-3 bg-brand-green hover:bg-brand-green-dark text-white font-extrabold text-xs uppercase cursor-pointer tracking-wider rounded-xl shadow-lg mt-3 transition"
               >
                 {editingSchool ? 'Salvar Alterações da Escola' : 'Salvar Unidade no Sistema'}
               </button>
