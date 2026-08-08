@@ -1,168 +1,393 @@
-import { useState } from 'react';
-import { FileText, FileDown, RefreshCw, Layers, Zap, Sliders, Check, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { FileText, Printer, AlertTriangle, CheckCircle2, Info } from 'lucide-react';
+import { auth } from '../lib/firebase';
+import { subscribeToCollection, SEED_SCHOOLS } from '../lib/firebaseService';
+import { isSchoolVisible, getActiveSuperintendentId } from '../lib/superintendentService';
+import { listClassroomsForSchool, getActiveClassroomCount } from '../lib/classService';
+import {
+  montarRelatorioCarteira,
+  detectarMetaSuspeita,
+  formatarDataRelatorio,
+  type SchoolLike,
+} from '../lib/relatorioCarteira';
+import PageHeader from './ui/PageHeader';
+import SurfaceCard from './ui/SurfaceCard';
+
+// Relatório da Carteira — gerado a partir dos dados reais da coleção
+// `schools` no Firestore, filtrados pelo escopo do superintendente ativo.
+//
+// A versão anterior desta tela era uma simulação: exibia mensagens de
+// progresso fabricadas com setTimeout ("compressão JPEG 0.75", "chunks
+// assíncronos liberando ciclos da CPU") e não lia nenhum dado nem produzia
+// arquivo algum. Nada dela foi reaproveitado.
+//
+// A exportação usa window.print() com uma folha de estilo de impressão, em
+// vez de jsPDF/html2canvas: não acrescenta dependência ao bundle, o navegador
+// já oferece "Salvar como PDF" no próprio diálogo, e o resultado é texto
+// selecionável em vez de imagem rasterizada.
 
 export default function RelatoriosView() {
-  const [pdfOptimization, setPdfOptimization] = useState<'none' | 'optimized'>('optimized');
-  const [isExporting, setIsExporting] = useState(false);
-  const [pdfStatusMessage, setPdfStatusMessage] = useState('Pronto para exportar.');
-  const [freezeDuration, setFreezeDuration] = useState<number | null>(null);
+  const [schools, setSchools] = useState<SchoolLike[]>(SEED_SCHOOLS as any);
+  const [turmasPorEscola, setTurmasPorEscola] = useState<Record<string, number>>({});
+  const [isFirebaseMode, setIsFirebaseMode] = useState(false);
+  const [carregandoTurmas, setCarregandoTurmas] = useState(false);
+  const [erroTurmas, setErroTurmas] = useState<string | null>(null);
+  const [, setActiveSuperId] = useState(getActiveSuperintendentId());
 
-  const runPdfExportSimulation = () => {
-    setIsExporting(true);
-    setFreezeDuration(null);
-    setPdfStatusMessage("Renderizando Canvas do DOM (html2canvas)...");
+  useEffect(() => {
+    const unsub = auth.onAuthStateChanged((user) => setIsFirebaseMode(!!user));
+    return () => unsub();
+  }, []);
 
-    if (pdfOptimization === 'none') {
-      let timeFreeze = 2500;
-      setTimeout(() => {
-        setFreezeDuration(timeFreeze);
-        setPdfStatusMessage("Download concluído! Durante os 2.5s de processamento síncrono, a linha de execução da UI (User Interface) congelou de forma crítica.");
-        setIsExporting(false);
-      }, timeFreeze);
-    } else {
-      setTimeout(() => {
-        setPdfStatusMessage("Compactando frames de tabelas da CREDE via JPEG 0.75 assustadoramente rápido...");
-        setTimeout(() => {
-          setFreezeDuration(20); 
-          setPdfStatusMessage("Relatório consolidado exportado sem retenção de thread! Lotes de renderização assíncrona efetuados com sucesso.");
-          setIsExporting(false);
-        }, 1000);
-      }, 600);
+  // Reage à troca de superintendente/escopo igual às demais telas, senão o
+  // relatório continuaria mostrando a carteira anterior depois da troca.
+  useEffect(() => {
+    const handler = () => setActiveSuperId(getActiveSuperintendentId());
+    window.addEventListener('sefor3_active_superintendent_change', handler);
+    window.addEventListener('sefor3_admin_scope_change', handler);
+    window.addEventListener('sefor3_filter_change', handler);
+    return () => {
+      window.removeEventListener('sefor3_active_superintendent_change', handler);
+      window.removeEventListener('sefor3_admin_scope_change', handler);
+      window.removeEventListener('sefor3_filter_change', handler);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isFirebaseMode) {
+      setSchools(SEED_SCHOOLS as any);
+      return;
     }
-  };
+    const unsub = subscribeToCollection('schools', (loaded) => {
+      if (loaded.length > 0) setSchools(loaded as any);
+    });
+    return () => unsub();
+  }, [isFirebaseMode]);
+
+  const visiveis = useMemo(
+    () => schools.filter((s) => isSchoolVisible(s.nome)),
+    [schools]
+  );
+
+  // Contagem de turmas ativas por escola. Uma escola só entra no mapa se a
+  // consulta dela tiver sucesso — ausência de chave significa "não sei",
+  // e o relatório mostra isso como pendência em vez de exibir zero.
+  useEffect(() => {
+    if (!isFirebaseMode || visiveis.length === 0) {
+      setTurmasPorEscola({});
+      return;
+    }
+    let cancelado = false;
+    setCarregandoTurmas(true);
+    setErroTurmas(null);
+
+    (async () => {
+      const mapa: Record<string, number> = {};
+      let falhas = 0;
+      for (const escola of visiveis) {
+        try {
+          const turmas = await listClassroomsForSchool(escola.id);
+          mapa[escola.id] = getActiveClassroomCount(turmas);
+        } catch {
+          falhas += 1;
+        }
+      }
+      if (cancelado) return;
+      setTurmasPorEscola(mapa);
+      setCarregandoTurmas(false);
+      if (falhas > 0) {
+        setErroTurmas(
+          `Não foi possível ler as turmas de ${falhas} unidade(s). Essas unidades aparecem sem contagem de turmas.`
+        );
+      }
+    })();
+
+    return () => {
+      cancelado = true;
+    };
+  }, [isFirebaseMode, visiveis]);
+
+  const relatorio = useMemo(
+    () => montarRelatorioCarteira(visiveis, turmasPorEscola),
+    [visiveis, turmasPorEscola]
+  );
+
+  const metaIdebSuspeita = useMemo(
+    () => detectarMetaSuspeita(relatorio.linhas, 'metaIdeb'),
+    [relatorio.linhas]
+  );
+  const metaSpaeceSuspeita = useMemo(
+    () => detectarMetaSuspeita(relatorio.linhas, 'metaSpaece'),
+    [relatorio.linhas]
+  );
+
+  const { resumo, linhas, pendencias } = relatorio;
 
   return (
     <div className="space-y-6">
-      {/* Page Header */}
-      <div>
-        <span className="text-[10px] text-emerald-700 tracking-wider uppercase font-black font-mono">SEFOR 3 - EXPORTAR RELATÓRIO</span>
-        <h2 className="text-xl font-bold text-slate-900 tracking-tight mt-0.5">Central de Relatórios Consolidados</h2>
-        <p className="text-xs text-slate-500 font-normal">Gere e faça download de relatórios gerenciais das escolas, consolidações pedagógicas bimestrais e dados de evasão.</p>
+      <style>{`
+        @media print {
+          body * { visibility: hidden !important; }
+          #relatorio-carteira, #relatorio-carteira * { visibility: visible !important; }
+          #relatorio-carteira {
+            position: absolute; left: 0; top: 0; width: 100%;
+            padding: 0; margin: 0;
+          }
+          .nao-imprimir { display: none !important; }
+          #relatorio-carteira table { page-break-inside: auto; }
+          #relatorio-carteira tr { page-break-inside: avoid; }
+          @page { margin: 14mm; }
+        }
+      `}</style>
+
+      <div className="nao-imprimir">
+        <PageHeader
+          eyebrow="SEFOR 3 — RELATÓRIO"
+          title="Relatório da Carteira"
+          description="Gerado a partir dos dados cadastrados no SIFEC para as unidades sob seu acompanhamento."
+        />
       </div>
 
-      {/* Main reporting hub control console */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left pane: Options */}
-        <div className="lg:col-span-5 flex flex-col gap-5">
-          <div>
-            <h3 className="text-sm font-extrabold text-slate-900">Configurações de Exportação</h3>
-            <p className="text-xs text-slate-500 mt-1">Defina o motor de renderização gráfica que converterá as tabelas escolares em arquivos de apresentação portáteis.</p>
-          </div>
+      <div className="nao-imprimir flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => window.print()}
+          className="px-4 py-2.5 bg-brand-green hover:bg-brand-green-dark text-white font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-sm transition flex items-center gap-2"
+        >
+          <Printer size={14} />
+          Imprimir / Salvar em PDF
+        </button>
+        <span className="text-[11px] text-slate-500">
+          No diálogo de impressão, escolha “Salvar como PDF” como destino.
+        </span>
+      </div>
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-[10px] font-black uppercase text-slate-600 block">Deseja usar as Otimizações de PDF? *</label>
-              
-              <div className="grid grid-cols-1 gap-2.5">
-                {/* Optimized */}
-                <button
-                  type="button"
-                  onClick={() => { setPdfOptimization('optimized'); setFreezeDuration(null); }}
-                  className={`p-3.5 rounded-xl border text-left transition-all ${
-                    pdfOptimization === 'optimized'
-                      ? 'bg-emerald-50 border-emerald-400 text-emerald-950 shadow-sm'
-                      : 'bg-white border-slate-200 text-slate-500 hover:border-slate-350'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className="w-4 h-4 rounded-full border border-emerald-400 bg-emerald-500 flex items-center justify-center text-white text-[9px] font-extrabold font-mono">
-                      <Check size={10} />
-                    </span>
-                    <span className="text-xs font-black">Motor Otimizado (Thread-Safe)</span>
-                  </div>
-                  <p className="text-[10px] text-emerald-800 leading-normal mt-1 opacity-90">Usa compressão JPEG 0.75 rápida e chunks assíncronos liberando ciclos da CPU do seu navegador.</p>
-                </button>
-
-                {/* Classical */}
-                <button
-                  type="button"
-                  onClick={() => { setPdfOptimization('none'); setFreezeDuration(null); }}
-                  className={`p-3.5 rounded-xl border text-left transition-all ${
-                    pdfOptimization === 'none'
-                      ? 'bg-rose-50 border-rose-350 text-rose-955'
-                      : 'bg-white border-slate-200 text-slate-505 hover:border-slate-350'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    {pdfOptimization === 'none' && <span className="w-1.5 h-1.5 rounded-full bg-rose-600 inline-block" />}
-                    <span className="text-xs font-black text-rose-800">Motor Clássico Síncrono</span>
-                  </div>
-                  <p className="text-[10px] text-rose-700 leading-normal mt-1 opacity-90">Renderiza todos os gráficos em blocos rígidos contínuos, com risco elevado de travamento total da aba.</p>
-                </button>
-              </div>
-            </div>
-
-            <button
-              onClick={runPdfExportSimulation}
-              disabled={isExporting}
-              className="w-full py-3 bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white font-extrabold text-xs uppercase tracking-wider rounded-xl shadow-md transition flex items-center justify-center gap-1.5"
-            >
-              {isExporting ? <RefreshCw size={14} className="animate-spin" /> : <FileDown size={14} />}
-              {isExporting ? 'Fazendo compilamento...' : 'Exportar Relatório Consolidado (PDF)'}
-            </button>
-          </div>
+      {!isFirebaseMode && (
+        <div className="nao-imprimir flex items-start gap-2 p-3 rounded-xl bg-status-warn-bg border border-status-warn-border">
+          <Info size={15} className="text-brand-orange-dark shrink-0 mt-0.5" />
+          <p className="text-xs text-brand-orange-dark">
+            Você não está autenticado. Este relatório mostra os dados de demonstração,
+            não a carteira real. Entre com sua conta para gerar o relatório oficial.
+          </p>
         </div>
+      )}
 
-        {/* Right pane: Visual Diagnostics Monitor panel */}
-        <div className="lg:col-span-7 bg-slate-950 border border-slate-800 rounded-xl p-5 flex flex-col justify-between text-slate-300 min-h-[300px]">
-          <div className="bg-slate-900/80 px-4 py-2 border-b border-slate-800/80 flex items-center justify-between font-mono text-[10px] text-slate-400">
-            <span>DIAGNÓSTICO GRÁFICO DO NAVEGADOR</span>
-            <span className="text-emerald-400">ATIVO</span>
+      {erroTurmas && (
+        <div className="nao-imprimir flex items-start gap-2 p-3 rounded-xl bg-status-warn-bg border border-status-warn-border">
+          <AlertTriangle size={15} className="text-brand-orange-dark shrink-0 mt-0.5" />
+          <p className="text-xs text-brand-orange-dark">{erroTurmas}</p>
+        </div>
+      )}
+
+      {/* ---------- Conteúdo impresso ---------- */}
+      <div id="relatorio-carteira" className="space-y-6">
+        <header className="border-b border-slate-200 pb-4">
+          <h1 className="text-lg font-extrabold text-slate-900">
+            Relatório da Carteira — SEFOR 3 / CREDE 03
+          </h1>
+          <p className="text-xs text-slate-500 mt-1">
+            Fonte: SIFEC — Sistema de Frequência e Indicadores Escolares ·
+            Gerado em {formatarDataRelatorio(relatorio.geradoEm)}
+          </p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            Dados agregados por unidade escolar. Nenhuma informação individual de
+            estudante é apresentada.
+          </p>
+        </header>
+
+        {/* Resumo */}
+        <section>
+          <h2 className="text-sm font-extrabold text-slate-900 mb-3">1. Panorama</h2>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <SurfaceCard className="p-3">
+              <div className="text-label uppercase text-brand-green-dark">Unidades</div>
+              <div className="text-xl font-extrabold text-slate-900">{resumo.totalUnidades}</div>
+              <div className="text-[10px] text-slate-500">{resumo.unidadesAtivas} ativa(s)</div>
+            </SurfaceCard>
+            <SurfaceCard className="p-3">
+              <div className="text-label uppercase text-brand-turquoise-dark">Matrículas</div>
+              <div className="text-xl font-extrabold text-slate-900">
+                {resumo.totalMatriculas.toLocaleString('pt-BR')}
+              </div>
+              <div className="text-[10px] text-slate-500">estudantes</div>
+            </SurfaceCard>
+            <SurfaceCard className="p-3">
+              <div className="text-label uppercase text-brand-orange-dark">Turmas ativas</div>
+              <div className="text-xl font-extrabold text-slate-900">
+                {carregandoTurmas ? '…' : resumo.totalTurmas}
+              </div>
+              <div className="text-[10px] text-slate-500">
+                {resumo.mediaPorTurmaCarteira !== null
+                  ? `${resumo.mediaPorTurmaCarteira} por turma`
+                  : 'sem base para média'}
+              </div>
+            </SurfaceCard>
+            <SurfaceCard className="p-3">
+              <div className="text-label uppercase text-slate-500">Cobertura de região</div>
+              <div className="text-xl font-extrabold text-slate-900">
+                4ª: {resumo.unidadesPorRegiao.quarta} · 5ª: {resumo.unidadesPorRegiao.quinta}
+              </div>
+              <div className="text-[10px] text-slate-500">
+                {resumo.unidadesPorRegiao.naoInformada > 0
+                  ? `${resumo.unidadesPorRegiao.naoInformada} sem região`
+                  : 'todas informadas'}
+              </div>
+            </SurfaceCard>
           </div>
 
-          <div className="p-4 flex-1 flex flex-col justify-center text-xs leading-relaxed space-y-3">
-            <div className="flex items-start gap-2.5">
-              <span className={`w-2 h-2 rounded-full mt-1.5 ${isExporting ? 'bg-orange-500 animate-pulse' : 'bg-emerald-500'}`} />
-              <div>
-                <span className="font-bold text-slate-100">Status da Operação:</span>
-                <span className="pl-1 text-slate-300">{pdfStatusMessage}</span>
-              </div>
+          {resumo.maiorUnidade && resumo.menorUnidade && resumo.totalUnidades > 1 && (
+            <p className="text-xs text-slate-600 mt-3">
+              Maior unidade: <strong>{resumo.maiorUnidade.nome}</strong> com{' '}
+              {resumo.maiorUnidade.matriculas.toLocaleString('pt-BR')} estudantes.
+              Menor: <strong>{resumo.menorUnidade.nome}</strong> com{' '}
+              {resumo.menorUnidade.matriculas.toLocaleString('pt-BR')}.
+              Cidade(s) de atuação: {resumo.cidades.join(', ')}.
+            </p>
+          )}
+        </section>
+
+        {/* Tabela */}
+        <section>
+          <h2 className="text-sm font-extrabold text-slate-900 mb-3">
+            2. Unidades da carteira
+          </h2>
+          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <table className="w-full text-xs">
+              <thead className="bg-slate-50 text-left">
+                <tr className="text-[10px] uppercase text-slate-500">
+                  <th className="px-3 py-2 font-black">INEP</th>
+                  <th className="px-3 py-2 font-black">Unidade escolar</th>
+                  <th className="px-3 py-2 font-black">Região</th>
+                  <th className="px-3 py-2 font-black text-right">Matrículas</th>
+                  <th className="px-3 py-2 font-black text-right">Turmas</th>
+                  <th className="px-3 py-2 font-black text-right">Por turma</th>
+                  <th className="px-3 py-2 font-black text-right">Meta SPAECE</th>
+                  <th className="px-3 py-2 font-black text-right">Meta IDEB</th>
+                </tr>
+              </thead>
+              <tbody>
+                {linhas.map((l) => (
+                  <tr key={l.codInep} className="border-t border-slate-150">
+                    <td className="px-3 py-2 font-mono text-[11px] text-slate-500">{l.codInep}</td>
+                    <td className="px-3 py-2 font-bold text-slate-800">{l.nome}</td>
+                    <td className="px-3 py-2 text-slate-600">{l.regiao}</td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      {l.matriculas.toLocaleString('pt-BR')}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      {l.turmas === null ? <span className="text-slate-400">—</span> : l.turmas}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">
+                      {l.mediaPorTurma === null ? (
+                        <span className="text-slate-400">—</span>
+                      ) : (
+                        l.mediaPorTurma
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono">{l.metaSpaece.toFixed(1)}</td>
+                    <td className="px-3 py-2 text-right font-mono">{l.metaIdeb.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot className="bg-slate-50 border-t-2 border-slate-200">
+                <tr className="font-extrabold">
+                  <td className="px-3 py-2" colSpan={3}>
+                    Total — {resumo.totalUnidades} unidade(s)
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono">
+                    {resumo.totalMatriculas.toLocaleString('pt-BR')}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono">{resumo.totalTurmas}</td>
+                  <td className="px-3 py-2 text-right font-mono">
+                    {resumo.mediaPorTurmaCarteira ?? '—'}
+                  </td>
+                  <td className="px-3 py-2" colSpan={2} />
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </section>
+
+        {/* Pendências */}
+        <section>
+          <h2 className="text-sm font-extrabold text-slate-900 mb-3">
+            3. Pendências de cadastro
+          </h2>
+          {pendencias.length === 0 ? (
+            <div className="flex items-start gap-2 p-3 rounded-xl bg-status-ok-bg border border-status-ok-border">
+              <CheckCircle2 size={15} className="text-brand-green-dark shrink-0 mt-0.5" />
+              <p className="text-xs text-brand-green-dark">
+                Nenhuma pendência de cadastro nas unidades desta carteira.
+              </p>
             </div>
+          ) : (
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <table className="w-full text-xs">
+                <thead className="bg-slate-50 text-left">
+                  <tr className="text-[10px] uppercase text-slate-500">
+                    <th className="px-3 py-2 font-black">Unidade</th>
+                    <th className="px-3 py-2 font-black">Campo</th>
+                    <th className="px-3 py-2 font-black">O que falta</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pendencias.map((p, i) => (
+                    <tr key={`${p.codInep}-${p.campo}-${i}`} className="border-t border-slate-150">
+                      <td className="px-3 py-2 font-bold text-slate-800">{p.escola}</td>
+                      <td className="px-3 py-2 text-slate-600">{p.campo}</td>
+                      <td className="px-3 py-2 text-slate-600">{p.descricao}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
 
-            {freezeDuration !== null && (
-              <div className="space-y-3.5 pt-2">
-                {/* Visual results summary pill */}
-                <div className={`p-4 rounded-xl border flex items-start gap-3 ${
-                  pdfOptimization === 'optimized'
-                    ? 'bg-emerald-950/20 border-emerald-900/50 text-emerald-350'
-                    : 'bg-red-950/20 border-red-900/50 text-red-350'
-                }`}>
-                  <div className="shrink-0 mt-0.5">
-                    {pdfOptimization === 'optimized' ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
-                  </div>
-                  <div>
-                    <h4 className="text-xs font-black truncate">
-                      {pdfOptimization === 'optimized' ? 'Gravação Livre de Bloqueios (Thread-Safe)' : 'Bloqueio de Renderização Detectado'}
-                    </h4>
-                    <p className="text-[11px] leading-relaxed opacity-90 mt-1">
-                      {pdfOptimization === 'optimized' 
-                        ? 'O motor assíncrono evitou a penalidade de travamento de frames de animação. Tempo de travamento estimado de apenas 20 milissegundos.'
-                        : 'A linha de desenho da página foi capturada síncronamente pela CPU. O navegador travou completamente por 2500 milissegundos (2.5 segundos).'}
-                    </p>
-                  </div>
-                </div>
-
-                {/* Graph bars represent rendering latency */}
-                <div className="space-y-1 bg-[#050a14] border border-slate-800 p-3.5 rounded-lg">
-                  <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                    <span>TEMPO DE CONGELAMENTO DA THREAD PRINCIPAL</span>
-                    <span className="font-bold">{freezeDuration}ms</span>
-                  </div>
-                  <div className="h-2 bg-slate-800 rounded-full overflow-hidden flex">
-                    <div 
-                      className={`h-full ${pdfOptimization === 'optimized' ? 'bg-emerald-500' : 'bg-rose-600'}`}
-                      style={{ width: `${pdfOptimization === 'optimized' ? 5 : 100}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
+        {/* Limites */}
+        <section>
+          <h2 className="text-sm font-extrabold text-slate-900 mb-3">
+            4. Limites deste relatório
+          </h2>
+          <ul className="text-xs text-slate-600 space-y-1.5 list-disc pl-4">
+            <li>
+              Os números refletem o que está cadastrado no SIFEC nesta data, não a
+              situação registrada no SIGE Escola. Divergências entre os dois sistemas
+              não são detectadas aqui.
+            </li>
+            <li>
+              Não há série histórica: todos os valores são de um único momento, então
+              não é possível afirmar se um indicador melhorou ou piorou.
+            </li>
+            <li>
+              Este relatório cobre o cadastro das unidades. Frequência, fluxo escolar,
+              lançamento de notas e recomposição não entram nesta versão.
+            </li>
+            {metaIdebSuspeita && (
+              <li>
+                A Meta IDEB aparece como <strong>{metaIdebSuspeita.valor.toFixed(1)}</strong> em{' '}
+                {metaIdebSuspeita.ocorrencias} das {linhas.length} unidades. Repetição
+                nessa proporção costuma indicar valor padrão em vez de meta pactuada por
+                unidade — vale conferir na fonte oficial.
+              </li>
             )}
-          </div>
+            {metaSpaeceSuspeita && (
+              <li>
+                A Meta SPAECE aparece como <strong>{metaSpaeceSuspeita.valor.toFixed(1)}</strong> em{' '}
+                {metaSpaeceSuspeita.ocorrencias} das {linhas.length} unidades — mesma
+                ressalva.
+              </li>
+            )}
+          </ul>
+        </section>
 
-          <div className="text-[10px] text-slate-500 font-mono border-t border-slate-900 pt-2 text-center">
-            Métricas de performance em conformidade com as diretrizes do Censo Escolar da Regional.
-          </div>
-        </div>
+        <footer className="border-t border-slate-200 pt-3 flex items-center gap-2">
+          <FileText size={13} className="text-slate-400" />
+          <p className="text-[10px] text-slate-500">
+            SIFEC — SEFOR 3 / CREDE 03 · Documento de uso interno para acompanhamento
+            pedagógico. Não constitui ranqueamento de escolas.
+          </p>
+        </footer>
       </div>
     </div>
   );
