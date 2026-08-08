@@ -25,7 +25,15 @@ vi.mock('../src/lib/firebase', () => ({
   EXPECTED_FIREBASE_PROJECT_ID: 'sifec-sefor3',
 }));
 
-vi.mock('../src/lib/firebaseService', () => ({ SEED_SCHOOLS: [] }));
+// subscribeToCollection precisa existir no mock: App.tsx assina `schools` do
+// Firestore desde o hotfix que fez o cabeçalho ler a contagem real em vez de
+// SEED_SCHOOLS. Sem isso o render quebra com "No subscribeToCollection export
+// is defined". Este arquivo testa o rótulo do menu de Notas, não dados de
+// escola, então o stub devolve um unsubscribe no-op e nunca chama o callback.
+vi.mock('../src/lib/firebaseService', () => ({
+  SEED_SCHOOLS: [],
+  subscribeToCollection: () => () => {},
+}));
 
 vi.mock('../src/lib/superintendentService', () => ({
   getSuperintendents: () => [],

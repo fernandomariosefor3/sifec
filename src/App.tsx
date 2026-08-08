@@ -32,6 +32,10 @@ import FarolEstudanteView from './components/FarolEstudanteView';
 import RecomposicaoView from './components/RecomposicaoView';
 import SuperintendentesView from './components/SuperintendentesView';
 import ParecerBimestralView from './components/ParecerBimestralView';
+// RelatoriosView existia no repositório mas nunca esteve ligado ao App —
+// sem entrada em TabType, sem import e sem item de menu, nenhum usuário
+// chegava a ela. Passa a ser acessível pela seção "Relatório" da sidebar.
+import RelatoriosView from './components/RelatoriosView';
 import DevPanel from './components/DevPanel';
 
 import {
@@ -56,7 +60,7 @@ import { SEED_SCHOOLS, subscribeToCollection } from './lib/firebaseService';
 // count against the true total instead of their own empty list.
 const ALL_SCHOOL_NAMES = SEED_SCHOOLS.map(s => s.nome);
 
-type TabType = 'escolas' | 'fluxo' | 'notas' | 'situacao' | 'cdg' | 'farol' | 'recomposicao' | 'parecer' | 'superintendentes';
+type TabType = 'escolas' | 'fluxo' | 'notas' | 'situacao' | 'cdg' | 'farol' | 'recomposicao' | 'parecer' | 'relatorios' | 'superintendentes';
 
 // Painel técnico (DevPanel) só existe em build de desenvolvimento.
 // import.meta.env.DEV é substituído por uma constante em tempo de build pelo
@@ -562,6 +566,10 @@ export default function App() {
               Relatório
             </span>
 
+            <button onClick={() => handleNavigate('relatorios')} className={navItemClass('relatorios')}>
+              <FileSpreadsheet size={16} className="shrink-0" /> Relatório da Carteira
+            </button>
+
             <button onClick={() => handleNavigate('parecer')} className={navItemClass('parecer')}>
               <Presentation size={16} className="shrink-0" /> Parecer Bimestral
             </button>
@@ -584,6 +592,7 @@ export default function App() {
             {activeTab === 'farol' && <ErrorBoundary><FarolEstudanteView /></ErrorBoundary>}
             {activeTab === 'recomposicao' && <ErrorBoundary><RecomposicaoView /></ErrorBoundary>}
             {activeTab === 'superintendentes' && <ErrorBoundary><SuperintendentesView /></ErrorBoundary>}
+            {activeTab === 'relatorios' && <ErrorBoundary><RelatoriosView /></ErrorBoundary>}
             {activeTab === 'parecer' && <ErrorBoundary><ParecerBimestralView /></ErrorBoundary>}
             </div>
           </div>
